@@ -862,7 +862,7 @@ def _render_home_screen(args: TtyAppArgs, state: ScreenState, cols: int, rows: i
         frame.append("")
     frame.append(f"  {SUBTLE}/help for commands{RESET}  {SUBTLE}{ICON_DOT}{RESET}  {SUBTLE}ctrl+c to exit{RESET}")
 
-    sys.stdout.write("[3J[2J[H" + "\n".join(frame[:rows]))
+    sys.stdout.write("[H" + "[K\n".join(frame[:rows]) + "[K[J")
     sys.stdout.flush()
 
 
@@ -1011,7 +1011,7 @@ def _render_stream_screen(args: TtyAppArgs, state: ScreenState) -> None:
             rows - 1,
         )
         footer = f"  {SUBTLE}{Path(args.cwd).name or args.cwd}{RESET}  {SUBTLE}{len(state.resume_picker_sessions)} saved sessions{RESET}"
-        sys.stdout.write("[3J[2J[H" + "\n".join(frame + [footer]))
+        sys.stdout.write("[H" + "[K\n".join(frame + [footer]) + "[K[J")
         sys.stdout.flush()
         return
 
@@ -1058,7 +1058,7 @@ def _render_stream_screen(args: TtyAppArgs, state: ScreenState) -> None:
     )
     frame = _truncate_frame_lines(frame, cols, rows)
 
-    sys.stdout.write("[3J[2J[H" + "\n".join(frame))
+    sys.stdout.write("[H" + "[K\n".join(frame) + "[K[J")
     sys.stdout.flush()
 
 
@@ -1076,7 +1076,7 @@ def _render_screen(args: TtyAppArgs, state: ScreenState) -> None:
     buf: list[str] = []
     # Full display clear -- 2J clears the entire display instead of just erasing
     # below the cursor (plain J), which is more reliable on Windows alt-screen.
-    buf.append("\u001b[2J\u001b[H")
+    buf.append("\u001b[H")
 
     # Header
     buf.append(_render_header_panel(args, state))
@@ -1105,7 +1105,7 @@ def _render_screen(args: TtyAppArgs, state: ScreenState) -> None:
         )
         buf.append("\n\n")
         buf.append(_render_footer_cached(state.status, True, has_skills, background_tasks))
-        sys.stdout.write("".join(buf))
+        sys.stdout.write("".join(buf) + "[J")
         sys.stdout.flush()
         return
 
@@ -1141,7 +1141,7 @@ def _render_screen(args: TtyAppArgs, state: ScreenState) -> None:
     if contextual_help:
         buf.append(f"\n{SUBTLE}{contextual_help}{RESET}")
     
-    sys.stdout.write("".join(buf))
+    sys.stdout.write("".join(buf) + "[J")
     sys.stdout.flush()
 
 
