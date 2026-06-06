@@ -1,6 +1,9 @@
 <div align="center">
 
+<a id="top"></a>
+
 # pepsicode Python / pepsicode Python 中文版
+
 ### 🚀 Bilingual Terminal AI Coding Assistant / 双语终端 AI 编程助手
 
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-3776AB?style=for-the-badge&logo=python&logoColor=white)](https://www.python.org/)
@@ -9,19 +12,21 @@
 [![Tests: 98.9%](https://img.shields.io/badge/tests-98.9%25-22c55e?style=for-the-badge)](tests/)
 
 [![Readability: 9/10](https://img.shields.io/badge/readability-9%2F10-4F46E5?style=for-the-badge)](docs/)
-[![Performance: Optimized](https://img.shields.io/badge/performance-optimized-06B6D4?style=for-the-badge)](#-performance)
+[![Performance: Optimized](https://img.shields.io/badge/performance-optimized-06B6D4?style=for-the-badge)](#performance-highlights)
 
 ---
 
-**🇬🇧 [English](#english) | 🇨🇳 [中文](#中文)**
+**🇬🇧 [English](#english) | 🇨🇳 [中文](#chinese)**
 
 ---
 
-*A zero-dependency, high-performance terminal coding assistant with cross-platform launchers. / 零依赖、高性能、跨平台启动器的终端编程助手。*
+_A zero-dependency, high-performance terminal coding assistant with cross-platform launchers. / 零依赖、高性能、跨平台启动器的终端编程助手。_
 
 </div>
 
 ---
+
+<a id="chinese"></a>
 
 # 🇨🇳 中文
 
@@ -39,11 +44,11 @@ python -m pepsicode.main --install
 
 ### 跨平台启动命令
 
-| 平台 | 安装后命令 | 直接运行命令 |
-|------|-----------|-------------|
-| **Windows** | `pepsicode.bat` | `python -m pepsicode.main` |
-| **macOS** | `pepsicode-py` | `python3 -m pepsicode.main` |
-| **Linux** | `pepsicode-py` | `python3 -m pepsicode.main` |
+| 平台        | 安装后命令      | 直接运行命令                |
+| ----------- | --------------- | --------------------------- |
+| **Windows** | `pepsicode.bat` | `python -m pepsicode.main`  |
+| **macOS**   | `pepsicode-py`  | `python3 -m pepsicode.main` |
+| **Linux**   | `pepsicode-py`  | `python3 -m pepsicode.main` |
 
 ### 配置 PATH
 
@@ -68,6 +73,7 @@ source ~/.zshrc
 # 启动命令
 pepsicode-py
 ```
+
 </details>
 
 <details>
@@ -81,6 +87,7 @@ source ~/.bashrc
 # 启动命令
 pepsicode-py
 ```
+
 </details>
 
 ---
@@ -89,14 +96,14 @@ pepsicode-py
 
 经过 **8 轮系统化优化**（93+ 优化点），在关键性能指标上达到**生产级优秀水平**：
 
-| 性能指标 | 优化前 | 优化后 | **提升** |
-|---------|--------|--------|---------|
-| **Token 估算速度** | 35 ops/sec | 479,326 ops/sec | **🚀 13,695x** |
-| **CPU 空闲使用率** | 5% | 2% | **⬇️ 60%** |
-| **文件读取（缓存）** | 196ms/1000 | 107ms/1000 | **⬆️ 1.8x** |
-| **GC 压力** | 高 | 低 | **⬇️ 30-50%** |
-| **代码可读性** | 3/10 | 9/10 | **⬆️ 200%** |
-| **测试通过率** | - | **98.9%** | ✅ 生产级 |
+| 性能指标             | 优化前     | 优化后          | **提升**       |
+| -------------------- | ---------- | --------------- | -------------- |
+| **Token 估算速度**   | 35 ops/sec | 479,326 ops/sec | **🚀 13,695x** |
+| **CPU 空闲使用率**   | 5%         | 2%              | **⬇️ 60%**     |
+| **文件读取（缓存）** | 196ms/1000 | 107ms/1000      | **⬆️ 1.8x**    |
+| **GC 压力**          | 高         | 低              | **⬇️ 30-50%**  |
+| **代码可读性**       | 3/10       | 9/10            | **⬆️ 200%**    |
+| **测试通过率**       | -          | **98.9%**       | ✅ 生产级      |
 
 ---
 
@@ -116,35 +123,39 @@ pepsicode-py
 ## 🔨 内置工具
 
 ### 文件操作
-| 工具 | 说明 |
-|---|---|
-| `list_files` | 列出目录内容 |
-| `grep_files` | 跨文件正则搜索 |
-| `read_file` | 读取文件（支持行范围） |
-| `write_file` | 创建或覆盖文件 |
-| `edit_file` / `patch_file` | 文件编辑 |
+
+| 工具                       | 说明                   |
+| -------------------------- | ---------------------- |
+| `list_files`               | 列出目录内容           |
+| `grep_files`               | 跨文件正则搜索         |
+| `read_file`                | 读取文件（支持行范围） |
+| `write_file`               | 创建或覆盖文件         |
+| `edit_file` / `patch_file` | 文件编辑               |
 
 ### 代码智能
-| 工具 | 说明 |
-|---|---|
-| `find_symbols` | AST 符号搜索 |
+
+| 工具              | 说明         |
+| ----------------- | ------------ |
+| `find_symbols`    | AST 符号搜索 |
 | `find_references` | 查找符号引用 |
-| `code_review` | 代码质量分析 |
+| `code_review`     | 代码质量分析 |
 
 ### 执行与测试
-| 工具 | 说明 |
-|---|---|
+
+| 工具          | 说明            |
+| ------------- | --------------- |
 | `run_command` | 执行 Shell 命令 |
-| `test_runner` | 测试发现和执行 |
+| `test_runner` | 测试发现和执行  |
 
 ### DevOps
-| 工具 | 说明 |
-|---|---|
-| `git` | Git 工作流 |
-| `docker_helper` | Docker 管理 |
-| `db_explorer` | SQLite 数据库探索 |
 
-*完整工具列表见[英文版文档](#-built-in-tools)*
+| 工具            | 说明              |
+| --------------- | ----------------- |
+| `git`           | Git 工作流        |
+| `docker_helper` | Docker 管理       |
+| `db_explorer`   | SQLite 数据库探索 |
+
+_完整工具列表见[英文版文档](#built-in-tools)_
 
 ---
 
@@ -185,17 +196,19 @@ PEPSI_CODE_MODEL_MODE=mock python -m pepsicode.main
 
 ## 📊 项目统计
 
-| 指标 | 值 |
-|---|---|
-| Python 文件数 | 69 |
-| 代码行数 | ~15,000 |
-| 内置工具 | 30+ |
-| 外部依赖 | **0** |
-| 优化点 | **93+** |
-| 测试通过率 | **98.9%** |
-| 代码可读性 | **9/10** |
+| 指标          | 值        |
+| ------------- | --------- |
+| Python 文件数 | 69        |
+| 代码行数      | ~15,000   |
+| 内置工具      | 30+       |
+| 外部依赖      | **0**     |
+| 优化点        | **93+**   |
+| 测试通过率    | **98.9%** |
+| 代码可读性    | **9/10**  |
 
 ---
+
+<a id="english"></a>
 
 # 🇬🇧 ENGLISH
 
@@ -203,14 +216,14 @@ PEPSI_CODE_MODEL_MODE=mock python -m pepsicode.main
 
 After **8 rounds of systematic optimization** (93+ optimizations), pepsicode Python achieves **production-grade performance**:
 
-| Metric | Before | After | **Improvement** |
-|--------|--------|-------|-----------------|
-| **Token Estimation** | 35 ops/sec | 479,326 ops/sec | **🚀 13,695x** |
-| **CPU Idle Usage** | 5% | 2% | **⬇️ 60%** |
-| **File Read (Cached)** | 196ms/1000 | 107ms/1000 | **⬆️ 1.8x** |
-| **GC Pressure** | High | Low | **⬇️ 30-50%** |
-| **Code Readability** | 3/10 | 9/10 | **⬆️ 200%** |
-| **Test Pass Rate** | - | **98.9%** | ✅ Production-ready |
+| Metric                 | Before     | After           | **Improvement**     |
+| ---------------------- | ---------- | --------------- | ------------------- |
+| **Token Estimation**   | 35 ops/sec | 479,326 ops/sec | **🚀 13,695x**      |
+| **CPU Idle Usage**     | 5%         | 2%              | **⬇️ 60%**          |
+| **File Read (Cached)** | 196ms/1000 | 107ms/1000      | **⬆️ 1.8x**         |
+| **GC Pressure**        | High       | Low             | **⬇️ 30-50%**       |
+| **Code Readability**   | 3/10       | 9/10            | **⬆️ 200%**         |
+| **Test Pass Rate**     | -          | **98.9%**       | ✅ Production-ready |
 
 ---
 
@@ -228,11 +241,11 @@ python -m pepsicode.main --install
 
 ### Cross-Platform Launch Commands
 
-| Platform | After Install | Direct Run |
-|----------|--------------|------------|
-| **Windows** | `pepsicode.bat` | `python -m pepsicode.main` |
-| **macOS** | `pepsicode-py` | `python3 -m pepsicode.main` |
-| **Linux** | `pepsicode-py` | `python3 -m pepsicode.main` |
+| Platform    | After Install   | Direct Run                  |
+| ----------- | --------------- | --------------------------- |
+| **Windows** | `pepsicode.bat` | `python -m pepsicode.main`  |
+| **macOS**   | `pepsicode-py`  | `python3 -m pepsicode.main` |
+| **Linux**   | `pepsicode-py`  | `python3 -m pepsicode.main` |
 
 ### Configure PATH
 
@@ -257,6 +270,7 @@ source ~/.zshrc
 # Launch command
 pepsicode-py
 ```
+
 </details>
 
 <details>
@@ -270,6 +284,7 @@ source ~/.bashrc
 # Launch command
 pepsicode-py
 ```
+
 </details>
 
 ---
@@ -290,50 +305,56 @@ pepsicode-py
 ## 🔨 Built-in Tools
 
 ### File Operations
-| Tool | Description |
-|------|-------------|
-| `list_files` | List directory contents with glob |
-| `grep_files` | Regex search across files |
-| `read_file` | Read file with line ranges |
-| `write_file` | Create or overwrite files |
-| `edit_file` / `patch_file` | Structured editing and patching |
+
+| Tool                       | Description                       |
+| -------------------------- | --------------------------------- |
+| `list_files`               | List directory contents with glob |
+| `grep_files`               | Regex search across files         |
+| `read_file`                | Read file with line ranges        |
+| `write_file`               | Create or overwrite files         |
+| `edit_file` / `patch_file` | Structured editing and patching   |
 
 ### Code Intelligence
-| Tool | Description |
-|------|-------------|
-| `find_symbols` | AST-based symbol search (functions, classes) |
-| `find_references` | Find all references to a symbol |
-| `code_review` | Automated code quality analysis |
+
+| Tool              | Description                                  |
+| ----------------- | -------------------------------------------- |
+| `find_symbols`    | AST-based symbol search (functions, classes) |
+| `find_references` | Find all references to a symbol              |
+| `code_review`     | Automated code quality analysis              |
 
 ### Execution & Testing
-| Tool | Description |
-|------|-------------|
+
+| Tool          | Description                         |
+| ------------- | ----------------------------------- |
 | `run_command` | Execute shell commands with timeout |
-| `test_runner` | Smart test discovery and execution |
-| `api_tester` | HTTP API endpoint testing |
+| `test_runner` | Smart test discovery and execution  |
+| `api_tester`  | HTTP API endpoint testing           |
 
 ### Web & Search
-| Tool | Description |
-|------|-------------|
-| `web_fetch` | Fetch and extract web page content |
-| `web_search` | Web search via API |
+
+| Tool         | Description                        |
+| ------------ | ---------------------------------- |
+| `web_fetch`  | Fetch and extract web page content |
+| `web_search` | Web search via API                 |
 
 ### DevOps
-| Tool | Description |
-|------|-------------|
-| `git` | Git workflow (status, diff, log, commit) |
-| `docker_helper` | Docker & Docker Compose management |
-| `db_explorer` | SQLite database exploration & queries |
+
+| Tool            | Description                              |
+| --------------- | ---------------------------------------- |
+| `git`           | Git workflow (status, diff, log, commit) |
+| `docker_helper` | Docker & Docker Compose management       |
+| `db_explorer`   | SQLite database exploration & queries    |
 
 ### Visualization & Misc
-| Tool | Description |
-|------|-------------|
-| `file_tree` | Visual directory tree |
-| `diff_viewer` | Rich diff visualization |
-| `notebook_edit` | Jupyter notebook editing |
-| `todo_write` | Task list management |
-| `ask_user` | Prompt user for clarification |
-| `load_skill` | Load domain-specific skills |
+
+| Tool            | Description                   |
+| --------------- | ----------------------------- |
+| `file_tree`     | Visual directory tree         |
+| `diff_viewer`   | Rich diff visualization       |
+| `notebook_edit` | Jupyter notebook editing      |
+| `todo_write`    | Task list management          |
+| `ask_user`      | Prompt user for clarification |
+| `load_skill`    | Load domain-specific skills   |
 
 ---
 
@@ -355,13 +376,13 @@ pepsicode-py
 
 ### Environment Variables
 
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `ANTHROPIC_API_KEY` | Provider API key | — |
-| `ANTHROPIC_AUTH_TOKEN` | Auth token (alternative) | — |
-| `ANTHROPIC_BASE_URL` | Anthropic-compatible API base URL | `https://api.anthropic.com` |
-| `ANTHROPIC_MODEL` | Model name | — |
-| `PEPSI_CODE_MODEL_MODE` | Set to `mock` for testing | — |
+| Variable                | Description                       | Default                     |
+| ----------------------- | --------------------------------- | --------------------------- |
+| `ANTHROPIC_API_KEY`     | Provider API key                  | —                           |
+| `ANTHROPIC_AUTH_TOKEN`  | Auth token (alternative)          | —                           |
+| `ANTHROPIC_BASE_URL`    | Anthropic-compatible API base URL | `https://api.anthropic.com` |
+| `ANTHROPIC_MODEL`       | Model name                        | —                           |
+| `PEPSI_CODE_MODEL_MODE` | Set to `mock` for testing         | —                           |
 
 ---
 
@@ -369,25 +390,25 @@ pepsicode-py
 
 ### Slash Commands
 
-| Command | Description |
-|---------|-------------|
-| `/help` | Show available commands |
-| `/tools` | List all tools |
-| `/cost` | Show session cost |
-| `/config` | Show configuration diagnostics |
-| `/context` | Show context window usage |
-| `/memory` | Show memory system status |
-| `/exit` | Exit pepsicode |
+| Command    | Description                    |
+| ---------- | ------------------------------ |
+| `/help`    | Show available commands        |
+| `/tools`   | List all tools                 |
+| `/cost`    | Show session cost              |
+| `/config`  | Show configuration diagnostics |
+| `/context` | Show context window usage      |
+| `/memory`  | Show memory system status      |
+| `/exit`    | Exit pepsicode                 |
 
 ### Keyboard Shortcuts
 
-| Key | Action |
-|-----|--------|
-| `Enter` | Submit input |
-| `Up/Down` | Input history |
+| Key               | Action            |
+| ----------------- | ----------------- |
+| `Enter`           | Submit input      |
+| `Up/Down`         | Input history     |
 | `PageUp/PageDown` | Scroll transcript |
-| `Ctrl+C` | Cancel operation |
-| `Ctrl+U` | Clear input line |
+| `Ctrl+C`          | Cancel operation  |
+| `Ctrl+U`          | Clear input line  |
 
 ---
 
@@ -408,22 +429,22 @@ PEPSI_CODE_MODEL_MODE=mock python -m pepsicode.main
 
 ### Project Stats
 
-| Metric | Value |
-|--------|-------|
-| Python files | 69 |
-| Lines of code | ~15,000 |
-| Built-in tools | 30+ |
-| External dependencies | **0** |
-| Optimizations | **93+** |
-| Test pass rate | **98.9%** |
-| Code readability | **9/10** |
+| Metric                | Value     |
+| --------------------- | --------- |
+| Python files          | 69        |
+| Lines of code         | ~15,000   |
+| Built-in tools        | 30+       |
+| External dependencies | **0**     |
+| Optimizations         | **93+**   |
+| Test pass rate        | **98.9%** |
+| Code readability      | **9/10**  |
 
 ---
 
 ## 🙏 Acknowledgments
 
-- **[@LiuMengxuan04](https://github.com/LiuMengxuan04)** — Creator of [MiniCode](https://github.com/LiuMengxuan04/MiniCode) and [pepsicode](https://github.com/LiuMengxuan04/pepsicode) (TypeScript original) — core inspiration
-- **[@he-yufeng](https://github.com/he-yufeng)** — Creator of [CoreCoder](https://github.com/he-yufeng/CoreCoder) — foundational architecture reference
+- **[@LiuMengxuan04](https://github.com/LiuMengxuan04)** — Creator of [MiniCode](https://github.com/LiuMengxuan04/MiniCode) — foundational
+- **[@he-yufeng](https://github.com/he-yufeng)** — Creator of [CoreCoder](https://github.com/he-yufeng/CoreCoder) — core inspirationarchitecture reference
 - **[Claude Code](https://docs.anthropic.com/en/docs/claude-code)** — Design inspiration
 - **All Contributors** — Everyone who contributed to pepsicode
 
@@ -439,8 +460,8 @@ MIT — see [LICENSE](LICENSE) for details.
 
 **🇨🇳 由 [@peps1666](https://github.com/peps1666) 用 ❤️ 制作** | **🇬🇧 Made with ❤️ by [@peps1666](https://github.com/peps1666)**
 
-*轻量级终端 AI 编程助手 / Lightweight Terminal AI Coding Assistant*
+_轻量级终端 AI 编程助手 / Lightweight Terminal AI Coding Assistant_
 
-[⬆ Back to Top](#pepsicode-python--pepsicode-python-中文版)
+[⬆ Back to Top](#top)
 
 </div>

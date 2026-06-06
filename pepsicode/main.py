@@ -176,7 +176,7 @@ def main() -> None:
             "  3. Or edit ~/.pepsi-code/settings.json:\n"
             '     {"model": "deepseek-v4-flash", "env": {"ANTHROPIC_BASE_URL": "https://api.deepseek.com/anthropic", "ANTHROPIC_API_KEY": "<your-provider-key>"}}\n'
             "  4. Restart pepsicode\n\n"
-            "馃摉 For more info: https://github.com/QUSETIONS/pepsicode-Python\n"
+            "馃摉 For more info: https://github.com/peps1666/pepsicode\n"
             "   Falling back to mock model for now...\n",
             file=sys.stderr,
         )

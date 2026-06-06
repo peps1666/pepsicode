@@ -91,7 +91,7 @@ if __name__ == "__main__":
     if test1_passed and test2_passed:
         print("鉁?All tests PASSED! Chinese input works correctly.")
         print("\n瀛﹂暱鍙互鍦?Linux 涓婃祴璇?")
-        print("  cd ~/code/pepsicode-Python")
+        print("  cd ~/code/pepsicode")
         print("  git pull")
         print("  pepsicode-py")
     else:
