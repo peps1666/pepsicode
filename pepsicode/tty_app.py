@@ -1756,7 +1756,8 @@ def run_tty_app(
         # Check for existing session in current workspace
         session = get_latest_session(workspace=str(Path(cwd).resolve()))
         if session:
-            print(f"Previous session found: {session.session_id[:8]}")
+            if os.environ.get("PEPSI_CODE_VERBOSE", "") == "1":
+                print(f"Previous session found: {session.session_id[:8]}")
             print("Use --resume to continue, or starting fresh session.")
             session = None
     
@@ -1996,10 +1997,11 @@ def run_tty_app(
             else:
                 save_session(state.session)
             
-            print(
-                f"\nSession saved: {state.session.session_id[:8]} "
-                f"(resume with: python -m pepsicode.main --resume {state.session.session_id})"
-            )
+            if os.environ.get("PEPSI_CODE_VERBOSE", "") == "1":
+                print(
+                    f"\nSession saved: {state.session.session_id[:8]} "
+                    f"(resume with: python -m pepsicode.main --resume {state.session.session_id})"
+                )
 
     return args.messages
 

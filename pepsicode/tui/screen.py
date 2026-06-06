@@ -21,6 +21,7 @@ _DUMB_TERMS = frozenset({"dumb", "linux", ""})
 # ---------------------------------------------------------------------------
 
 _vt_enabled = False
+_original_input_mode: int | None = None
 
 
 def _enable_windows_vt_processing() -> None:
@@ -65,6 +66,8 @@ def _enable_windows_vt_processing() -> None:
         h_in = kernel32.GetStdHandle(STD_INPUT_HANDLE)
         mode_in = wintypes.DWORD()
         if kernel32.GetConsoleMode(h_in, ctypes.byref(mode_in)):
+            global _original_input_mode
+            _original_input_mode = mode_in.value
             kernel32.SetConsoleMode(h_in, mode_in.value | ENABLE_VIRTUAL_TERMINAL_INPUT)
 
         _vt_enabled = True
@@ -72,6 +75,29 @@ def _enable_windows_vt_processing() -> None:
         # If ctypes is unavailable or the call fails (e.g. old Windows),
         # fall through silently — ANSI codes will simply not render.
         _vt_enabled = True
+
+
+def _restore_windows_console_mode() -> None:
+    """Restore the original Windows console input mode on exit.
+
+    Must be called before the process exits, otherwise the console will keep
+    sending ANSI escape sequences for special keys instead of normal Windows
+    key events (arrow keys show as ^[[A instead of command history).
+    """
+    global _original_input_mode
+    if _original_input_mode is None:
+        return
+    try:
+        import ctypes
+        import ctypes.wintypes as wintypes
+
+        kernel32 = ctypes.windll.kernel32  # type: ignore[attr-defined]
+        STD_INPUT_HANDLE = -10
+        h_in = kernel32.GetStdHandle(STD_INPUT_HANDLE)
+        kernel32.SetConsoleMode(h_in, _original_input_mode)
+        _original_input_mode = None
+    except Exception:
+        pass
 
 
 # ---------------------------------------------------------------------------

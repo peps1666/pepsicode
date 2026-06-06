@@ -32,18 +32,17 @@ def _handle_local_command(user_input: str, tools) -> str | None:
 
 def _render_banner(runtime: dict | None, cwd: str, permission_summary: list[str], counts: dict[str, int]) -> str:
     model = runtime["model"] if runtime else "unconfigured"
-    lines = [
-        "pepsicode - terminal coding agent",
-        f"  Model: {model}",
-        f"  CWD:   {cwd}",
-    ]
-    if permission_summary:
-        for perm in permission_summary[:2]:
-            lines.append(f"  {perm}")
-    lines.append(
-        f"  Skills: {counts['skillCount']} | MCP: {counts['mcpCount']} | "
-        f"Transcript: {counts['transcriptCount']}"
-    )
+    lines = ["pepsicode - terminal coding agent"]
+    if os.environ.get("PEPSI_CODE_VERBOSE", "") == "1":
+        lines.append(f"  Model: {model}")
+        lines.append(f"  CWD:   {cwd}")
+        if permission_summary:
+            for perm in permission_summary[:2]:
+                lines.append(f"  {perm}")
+        lines.append(
+            f"  Skills: {counts['skillCount']} | MCP: {counts['mcpCount']} | "
+            f"Transcript: {counts['transcriptCount']}"
+        )
     return "\n".join(lines)
 
 
@@ -239,8 +238,11 @@ def main() -> None:
         )
     )
     
-    if not sys.stdin.isatty() or os.environ.get("PEPSI_CODE_SHOW_GUIDE", "1") == "1":
+    if os.environ.get("PEPSI_CODE_SHOW_GUIDE", "") == "1":
         print(_render_quick_start())
+    elif not sys.stdin.isatty():
+        # In pipe mode, show a minimal hint
+        pass
     else:
         print("")
 
@@ -331,13 +333,21 @@ def main() -> None:
             list_sessions_only=args.list_sessions,
         )
     except KeyboardInterrupt:
-        print("\n\nInterrupted by user. Shutting down gracefully...")
+        if os.environ.get("PEPSI_CODE_VERBOSE", "") == "1":
+            print("\n\nInterrupted by user. Shutting down gracefully...")
     finally:
         # Graceful shutdown: clean up all resources
         from pepsicode.logging_config import get_logger
         logger = get_logger("main")
         logger.info("Shutting down...")
         
+        # Restore Windows console mode (prevents ^[[A after exit)
+        try:
+            from pepsicode.tui.screen import _restore_windows_console_mode
+            _restore_windows_console_mode()
+        except Exception:
+            pass
+
         # Dispose tools (closes MCP connections)
         try:
             tools.dispose()
