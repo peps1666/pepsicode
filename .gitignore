@@ -42,3 +42,6 @@ Thumbs.db
 
 # Session artifacts
 session-log.txt
+
+# Internal development plans (keep local, don't publish)
+docs/superpowers/

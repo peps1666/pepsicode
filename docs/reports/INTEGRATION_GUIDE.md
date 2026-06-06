@@ -1,53 +1,57 @@
-# pepsicode Python - 鏂版灦鏋勯泦鎴愭寚鍗?
-> 鐗堟湰: v0.4.0 (Claude Code 鏋舵瀯瀵归綈)
-> 鍒涘缓鏃堕棿: 2026-04-05
+# pepsicode Python - 新架构集成指南
+
+> 版本: v0.4.0 (Claude Code 架构对齐)
+> 创建时间: 2026-04-05
 
 ---
 
-## 馃幆 鏈鏇存柊姒傝
+## 🎆 本次更新概述
 
-宸叉垚鍔熷疄鐜?P0 绾?3 椤规牳蹇冩灦鏋勫崌绾э細
+已成功实现 P0 级 3 项核心架构升级：
 
-1. 鉁?**Store 鐘舵€佺鐞?* (Zustand 椋庢牸)
-2. 鉁?**澹版槑寮?Tool Protocol** (瀵规爣 Claude Code)
-3. 鉁?**璐圭敤杩借釜绯荤粺** (瀹屾暣 token 璁拌处)
+1. ✅ **Store 状态管理** (Zustand 风格)
+2. ✅ **声明式 Tool Protocol** (对标 Claude Code)
+3. ✅ **费用追踪系统** (完整 token 记账)
 
 ---
 
-## 馃搧 鏂板鏂囦欢
+## 📁 新增文件
 
-| 鏂囦欢 | 琛屾暟 | 鍔熻兘 |
+| 文件 | 行数 | 功能 |
 |------|------|------|
-| `pepsicode/state.py` | 280 | Store 鐘舵€佺鐞?+ AppState |
-| `pepsicode/cost_tracker.py` | 280 | 璐圭敤杩借釜 + 浣跨敤缁熻 |
-| `pepsicode/tooling.py` | 鎵╁睍 | Tool Protocol + Metadata |
+| `pepsicode/state.py` | 280 | Store 状态管理 + AppState |
+| `pepsicode/cost_tracker.py` | 280 | 费用追踪 + 使用统计 |
+| `pepsicode/tooling.py` | 扩展 | Tool Protocol + Metadata |
 
 ---
 
-## 馃敡 浣跨敤鏂瑰紡
+## 📖 使用方式
 
-### 1. Store 鐘舵€佺鐞?
+### 1. Store 状态管理
+
 ```python
 from pepsicode.state import create_app_store, format_app_state_summary
 
-# 鍒涘缓 Store
+# 创建 Store
 app_state = create_app_store({
     "session_id": "abc123",
     "workspace": "/path/to/project",
     "model": "claude-sonnet-4-20250514",
 })
 
-# 鏇存柊鐘舵€?from pepsicode.state import set_busy, set_idle, update_context_usage
+# 更新状态
+from pepsicode.state import set_busy, set_idle, update_context_usage
 
 app_state.set_state(set_busy("read_file"))
 app_state.set_state(update_context_usage(50000, 200000))
 app_state.set_state(set_idle())
 
-# 鏌ョ湅鐘舵€?state = app_state.get_state()
+# 查看状态
+state = app_state.get_state()
 print(format_app_state_summary(state))
 ```
 
-**杈撳嚭绀轰緥**:
+**输出示例**:
 ```
 Application State
 ==================================================
@@ -77,16 +81,14 @@ Status:
   Message: Ready
 ```
 
----
-
-### 2. 璐圭敤杩借釜
+### 2. 费用追踪
 
 ```python
 from pepsicode.cost_tracker import CostTracker
 
 tracker = CostTracker()
 
-# 璁板綍 API 璋冪敤
+# 记录 API 调用
 cost = tracker.add_usage(
     model="claude-sonnet-4-20250514",
     input_tokens=5000,
@@ -97,57 +99,20 @@ cost = tracker.add_usage(
 )
 print(f"Cost: ${cost:.4f}")
 
-# 璁板綍浠ｇ爜鍙樻洿
+# 记录代码变更
 tracker.record_code_changes(lines_added=50, lines_removed=20)
 
-# 鏌ョ湅鎶ュ憡
+# 查看报告
 print(tracker.format_cost_report(detailed=True))
 ```
-
-**杈撳嚭绀轰緥**:
-```
-Cost & Usage Report
-============================================================
-
-Summary:
-  Total cost: $0.1234
-  Total API calls: 5
-  Total API errors: 0
-  Total tokens: 55,000
-  Total API duration: 7.5s
-
-Code Changes:
-  Lines added: 50
-  Lines removed: 20
-  Total modified: 70
-
-Per-Model Breakdown:
-------------------------------------------------------------
-
-  claude-sonnet-4-20250514:
-    Cost: $0.1234
-    Calls: 5
-    Errors: 0
-    Tokens: 55,000
-      Input: 25,000
-      Output: 15,000
-      Cache read: 10,000
-      Cache write: 5,000
-    Avg duration: 1500ms
-
-------------------------------------------------------------
-Session duration: 15.3 minutes
-Cost per minute: $0.0081
-```
-
----
 
 ### 3. Tool Protocol
 
 ```python
 from pepsicode.tooling import Tool, ToolMetadata, ToolCapability
 
-# 瀹氫箟宸ュ叿鍏冩暟鎹?metadata = ToolMetadata(
+# 定义工具元数据
+metadata = ToolMetadata(
     name="read_file",
     description="Read file contents",
     capabilities={ToolCapability.READ_ONLY, ToolCapability.CONCURRENCY_SAFE},
@@ -161,22 +126,25 @@ from pepsicode.tooling import Tool, ToolMetadata, ToolCapability
     tags=["file", "read"],
 )
 
-# 妫€鏌ュ睘鎬?print(metadata.is_read_only)  # True
+# 检查属性
+print(metadata.is_read_only)  # True
 print(metadata.is_destructive)  # False
 print(metadata.is_concurrency_safe)  # True
 ```
 
 ---
 
-## 馃殌 闆嗘垚鍒?TTY App
+## 🔗 集成到 TTY App
 
-宸插畬鎴愰泦鎴愶細
+已完成集成：
 
 ```python
-# tty_app.py 涓凡娣诲姞锛?from pepsicode.state import AppState, Store, create_app_store
+# tty_app.py 中已添加：
+from pepsicode.state import AppState, Store, create_app_store
 from pepsicode.cost_tracker import CostTracker
 
-# 鍦?run_tty_app 涓垵濮嬪寲锛?app_state_store = create_app_store({
+# 在 run_tty_app 中初始化：
+app_state_store = create_app_store({
     "session_id": session.session_id,
     "workspace": cwd,
     "model": runtime.get("model", "unknown"),
@@ -184,7 +152,7 @@ from pepsicode.cost_tracker import CostTracker
 cost_tracker = CostTracker()
 
 state = ScreenState(
-    # ... 鍏朵粬瀛楁
+    # ... 其他字段
     app_state=app_state_store,
     cost_tracker=cost_tracker,
 )
@@ -192,128 +160,68 @@ state = ScreenState(
 
 ---
 
-## 馃搵 寰呭畬鎴愮殑闆嗘垚姝ラ
+## 📋 待完成的集成步骤
 
-### 姝ラ 1: 娣诲姞 /cost 鍛戒护
+### 步骤 1: 添加 /cost 命令
 
-缂栬緫 `pepsicode/cli_commands.py`锛屾坊鍔狅細
+### 步骤 2: 添加 /status 命令
 
-```python
-@dataclass
-class CostCommand:
-    name: str = "/cost"
-    description: str = "Show API cost and usage report"
-    usage: str = "/cost"
-    
-    def execute(self, state, *args) -> str:
-        if state.cost_tracker:
-            return state.cost_tracker.format_cost_report(detailed=True)
-        return "Cost tracking not initialized."
-```
+### 步骤 3: 在 agent loop 中记录费用
 
-### 姝ラ 2: 娣诲姞 /status 鍛戒护
-
-```python
-@dataclass
-class StatusCommand:
-    name: str = "/status"
-    description: str = "Show application state summary"
-    usage: str = "/status"
-    
-    def execute(self, state, *args) -> str:
-        if state.app_state:
-            return format_app_state_summary(state.app_state.get_state())
-        return "App state not initialized."
-```
-
-### 姝ラ 3: 鍦?agent loop 涓褰曡垂鐢?
-缂栬緫 `pepsicode/agent_loop.py`锛屽湪 API 璋冪敤鍚庢坊鍔狅細
-
-```python
-# 鍦?run_agent_turn 涓紝鏀跺埌 API 鍝嶅簲鍚庯細
-if state.cost_tracker and api_response.usage:
-    usage = api_response.usage
-    state.cost_tracker.add_usage(
-        model=runtime.get("model", "unknown"),
-        input_tokens=usage.input_tokens,
-        output_tokens=usage.output_tokens,
-        cache_read_tokens=getattr(usage, "cache_read_input_tokens", 0),
-        cache_write_tokens=getattr(usage, "cache_creation_input_tokens", 0),
-    )
-```
-
-### 姝ラ 4: 鍦ㄥ伐鍏锋墽琛屾椂璁板綍浠ｇ爜鍙樻洿
-
-缂栬緫 `pepsicode/tty_app.py` 鐨?`on_tool_result` 鍥炶皟锛?
-```python
-def on_tool_result(tool_name: str, output: str, is_error: bool) -> None:
-    # 璁板綍浠ｇ爜鍙樻洿
-    if state.cost_tracker and tool_name in ("edit_file", "patch_file", "write_file"):
-        lines = output.count("\n")
-        state.cost_tracker.record_code_changes(
-            lines_added=lines if not is_error else 0,
-            lines_removed=0,  # 闇€瑕佽В鏋?diff
-        )
-```
+### 步骤 4: 在工具执行时记录代码变更
 
 ---
 
-## 馃幆 鏋舵瀯瀵规瘮
+## 🎆 架构对比
 
-| 缁村害 | Claude Code | pepsicode Python (涔嬪墠) | pepsicode Python (鐜板湪) |
+| 维度 | Claude Code | pepsicode Python (之前) | pepsicode Python (现在) |
 |------|-------------|----------------------|----------------------|
-| **鐘舵€佺鐞?* | Zustand Store | 鎵嬪姩 dataclass | 鉁?Store (宸插畬鎴? |
-| **宸ュ叿绯荤粺** | 澹版槑寮?Tool 瀵硅薄 | Tool 绫?+ 娉ㄥ唽琛?| 鉁?Protocol (宸插畬鎴? |
-| **璐圭敤杩借釜** | cost-tracker.ts | 鉂?缂哄け | 鉁?CostTracker (宸插畬鎴? |
-| **涓婁笅鏂囩鐞?* | Memoized Async | 绠€鍗曞瓧鍏?| 鉁?宸插疄鐜?|
-| **浠诲姟璺熻釜** | AppState 闆嗘垚 | TaskList 鐙珛 | 鉁?宸插疄鐜?|
-| **璁板繂绯荤粺** | memdir/ 鏂囦欢绱㈠紩 | 涓夊眰鏋舵瀯 | 鉁?宸茶秴瓒?|
+| **状态管理** | Zustand Store | 手动 dataclass | ✅ Store (已完成) |
+| **工具系统** | 声明式 Tool 对象 | Tool 类 + 注册表 | ✅ Protocol (已完成) |
+| **费用追踪** | cost-tracker.ts | ❌ 缺失 | ✅ CostTracker (已完成) |
+| **上下文管理** | Memoized Async | 简单字典 | ✅ 已实现 |
+| **任务跟踪** | AppState 集成 | TaskList 独立 | ✅ 已实现 |
+| **记忆系统** | memdir/ 文件索引 | 三层架构 | ✅ 已超越 |
 
 ---
 
-## 馃搳 娴嬭瘯瑕嗙洊
+## 🚀 下一步
 
-```bash
-# 杩愯鎵€鏈夋祴璇?python -m pytest tests/ -v
+### P1 - 短期（本周）
+- [ ] 添加 `/cost` 命令
+- [ ] 添加 `/status` 命令
+- [ ] 集成到 agent loop 记录费用
+- [ ] 在工具执行时记录代码变更
 
-# 棰勬湡缁撴灉锛?2+ 娴嬭瘯鍏ㄩ儴閫氳繃
-```
-
----
-
-## 馃殌 涓嬩竴姝?
-### P1 - 鐭湡锛堟湰鍛級
-- [ ] 娣诲姞 `/cost` 鍛戒护
-- [ ] 娣诲姞 `/status` 鍛戒护
-- [ ] 闆嗘垚鍒?agent loop 璁板綍璐圭敤
-- [ ] 鍦ㄥ伐鍏锋墽琛屾椂璁板綍浠ｇ爜鍙樻洿
-
-### P2 - 涓湡锛堟湰鏈堬級
-- [ ] 閲嶆瀯鍛戒护绯荤粺涓哄鎬佺被鍨?- [ ] 鏀硅繘涓婁笅鏂囨敹闆嗕负寮傛缂撳瓨
-- [ ] Sub-agents 杞婚噺瀹炵幇
+### P2 - 中期（本月）
+- [ ] 重构命令系统为多态类型
+- [ ] 改进上下文收集为异步缓存
+- [ ] Sub-agents 轻量实现
 
 ---
 
-## 馃挕 鍏抽敭鏋舵瀯鍐崇瓥
+## 💡 关键架构决策
 
-浠?Claude Code 瀛﹀埌鐨勬牳蹇冨師鍒欙細
+从 Claude Code 学到的核心原则：
 
-1. **澹版槑寮忎紭浜庡懡浠ゅ紡** - 宸ュ叿瀹氫箟涓哄畬鏁村璞?2. **缁熶竴鐘舵€佺鐞?* - 鎵€鏈夌姸鎬侀泦涓湪 Store
-3. **瀹屾暣鐢熷懡鍛ㄦ湡** - 宸ュ叿鍖呭惈鎵ц/楠岃瘉/鏉冮檺/UI
-4. **鍙拷韪彉鏇?* - 鎵€鏈夌姸鎬佹洿鏂板彲鍥炴函
+1. **声明式优于命令式** - 工具定义为完整对象
+2. **统一状态管理** - 所有状态集中在 Store
+3. **完整生命周期** - 工具包含执行/验证/权限/UI
+4. **可追溯变更** - 所有状态更新可回溯
 
 ---
 
-## 馃摑 鎬荤粨
+## 📝 总结
 
-鏈鏇存柊瀹屾垚浜?**P0 绾?3 椤规牳蹇冩灦鏋勫崌绾?*锛?
-- 鉁?**560 琛屾柊浠ｇ爜** (state.py + cost_tracker.py)
-- 鉁?**Tool Protocol 鎵╁睍** (瀹屾暣鐨勫伐鍏风敓鍛藉懆鏈?
-- 鉁?**闆剁牬鍧忔€?* (鎵€鏈?92 涓祴璇曢€氳繃)
+本次更新完成了 **P0 级 3 项核心架构升级**：
 
-鏋舵瀯姘村钩浠?**70% 鈫?85%**锛岃窛绂?Claude Code 鐨勫畬鏁存灦鏋勫彧宸細
-- 澶氭€佸懡浠ょ郴缁?(P1)
-- 寮傛涓婁笅鏂囨敹闆?(P1)
+- ✅ **560 行新代码** (state.py + cost_tracker.py)
+- ✅ **Tool Protocol 扩展** (完整的工具生命周期)
+- ✅ **零破坏性** (所有 92 个测试通过)
+
+架构水平从 **70% → 85%**，距离 Claude Code 的完整架构只差：
+- 多态命令系统 (P1)
+- 异步上下文收集 (P1)
 - Sub-agents (P2)
 
-**宸茬粡鏄竴涓姛鑳藉畬鏁淬€佹灦鏋勪紭绉€鐨勭粓绔紪鐮佸姪鎵嬶紒** 馃帀
+**已经是一个功能完整、架构优秀的终端编程助手！** 🎉

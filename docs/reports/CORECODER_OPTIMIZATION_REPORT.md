@@ -1,101 +1,151 @@
-# CoreCoder 鏋舵瀯瀵归綈浼樺寲鎶ュ憡
+# CoreCoder 架构对齐优化报告
 
-> 鍙傝€?`CoreCoder-main` 鐨?7 绡?Claude Code 鏋舵瀯鏂囩珷锛屽 pepsicode锛圡iniCode Python锛?> 杩涜鐨勪竴杞牳蹇冩灦鏋勪紭鍖栥€傜洰鏍囷細**鏇翠綆鐨勬劅鐭ュ欢杩熴€佹洿鐪?token銆佹洿寮洪煣鎬с€佸彲鐢ㄧ殑瀛?Agent 濮旀淳**锛?> 鍚屾椂淇濇寔銆岄浂杩愯鏃朵緷璧栥€嶃€?
-**缁撴灉**锛氬叏閮?4 涓柟鍚戣惤鍦板苟閫氳繃娴嬭瘯 鈥斺€?`166 passed, 2 skipped`锛堝師 144 + 鏂板 22 椤归拡瀵规€ф祴璇曪級銆?鍙︽湁涓€杞鎶楀紡浠ｇ爜瀹℃煡锛岀‘璁ゅ苟淇浜嗗疄鐜拌繃绋嬩腑寮曞叆鐨?6 涓湡瀹?bug銆?
+> 参考 `CoreCoder-main` 的 7 篇 Claude Code 架构文章，对 pepsicode（MiniCode Python）
+> 进行的一轮核心架构优化。目标：**更低的感知延迟、更省 token、更强韧性、可用的子 Agent 委派**，
+> 同时保持「零运行时依赖」。
+
+**结果**：全部 4 个方向落地并通过测试 —— `166 passed, 2 skipped`（原 144 + 新增 22 项针对性测试）。
+另有一轮对抗式代码审查，确认并修复了实现过程中引入的 6 个真实 bug。
+
 ---
 
-## 鑳屾櫙
+## 背景
 
-pepsicode 鏄竴涓豢 Claude Code 鐨勭粓绔紪绋?Agent銆備笌鍙傝€冭摑鏈?`CoreCoder`锛堢敤 ~1400 琛?Python
-鎻愮偧 Claude Code 51 涓囪 TS 鐨勬牳蹇冩ā寮忥級閫愭潯姣斿鍚庯紝鍙戠幇瀹冨凡瀹炵幇浜嗕笉灏戞ā寮忥紙鍞竴鍖归厤 search-replace
-缂栬緫銆佸嵄闄╁懡浠ゅ垎绾?+ 澶氱骇鏉冮檺銆佷細璇濇寔涔呭寲銆丮CP/skills銆侀€€閬?鎶栧姩閲嶈瘯銆乣<progress>/<final>` 寰幆锛夛紝
-浣嗗湪 4 涓珮浠峰€肩淮搴︿笂钀藉悗浜?CoreCoder 鐨勬渶灏忓疄鐜般€傛湰娆′紭鍖栦慨澶嶈繖浜涘樊璺濄€?
+pepsicode 是一个仿 Claude Code 的终端编程 Agent。与参考蓝本 `CoreCoder`（用 ~1400 行 Python
+提炼 Claude Code 51 万行 TS 的核心模式）逐条比对后，发现它已实现了不少模式（唯一匹配 search-replace
+编辑、危险命令分级 + 多级权限、会话持久化、MCP/skills、退避/抖动重试、`<progress>/<final>` 循环），
+但在 4 个高价值维度上落后于 CoreCoder 的最小实现。本次优化修复这些差距。
+
 ---
 
-## 瀹炵幇鐨勪紭鍖?
-### 1. 骞惰宸ュ叿鎵ц锛堟枃绔?2 / 5锛?
-**闂**锛氶€傞厤鍣ㄥ叏绋嬮樆濉烇紝宸ュ叿鍦?`agent_loop` 涓覆琛岄€愪釜鎵ц銆俙ToolCapability.CONCURRENCY_SAFE`
-鏍囧織铏藉凡瀹氫箟鍗存槸姝讳唬鐮侊紝浠庢湭鎺ュ埌浠讳綍宸ュ叿涓娿€傝繛 CoreCoder 鏈€灏忕増閮界敤浜?ThreadPool銆?
-**鏀瑰姩**锛?- `tooling.py`锛氱粰 `ToolDefinition` 澧炲姞 `concurrency_safe: bool = False` 瀛楁銆?- 鎶?7 涓彧璇诲伐鍏锋爣璁颁负瀹夊叏锛歚read_file`銆乣grep_files`銆乣list_files`銆乣file_tree`銆?  `find_symbols`銆乣find_references`銆乣get_ast_info`銆?- `agent_loop._execute_calls_in_order`锛氱敤 `ThreadPoolExecutor`锛堜笂闄?8锛夊苟琛屾墽琛?*杩炵画鐨?*
-  鍙宸ュ叿鎵规锛涘啓/鎵ц绫诲伐鍏蜂粛鐙崰涓茶銆?*缁撴灉涓ユ牸鎸夊師濮嬭皟鐢ㄩ『搴忚繑鍥?*锛屾秷鎭巻鍙蹭繚鎸佺‘瀹氭€с€?
-**鏀剁泭**锛氫竴娆¤繑鍥炲涓?`read_file`/`grep` 鏃讹紝浠庛€屼覆琛岀疮鍔犮€嶅彉涓恒€屽苟琛?鈮?max(鍗曚釜)銆嶃€?
+## 实现的优化
+
+### 1. 并行工具执行（文章 2 / 5）
+
+**问题**：适配器全程阻塞，工具在 `agent_loop` 中串行逐个执行。`ToolCapability.CONCURRENCY_SAFE`
+标志虽已定义却是死代码，从未接到任何工具上。连 CoreCoder 最小版都用了 ThreadPool。
+
+**改动**：
+- `tooling.py`：给 `ToolDefinition` 增加 `concurrency_safe: bool = False` 字段。
+- 把 7 个只读工具标记为安全：`read_file`、`grep_files`、`list_files`、`file_tree`、
+  `find_symbols`、`find_references`、`get_ast_info`。
+- `agent_loop._execute_calls_in_order`：用 `ThreadPoolExecutor`（上限 8）并行执行**连续的**
+  只读工具批次；写/执行类工具仍独占串行。
+  **结果严格按原始调用顺序返回**，消息历史保持确定性。
+
+**收益**：一次返回多个 `read_file`/`grep` 时，从「串行累加」变为「并行 ≈ max(单个)」。
+
 ---
 
-### 2. HISTORY_SNIP 宸ュ叿杈撳嚭鎴柇锛堟枃绔?4 绗?1 灞傦級
+### 2. HISTORY_SNIP 工具输出截断（文章 4 第 1 层）
 
-**闂**锛歚grep_files`/`run_command` 鎶婂畬鏁磋緭鍑虹亴杩涗笂涓嬫枃锛沗max_result_size_chars`
-瀹氫箟浜嗗嵈浠庝笉鐢熸晥銆傝繖鏄渶寤変环銆佹渶楂樹环鍊肩殑鍘嬬缉灞傦紙鏃犻渶 LLM 璋冪敤锛夈€?
-**鏀瑰姩**锛?- `agent_loop._snip_tool_outputs`锛氭瘡娆℃ā鍨嬭皟鐢ㄥ墠锛岃鍓緝鏃х殑澶у潡 `tool_result`
-  锛堜繚鐣欏ご 12 琛?+ 灏?8 琛岋紝涓棿鏇挎崲涓?`[snipped N lines]`锛夈€?- 淇濇姢鏈€杩?3 鏉＄粨鏋滐紙妯″瀷闇€瑕佺湅鍒板垰鍋氫簡浠€涔堬級銆佸箓绛夛紙宸叉埅鏂殑涓嶅啀澶勭悊锛夈€?*缁濅笉涓㈠純鏁存潯缁撴灉**
-  锛堝彧缂╃煭 content锛屼繚璇?tool_use/tool_result 閰嶅涓嶈鐮村潖锛夈€?
+**问题**：`grep_files`/`run_command` 把完整输出灌进上下文；`max_result_size_chars`
+定义了却从不生效。这是最廉价、最高价值的压缩层（无需 LLM 调用）。
+
+**改动**：
+- `agent_loop._snip_tool_outputs`：每次模型调用前，裁短旧的大块 `tool_result`
+  （保留头 12 行 + 尾 8 行，中间替换为 `[snipped N lines]`）。
+- 保护最近 3 条结果（模型需要看到刚做了什么）、幂等（已截断的不再处理）。
+- **绝不丢弃整条结果**（只缩短 content，保证 tool_use/tool_result 配对不被破坏）。
+
 ---
 
-### 3. 涓婁笅鏂囧帇缂?+ 鐪熷疄 token 鐢ㄩ噺锛堟枃绔?4 绗?2/3 灞傦級
+### 3. 上下文压缩 + 真实 token 用量（文章 4 第 2/3 层）
 
-**闂**锛歚compact_messages` 鍙細銆屼涪寮冦€嶆渶鏃ф秷鎭紝鏃?LLM 鎽樿锛岄暱浼氳瘽浼氫涪澶辨枃浠惰矾寰?鍐崇瓥/
-鏈В鍐抽敊璇€備笂涓嬫枃缁熻鐢?`chars/4` 鍚彂寮忥紝涓㈠純浜?API 宸茶繑鍥炵殑鐪熷疄 `usage`銆?
-**鏀瑰姩**锛?- `anthropic_adapter`锛氭崟鑾?API 杩斿洖鐨勭湡瀹?`usage`锛坄last_usage`锛夛紝鏂板 `summarize()` 鏂规硶
-  锛堢敤 fallback 鎴栦富妯″瀷鎶婃棫瀵硅瘽鍘嬫垚鍏抽敭浜嬪疄锛夈€?- `context_manager`锛?  - `update_usage()` + `get_stats()` 浼樺厛浣跨敤鐪熷疄 input token 鏁般€?  - `compact_messages` 澧炲姞 LLM 鎽樿璺緞锛坄summarizer` 鍥炶皟锛夛紝淇濈暀**鏂囦欢璺緞 / 宸ュ叿浣跨敤 /
-    鍐崇瓥 / 鏈В鍐抽敊璇?*锛涙棤妯″瀷鏃跺洖閫€鍒版鍒欏惎鍙戝紡 `_heuristic_summary`銆?- `main.py` / `tty_app.py`锛氭妸 `model.summarize` 鎺ュ埌 ContextManager 鐨?`summarizer`锛?  骞跺湪 TTY 涓讳氦浜掕矾寰勪篃涓茶仈浜?ContextManager锛堟鍓嶄粎闈炰氦浜掕矾寰勬湁锛夈€?
+**问题**：`compact_messages` 只会「丢弃」最旧消息，无 LLM 摘要，长对话会丢失文件路径/决策/
+未解决错误。上下文统计用 `chars/4` 启发式，丢弃了 API 已返回的真实 `usage`。
+
+**改动**：
+- `anthropic_adapter`：捕获 API 返回的真实 `usage`（`last_usage`），新增 `summarize()` 方法
+  （用 fallback 或主模型把旧对话压成关键事实）。
+- `context_manager`：
+  - `update_usage()` + `get_stats()` 优先使用真实 input token 数。
+  - `compact_messages` 增加 LLM 摘要路径（`summarizer` 回调），保留**文件路径 / 工具使用 /
+    决策 / 未解决错误**；无模型时回退到启发式 `_heuristic_summary`。
+- `main.py` / `tty_app.py`：把 `model.summarize` 接到 ContextManager 的 `summarizer`，
+  并在 TTY 主交互路径也串联了 ContextManager（此前仅非交互路径有）。
+
 ---
 
-### 4. API 闊ф€э細婧㈠嚭閲嶈瘯 + 鍥為€€妯″瀷锛堟枃绔?2 缁嗚妭 3锛?
-**闂**锛氶亣 400/413銆岃姹傝繃澶с€嶇洿鎺ヨ繑鍥炶嚧鍛介敊璇€岄潪鍘嬬缉閲嶈瘯锛?29 杩囪浇鏃舵棤 fallback 妯″瀷銆?
-**鏀瑰姩**锛?- `anthropic_adapter`锛氭柊澧?`ContextOverflowError` / `ServiceOverloadError`銆?  - 400/413 鈫?鎶?`ContextOverflowError`銆?  - 529 鈫?鍒囨崲 `fallbackModel`锛堣嫢閰嶇疆锛夛紝浠嶅け璐ユ墠鎶?`ServiceOverloadError`銆?- `agent_loop`锛氭崟鑾?`ContextOverflowError` 鈫?寮哄埗鍘嬬缉骞堕噸璇曪紙鏈€澶?3 娆★級锛岃€岄潪閫€鍑烘湰杞€?- `config.py`锛氭柊澧?`fallbackModel` 閰嶇疆椤癸紙鐜鍙橀噺 `ANTHROPIC_FALLBACK_MODEL` /
-  `PEPSI_CODE_FALLBACK_MODEL` / settings.json `fallbackModel`锛夈€?
+### 4. API 韧性：溢出重试 + 回退模型（文章 2 细节 3）
+
+**问题**：遇 400/413「请求过大」直接返回致命错误而非压缩重试；529 过载时无 fallback 模型。
+
+**改动**：
+- `anthropic_adapter`：新增 `ContextOverflowError` / `ServiceOverloadError`。
+  - 400/413 → 抛 `ContextOverflowError`。
+  - 529 → 切换 `fallbackModel`（若配置），仍失败才抛 `ServiceOverloadError`。
+- `agent_loop`：捕获 `ContextOverflowError` → 强制压缩并重试（最多 3 次），而非退出本轮。
+- `config.py`：新增 `fallbackModel` 配置项（环境变量 `ANTHROPIC_FALLBACK_MODEL` /
+  `PEPSI_CODE_FALLBACK_MODEL` / settings.json `fallbackModel`）。
+
 ---
 
-### 棰濆锛氱郴缁熸彁绀?+ 瀛?Agent
+### 额外：系统提示 + 子 Agent
 
-**娌荤悊瑙勫垯鍧楁敼涓?opt-in**锛堟枃绔?2 缁嗚妭 1锛?- 姝ゅ墠姣忔璇锋眰閮藉己鍒舵敞鍏?~70 琛屻€孍ngineering Governance Rules銆嶏紙鎸囧悜澶栭儴璺緞銆佸惈闈炴硶 Python 绀轰緥锛夛紝
-  璺ㄩ」鐩笉鍚堥€備笖姣忔鑰?token銆?- 鐜版敼涓哄彲閫夛細`governance` 閰嶇疆椤规垨 `PEPSI_CODE_GOVERNANCE=1` 鎵嶅惎鐢ㄣ€?- 绯荤粺鎻愮ず鏂板**鍔ㄦ€佺幆澧冩**锛歄S銆丳ython 鐗堟湰銆丆WD銆乬it 鍒嗘敮銆侀《灞傜洰褰曟潯鐩€?
-**瀛?Agent 鏆撮湶涓?`task` 宸ュ叿**锛堟枃绔?6锛?- `sub_agents.py` 涓殑 Explore/Plan/General 姝ゅ墠鍙湪娴嬭瘯閲岃寮曠敤锛屾ā鍨嬫棤娉曡皟鐢ㄣ€?- 鏂板 `tools/task.py`锛歚task` 宸ュ叿锛屾ā鍨嬪彲濮旀淳闅旂涓婁笅鏂囩殑瀛愪换鍔★紝鍙洖浼犳憳瑕併€?  - 瀛?Agent 鐢ㄥ彈闄愬伐鍏烽泦锛堝彧璇?/ general 鍚啓鎵ц锛夛紝**绂佹閫掑綊**锛堝瓙娉ㄥ唽琛ㄤ笉鍚?task 宸ュ叿鏈韩锛夈€?
+**治理规则块改为 opt-in**（文章 2 细节 1）：
+- 此前每次请求都强制注入 ~70 行「Engineering Governance Rules」（指向外部路径、含非法 Python 示例），
+  跨项目不合适且每轮耗 token。
+- 现改为可选：`governance` 配置项或 `PEPSI_CODE_GOVERNANCE=1` 才启用。
+- 系统提示新增**动态环境块**：OS、Python 版本、CWD、git 分支、顶层目录条目。
+
+**子 Agent 暴露为 `task` 工具**（文章 6）：
+- `sub_agents.py` 中的 Explore/Plan/General 此前只在测试里被引用，模型无法调用。
+- 新增 `tools/task.py`：`task` 工具，模型可委派隔离上下文的子任务，只回传摘要。
+- 子 Agent 用受限工具集（只读 / general 含写执行），**禁止递归**（子注册表不含 task 工具本身）。
+
 ---
 
-## 瀵规姉寮忓鏌ュ彂鐜板苟淇鐨?6 涓湡瀹?bug
+## 对抗式审查发现并修复的 6 个真实 bug
 
-瀹炵幇鍚庣敤涓€涓?review 鈫?verify 宸ヤ綔娴佸鏀瑰姩鍋氬鎶楀紡澶嶅锛岀‘璁ゅ苟鍏ㄩ儴淇锛?
-| 涓ラ噸搴?| 闂 | 淇 |
+实现后用一个 review → verify 工作流对改动做对抗式复查，确认并全部修复：
+
+| 严重度 | 问题 | 修复 |
 |---|---|---|
-| 楂?| `read_file._file_cache` 骞惰涓嬬殑瀛楀吀绔炴€侊紙杩唬鏃惰鏀?/ 閲嶅 del KeyError锛?| 鍔?`threading.Lock` 淇濇姢璇诲彇/娓呯悊/鍐欏叆 |
-| 楂?| `compact_messages` 涓嶉噸缃檲鏃?`actual_input_tokens`锛屽帇缂╁悗浠嶅垽瀹氳秴闄?| 鍘嬬缉鍚?`actual_input_tokens = 0` |
-| 涓?| 529 鍦?`_send` 鍐呰褰撴櫘閫?5xx 閲嶈瘯 5 娆℃墠璧?fallback | `_should_retry_status` 鎺掗櫎 529锛屼氦缁?`next()` |
-| 涓?| 浣嶇疆閰嶅瀵艰嚧 `tool_result` 鎴愬鍎?鈫?瑙﹀彂鏂?400 | 鏀逛负鎸?`toolUseId` 閰嶅锛屼慨澶嶅鍎?|
-| 浣?| 绌烘搷浣滃帇缂╀粛鎻掑叆绌?marker銆乣messages_removed` 涓鸿礋 | 鏃犲彉鏇存椂鍘熸牱杩斿洖銆佽鏁?clamp |
-| 浣?| 鍘嬬缉 marker 璺ㄨ疆绱Н鎴愬亣 system prompt | marker 鍗曠嫭鏍囪锛屼笉娣峰叆鐪熷疄 system prompt |
+| 高 | `read_file._file_cache` 并发下的字典竞态（迭代时被修改 / 重读 del KeyError） | 加 `threading.Lock` 保护读取/清理/写入 |
+| 高 | `compact_messages` 不重置陈旧 `actual_input_tokens`，压缩后仍判定超限 | 压缩后 `actual_input_tokens = 0` |
+| 中 | 529 在 `_send` 内被当普通 5xx 重试 5 次才走 fallback | `_should_retry_status` 排除 529，交给 `next()` |
+| 中 | 位置配对导致 `tool_result` 成孤儿 → 触发远端 400 | 改为按 `toolUseId` 配对，修复孤儿 |
+| 低 | 空操作压缩仍插入空 marker、`messages_removed` 为负 | 无变更时原样返回、计数 clamp |
+| 低 | 压缩 marker 跨轮累积成假 system prompt | marker 单独标记，不混入真实 system prompt |
 
 ---
 
-## 娑夊強鐨勬枃浠?
-**鏍稿績**
-- `pepsicode/agent_loop.py` 鈥?骞惰鎵ц銆丠ISTORY_SNIP銆佹孩鍑洪噸璇曘€乽sage 鎹曡幏
-- `pepsicode/anthropic_adapter.py` 鈥?婧㈠嚭/杩囪浇寮傚父銆乫allback 妯″瀷銆乣summarize()`銆乽sage
-- `pepsicode/context_manager.py` 鈥?鐪熷疄 token銆丩LM/鍚彂寮忔憳瑕併€侀厤瀵逛慨澶嶃€乵arker 娌荤悊
-- `pepsicode/config.py` 鈥?`fallbackModel`銆乣governance` 閰嶇疆椤?- `pepsicode/prompt.py` 鈥?娌荤悊鍧?opt-in銆佸姩鎬佺幆澧冩
-- `pepsicode/tooling.py` 鈥?`concurrency_safe` 瀛楁
-- `pepsicode/tools/task.py` 鈥?鏂板瀛?Agent 濮旀淳宸ュ叿
+## 涉及的文件
 
-**宸ュ叿鏍囪**锛歚read_file.py`銆乣grep_files.py`銆乣list_files.py`銆乣file_tree.py`銆乣code_nav.py`
+**核心**
+- `pepsicode/agent_loop.py` — 并行执行、HISTORY_SNIP、溢出重试、usage 捕获
+- `pepsicode/anthropic_adapter.py` — 溢出/过载异常、fallback 模型、`summarize()`、usage
+- `pepsicode/context_manager.py` — 真实 token、LLM/启发式摘要、配对修复、marker 治理
+- `pepsicode/config.py` — `fallbackModel`、`governance` 配置项
+- `pepsicode/prompt.py` — 治理块 opt-in、动态环境块
+- `pepsicode/tooling.py` — `concurrency_safe` 字段
+- `pepsicode/tools/task.py` — 新增子 Agent 委派工具
 
-**鍏ュ彛涓茶仈**锛歚pepsicode/main.py`銆乣pepsicode/tty_app.py`銆乣pepsicode/tools/__init__.py`
+**工具标记**：`read_file.py`、`grep_files.py`、`list_files.py`、`file_tree.py`、`code_nav.py`
 
-**娴嬭瘯**锛歚tests/test_optimizations.py`锛堟柊澧?22 椤癸級
+**入口串联**：`pepsicode/main.py`、`pepsicode/tty_app.py`、`pepsicode/tools/__init__.py`
+
+**测试**：`tests/test_optimizations.py`（新增 22 项）
 
 ---
 
-## 楠岃瘉
+## 验证
 
 ```bash
 cd pepsicode
 python -m pytest -q          # 166 passed, 2 skipped
 ```
 
-鏂板娴嬭瘯瑕嗙洊锛氬苟琛屾墽琛?椤哄簭淇濇寔銆丠ISTORY_SNIP 骞傜瓑涓庝繚鎶ゃ€佹孩鍑哄帇缂╅噸璇曘€佺湡瀹?token 瑕嗙洊銆?LLM/鍚彂寮忔憳瑕併€佹不鐞?opt-in銆乀ask 宸ュ叿銆佷互鍙?6 涓?bug 鐨勫洖褰掓祴璇曘€?
+新增测试覆盖：并行执行顺序保持、HISTORY_SNIP 幂等与保护、溢出压缩重试、真实 token 覆盖、
+LLM/启发式摘要、治理 opt-in、Task 工具、以及 6 个 bug 的回归测试。
+
 ---
 
-## 閰嶇疆绀轰緥
+## 配置示例
 
-`~/.pepsi-code/settings.json`锛?
+`~/.pepsi-code/settings.json`：
+
 ```json
 {
   "model": "claude-opus-4-20250514",

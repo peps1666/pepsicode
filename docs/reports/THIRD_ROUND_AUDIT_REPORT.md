@@ -1,4 +1,4 @@
-# Third Round Deep Code Audit Report 鈥?pepsicode Python
+# Third Round Deep Code Audit Report —pepsicode Python
 
 **Date:** 2026-04-06
 **Scope:** All modules under `pepsicode/` and `pepsicode/tools/`
@@ -11,17 +11,17 @@
 | # | File | Line(s) | Risk | Category | Description |
 |---|------|---------|------|----------|-------------|
 | 1 | anthropic_adapter.py | 134-139 | High | Concurrency | Blocking `time.sleep()` in model adapter |
-| 2 | anthropic_adapter.py | 105-139 | Medium | Architecture | Monolithic adapter 鈥?hard to test/extend |
+| 2 | anthropic_adapter.py | 105-139 | Medium | Architecture | Monolithic adapter —hard to test/extend |
 | 3 | context_manager.py | 51-53 | Medium | Data | Crude token estimation (4 chars/token) |
 | 4 | context_manager.py | 176-214 | Medium | Data | O(n^2) compaction loop |
 | 5 | cost_tracker.py | 11-56 | Low | Data | Hardcoded stale pricing |
 | 6 | cost_tracker.py | 150-159 | Medium | Data | Integer division precision loss |
 | 7 | memory.py | 252-274 | Medium | Architecture | Tight coupling: `get_relevant_context` imports `context_manager` |
 | 8 | memory.py | 301-308 | Low | Data | `re` imported inside loop |
-| 9 | sub_agents.py | 150-181 | High | Concurrency | No actual execution engine 鈥?agents are inert |
+| 9 | sub_agents.py | 150-181 | High | Concurrency | No actual execution engine —agents are inert |
 | 10 | sub_agents.py | 102-111 | Medium | Architecture | No max-turns enforcement |
 | 11 | task_tracker.py | 237-261 | Low | UX | `auto_detect_tasks` regex too fragile |
-| 12 | tools/load_skill.py | 1-38 | Medium | Architecture | No skill caching 鈥?repeated disk I/O |
+| 12 | tools/load_skill.py | 1-38 | Medium | Architecture | No skill caching —repeated disk I/O |
 | 13 | tools/web_fetch.py | 55-64 | Medium | Security | No redirect limit / SSRF protection |
 | 14 | tools/web_search.py | 41-45 | Medium | Reliability | DuckDuckGo scraping is brittle |
 | 15 | api_retry.py | 212-255 | High | Concurrency | Async retry doesn't actually detect async functions |
@@ -43,12 +43,12 @@ Below is the detailed analysis for each finding.
 
 **Problem:** The `next()` method uses `_sleep()` (which wraps `time.sleep()`) inside retry loops. If this adapter is ever called from an async context (e.g., via `api_retry.py`'s async retry wrapper), the entire event loop blocks.
 
-**Impact:** In TUI or any async-driven UI, all rendering freezes during retry waits (up to 8 seconds per attempt 脳 5 attempts = 40s max freeze).
+**Impact:** In TUI or any async-driven UI, all rendering freezes during retry waits (up to 8 seconds per attempt × 5 attempts = 40s max freeze).
 
 **Fix:** Provide an async variant of the adapter:
 
 ```python
-# anthropic_adapter.py 鈥?add async variant
+# anthropic_adapter.py —add async variant
 async def next_async(self, messages: list[dict[str, Any]]) -> AgentStep:
     # ... same logic but replace _sleep() with asyncio.sleep()
     import asyncio
@@ -60,13 +60,13 @@ async def next_async(self, messages: list[dict[str, Any]]) -> AgentStep:
 
 ---
 
-## Finding 2: Monolithic Adapter 鈥?Hard to Test/Extend
+## Finding 2: Monolithic Adapter —Hard to Test/Extend
 
 **File:** `D:\Desktop\pepsicode\py-src\pepsicode\anthropic_adapter.py`
 **Lines:** 105-139 (the entire `next()` method)
 **Risk:** **Medium**
 
-**Problem:** The `next()` method does everything: message conversion, HTTP request, retry logic, response parsing, and step construction. This makes unit testing difficult 鈥?you cannot test retry logic without mocking the entire HTTP stack, and you cannot test response parsing without constructing full HTTP responses.
+**Problem:** The `next()` method does everything: message conversion, HTTP request, retry logic, response parsing, and step construction. This makes unit testing difficult —you cannot test retry logic without mocking the entire HTTP stack, and you cannot test response parsing without constructing full HTTP responses.
 
 **Impact:** Low test coverage for critical retry and parsing logic; high cognitive complexity.
 
@@ -80,7 +80,7 @@ class AnthropicModelAdapter:
         self._http_client = self._make_http_client()
 
     def _make_http_client(self):
-        """Factory for HTTP client 鈥?override for testing."""
+        """Factory for HTTP client —override for testing."""
         return urllib.request
 
     def _send_request(self, request) -> tuple[Any, int]:
@@ -110,7 +110,7 @@ class AnthropicModelAdapter:
 **Lines:** 51-53
 **Risk:** **Medium**
 
-**Problem:** `estimate_tokens()` uses a flat `CHARS_PER_TOKEN = 4.0` ratio. This is wildly inaccurate for Chinese text (where 1 character 鈮?1-2 tokens) and code (where identifiers and keywords compress differently). A 10,000-character Chinese document could be estimated as 2,500 tokens when it's actually 5,000-8,000.
+**Problem:** `estimate_tokens()` uses a flat `CHARS_PER_TOKEN = 4.0` ratio. This is wildly inaccurate for Chinese text (where 1 character ≈1-2 tokens) and code (where identifiers and keywords compress differently). A 10,000-character Chinese document could be estimated as 2,500 tokens when it's actually 5,000-8,000.
 
 **Impact:** Context compaction triggers too late for non-English content, risking context overflow.
 
@@ -156,7 +156,7 @@ def compact_messages(self) -> list[dict[str, Any]]:
         current_tokens -= removed_tokens  # O(1) update
 ```
 
-**Expected Benefit:** O(n) instead of O(n虏) compaction 鈥?10-50x faster for long conversations.
+**Expected Benefit:** O(n) instead of O(n虏) compaction —10-50x faster for long conversations.
 
 ---
 
@@ -193,7 +193,7 @@ def _load_pricing() -> dict[str, dict[str, float]]:
 **Lines:** 150-159
 **Risk:** **Medium**
 
-**Problem:** The cost calculation uses integer division `input_tokens / 1_000_000` which in Python 3 is float division, but for small token counts (e.g., 500 tokens), the result is `0.0005`, which when multiplied by price ($3.00) gives $0.0015 鈥?effectively zero for most practical purposes. The per-call cost is so small it accumulates rounding errors.
+**Problem:** The cost calculation uses integer division `input_tokens / 1_000_000` which in Python 3 is float division, but for small token counts (e.g., 500 tokens), the result is `0.0005`, which when multiplied by price ($3.00) gives $0.0015 —effectively zero for most practical purposes. The per-call cost is so small it accumulates rounding errors.
 
 **Impact:** Minor cost underestimation for short interactions.
 
@@ -265,7 +265,7 @@ from pepsicode.utils.tokens import estimate_tokens
 **Lines:** 150-181 (`spawn_agent` and related methods)
 **Risk:** **High**
 
-**Problem:** The `SubAgentManager` can spawn agent instances and add messages, but there is no `run()` or `execute()` method that actually drives the agent loop. The agents sit inert 鈥?messages are added but the model is never called.
+**Problem:** The `SubAgentManager` can spawn agent instances and add messages, but there is no `run()` or `execute()` method that actually drives the agent loop. The agents sit inert —messages are added but the model is never called.
 
 **Impact:** Sub-agent system is a skeleton with no muscle. Users who expect delegated execution will be confused.
 
@@ -351,7 +351,7 @@ def add_message(self, agent_id: str, message: dict[str, Any]) -> bool:
 ```python
 def auto_detect_tasks(self, user_input: str) -> list[str] | None:
     # Only detect explicit numbered/bulleted lists with >= 3 items
-    # Remove comma-splitting heuristic entirely 鈥?too noisy
+    # Remove comma-splitting heuristic entirely —too noisy
     ...
 ```
 
@@ -359,7 +359,7 @@ def auto_detect_tasks(self, user_input: str) -> list[str] | None:
 
 ---
 
-## Finding 12: No Skill Caching 鈥?Repeated Disk I/O
+## Finding 12: No Skill Caching —Repeated Disk I/O
 
 **File:** `D:\Desktop\pepsicode\py-src\pepsicode\tools\load_skill.py`
 **Lines:** 1-38 (entire file)
@@ -415,7 +415,7 @@ def _is_safe_url(url: str) -> tuple[bool, str]:
         if ip.is_private or ip.is_loopback or ip.is_link_local:
             return False, f"Private/internal IP: {parsed.hostname}"
     except ValueError:
-        pass  # Not an IP 鈥?hostname, resolve later
+        pass  # Not an IP —hostname, resolve later
     return True, ""
 
 # In _run():
@@ -477,7 +477,7 @@ Also add `User-Agent` rotation and rate limiting to avoid being blocked.
 **Lines:** 212-255
 **Risk:** **High**
 
-**Problem:** `hasattr(func, "__await__")` is not a reliable way to detect async functions. A regular function that returns a coroutine (like `async def outer(): return inner_async()`) would pass this check incorrectly. Additionally, this function is marked `async` but catches `HTTPError` from the sync retry module 鈥?if the wrapped function raises a urllib HTTPError, it won't match the custom `HTTPError` class defined in this module.
+**Problem:** `hasattr(func, "__await__")` is not a reliable way to detect async functions. A regular function that returns a coroutine (like `async def outer(): return inner_async()`) would pass this check incorrectly. Additionally, this function is marked `async` but catches `HTTPError` from the sync retry module —if the wrapped function raises a urllib HTTPError, it won't match the custom `HTTPError` class defined in this module.
 
 **Impact:** Async retry may fail to retry async functions correctly, or may retry sync functions incorrectly.
 
@@ -540,7 +540,7 @@ async def _get_branch(self) -> str:
 
 ---
 
-## Finding 17: Module-Level Mutable Dict 鈥?No Thread Safety
+## Finding 17: Module-Level Mutable Dict —No Thread Safety
 
 **File:** `D:\Desktop\pepsicode\py-src\pepsicode\background_tasks.py`
 **Lines:** 22-51
@@ -622,9 +622,9 @@ object itself is mutated in place."""
 
 **Problem:** `discover_skills()` walks 4 directory trees and reads every `SKILL.md` file. This is called every time system prompt is rebuilt (every turn).
 
-**Impact:** Repeated disk traversal on every turn 鈥?wasteful when skills rarely change.
+**Impact:** Repeated disk traversal on every turn —wasteful when skills rarely change.
 
-**Fix:** Same as Finding 12 鈥?add caching with invalidation when skills are installed/removed.
+**Fix:** Same as Finding 12 —add caching with invalidation when skills are installed/removed.
 
 **Expected Benefit:** Eliminates redundant disk I/O.
 
