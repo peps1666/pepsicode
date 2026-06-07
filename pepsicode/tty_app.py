@@ -61,6 +61,7 @@ from pepsicode.tui.chrome import (
     render_status_line,
     render_tool_panel,
     truncate_plain,
+    wrap_text,
     ACCENT,
     BRIGHT_GREEN,
     BRIGHT_WHITE,
@@ -948,20 +949,20 @@ def _render_stream_transcript(entries: list[TranscriptEntry], scroll_offset: int
         if entry.kind == "user":
             rendered.append(f"  {ACCENT}{ICON_ARROW}{RESET} {BOLD}You{RESET}")
             for line in body_lines:
-                rendered.append(f"     {truncate_plain(line, cols - 7)}")
+                rendered.append(f"     {wrap_text(line, cols - 7)}")
             rendered.append("")
             continue
 
         if entry.kind == "assistant":
             for line in render_markdownish(entry.body).splitlines() or [""]:
-                rendered.append(f"  {truncate_plain(line, cols - 4)}")
+                rendered.append(f"  {wrap_text(line, cols - 4)}")
             rendered.append("")
             continue
 
         if entry.kind == "progress":
             for index, line in enumerate(body_lines):
                 prefix = f"{ACCENT}{ICON_DOT}{RESET} " if index == 0 else "  "
-                rendered.append(f"  {prefix}{SUBTLE}{truncate_plain(line, cols - 5)}{RESET}")
+                rendered.append(f"  {prefix}{SUBTLE}{wrap_text(line, cols - 5)}{RESET}")
             rendered.append("")
             continue
 
@@ -982,7 +983,7 @@ def _render_stream_transcript(entries: list[TranscriptEntry], scroll_offset: int
                 body_output_lines = body.splitlines()
                 max_visible = 30
                 for i, line in enumerate(body_output_lines[:max_visible]):
-                    rendered.append(f"     {SUBTLE}{truncate_plain(line, cols - 7)}{RESET}")
+                    rendered.append(f"     {SUBTLE}{wrap_text(line, cols - 7)}{RESET}")
                 if len(body_output_lines) > max_visible:
                     rendered.append(f"     {SUBTLE}... {len(body_output_lines) - max_visible} more lines ...{RESET}")
             rendered.append("")
@@ -1519,20 +1520,39 @@ def _handle_input(
             rerender()
 
         elif token.type == "done":
-            # Finalise: clear streaming markers but keep the entry.
-            state.streaming_entry_id = None
-            state.streaming_text = ""
+            # Don't clear streaming state here -- let on_assistant_message
+            # or on_progress_message finalize it to avoid duplicate entries.
+            pass
 
     def on_assistant_message(content: str) -> None:
-        # Clear streaming state since this is a final message.
-        state.streaming_entry_id = None
-        state.streaming_text = ""
-        _push_transcript_entry(state, kind="assistant", body=content)
+        if state.streaming_entry_id is not None:
+            # Streaming already displayed this content in a transcript entry.
+            # Update the entry body (idempotent for normal flow, overwrites
+            # partial content on error paths) and finalize streaming state.
+            for entry in state.transcript:
+                if entry.id == state.streaming_entry_id:
+                    entry.body = content
+                    break
+            state.streaming_entry_id = None
+            state.streaming_text = ""
+        else:
+            # No streaming happened (error path, etc.) -- push a new entry.
+            _push_transcript_entry(state, kind="assistant", body=content)
         _reset_scroll_if_needed(state)
         rerender()
 
     def on_progress_message(content: str) -> None:
-        _push_transcript_entry(state, kind="progress", body=content)
+        if state.streaming_entry_id is not None:
+            # Streaming created an "assistant" entry for text before tool calls.
+            # Convert it to "progress" kind so the display is consistent.
+            for entry in state.transcript:
+                if entry.id == state.streaming_entry_id:
+                    entry.kind = "progress"
+                    break
+            state.streaming_entry_id = None
+            state.streaming_text = ""
+        else:
+            _push_transcript_entry(state, kind="progress", body=content)
         _reset_scroll_if_needed(state)
         rerender()
 

@@ -192,6 +192,94 @@ def truncate_plain(text: str, width: int) -> str:
     return res
 
 
+def wrap_text(text: str, width: int) -> str:
+    """Wrap text to fit within ``width`` display columns.
+
+    Unlike ``truncate_plain`` this never discards content -- lines that exceed
+    the width are word-wrapped (breaking at spaces when possible) and
+    character-wrapped when a single word is wider than the available space.
+
+    * ANSI escape sequences are preserved and do not count toward width.
+    * CJK / double-width characters are accounted for.
+    """
+    if width <= 0:
+        return text
+
+    result_lines: list[str] = []
+
+    for raw_line in text.split("\n"):
+        if string_display_width(raw_line) <= width:
+            result_lines.append(raw_line)
+            continue
+
+        # Tokenise the line into (is_ansi, segment) pairs so we can
+        # measure display width of visible segments only.
+        tokens: list[tuple[bool, str]] = []
+        i = 0
+        while i < len(raw_line):
+            m = _ANSI_RE.match(raw_line, i)
+            if m:
+                tokens.append((True, m.group()))
+                i = m.end()
+            else:
+                # Collect consecutive visible characters.
+                j = i
+                while j < len(raw_line) and not _ANSI_RE.match(raw_line, j):
+                    j += 1
+                tokens.append((False, raw_line[i:j]))
+                i = j
+
+        # Wrap tokens into output lines.
+        current_line = ""
+        current_width = 0
+
+        for is_ansi, seg in tokens:
+            if is_ansi:
+                current_line += seg
+                continue
+
+            # Split the visible segment on spaces to get word boundaries.
+            words = seg.split(" ")
+            first_word = True
+            for word in words:
+                if not word and not first_word:
+                    # Preserve trailing / inter-word spaces.
+                    space_w = 1
+                    if current_width + space_w <= width:
+                        current_line += " "
+                        current_width += space_w
+                    else:
+                        result_lines.append(current_line)
+                        current_line = ""
+                        current_width = 0
+                    continue
+
+                word_w = _stripped_display_width(word) if word else 0
+                space_w = 0 if first_word else 1
+
+                # Does the word (with its leading space) fit on the current line?
+                if current_width + space_w + word_w <= width:
+                    if not first_word:
+                        current_line += " "
+                        current_width += space_w
+                    current_line += word
+                    current_width += word_w
+                    first_word = False
+                    continue
+
+                # Word doesn't fit -- start a new line.
+                if current_width > 0:
+                    result_lines.append(current_line)
+                current_line = word if word else ""
+                current_width = word_w
+                first_word = False
+
+        if current_line:
+            result_lines.append(current_line)
+
+    return "\n".join(result_lines)
+
+
 def pad_plain(text: str, width: int) -> str:
     """Right-pad to width, CJK aware."""
     display_w = string_display_width(text)
