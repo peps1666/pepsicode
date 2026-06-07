@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Literal, Protocol, TypedDict
+from typing import Any, Generator, Literal, Protocol, TypedDict
 
 
 class ProviderThinkingBlock(TypedDict):
@@ -50,6 +50,30 @@ class AgentStep:
     diagnostics: StepDiagnostics | None = None
 
 
+@dataclass(slots=True)
+class StreamToken:
+    """A single token (or event) emitted by a streaming model adapter.
+
+    Attributes:
+        type:            "text"     - incremental text delta
+                        "tool_use"  - a tool-call block (start or incremental JSON)
+                        "thinking"  - a thinking-block marker
+                        "done"      - end-of-stream marker
+        content:         raw text delta (populated for type=="text")
+        tool_name:       tool name (set when a tool_use block starts)
+        tool_id:         tool use id (set when a tool_use block starts)
+        tool_input_partial:  incremental JSON for a tool_use input (string delta)
+    """
+    type: Literal["text", "tool_use", "thinking", "done"]
+    content: str = ""
+    tool_name: str | None = None
+    tool_id: str | None = None
+    tool_input_partial: str = ""
+
+
 class ModelAdapter(Protocol):
     def next(self, messages: list[ChatMessage]) -> AgentStep: ...
+    def next_stream(
+        self, messages: list[ChatMessage]
+    ) -> Generator[StreamToken, None, None]: ...
 

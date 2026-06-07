@@ -1,14 +1,14 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
-from typing import Callable
+from typing import Callable, Generator
 
 from pepsicode.anthropic_adapter import ContextOverflowError
 from pepsicode.context_manager import ContextManager, estimate_message_tokens
 from pepsicode.logging_config import get_logger
 from pepsicode.permissions import PermissionManager
 from pepsicode.tooling import ToolContext, ToolRegistry
-from pepsicode.types import AgentStep, ChatMessage, ModelAdapter, ProviderThinkingBlock
+from pepsicode.types import AgentStep, ChatMessage, ModelAdapter, ProviderThinkingBlock, StreamToken
 
 logger = get_logger("agent_loop")
 
@@ -459,6 +459,290 @@ def run_agent_turn(
                 on_assistant_message(await_user_result.output)
             current_messages.append({"role": "assistant", "content": await_user_result.output})
             return current_messages
+
+    fallback = "Reached the maximum tool step limit for this turn."
+    if on_assistant_message:
+        on_assistant_message(fallback)
+    current_messages.append({"role": "assistant", "content": fallback})
+    return current_messages
+
+
+# ---------------------------------------------------------------------------
+# Streaming agent turn
+# ---------------------------------------------------------------------------
+
+
+def _accumulate_stream_tokens(
+    token_stream: Generator[StreamToken, None, None],
+    *,
+    on_token: Callable[[StreamToken], None] | None = None,
+) -> tuple[str, list[dict[str, any]] | None]:
+    """Consume the token stream and accumulate text + tool-call blocks.
+
+    Returns ``(text_content, tool_calls | None)``.  When the response contains
+    only plain text, ``tool_calls`` is ``None``.  When a tool-use block is
+    present, the list contains dicts with keys ``id``, ``toolName``, and
+    ``input`` (the fully-assembled JSON string, parsed to a dict).
+
+    The function keeps the tool-calling state-machine minimal:
+    1. ``content_block_start(type=tool_use)``  -> enter tool mode
+    2. ``input_json_delta``                    -> accumulate JSON fragments
+    3. ``content_block_start(type=...)``       -> close current tool, start next block
+    4. ``done``                                -> finalise
+    """
+    text_parts: list[str] = []
+    tool_calls: list[dict] = []
+    # Current tool being accumulated (None until a tool_use block starts).
+    current_tool: dict | None = None
+    current_input_json: str = ""
+
+    for token in token_stream:
+        if on_token is not None:
+            on_token(token)
+
+        if token.type == "text":
+            text_parts.append(token.content)
+
+        elif token.type == "tool_use":
+            # A tool_use token with tool_name set marks the *start* of a new block.
+            if token.tool_name is not None:
+                # Finalise the previous tool if one was being accumulated.
+                if current_tool is not None and current_input_json:
+                    try:
+                        import json as _json
+                        current_tool["input"] = _json.loads(current_input_json)
+                    except Exception:  # noqa: BLE001
+                        current_tool["input"] = current_input_json
+                    tool_calls.append(current_tool)
+                current_tool = {
+                    "id": token.tool_id or "",
+                    "toolName": token.tool_name,
+                    "input": None,
+                }
+                current_input_json = ""
+            # Incremental input JSON fragment.
+            if token.tool_input_partial:
+                current_input_json += token.tool_input_partial
+
+        elif token.type == "done":
+            break
+
+    # Flush the last accumulated tool call.
+    if current_tool is not None:
+        if current_input_json:
+            try:
+                import json as _json
+                current_tool["input"] = _json.loads(current_input_json)
+            except Exception:  # noqa: BLE001
+                current_tool["input"] = current_input_json
+        tool_calls.append(current_tool)
+
+    text = "".join(text_parts)
+    return text, tool_calls if tool_calls else None
+
+
+def run_agent_turn_stream(
+    *,
+    model: ModelAdapter,
+    tools: ToolRegistry,
+    messages: list[ChatMessage],
+    cwd: str,
+    permissions: PermissionManager | None = None,
+    max_steps: int = 50,
+    on_token: Callable[[StreamToken], None] | None = None,
+    on_tool_start: Callable[[str, dict], None] | None = None,
+    on_tool_result: Callable[[str, str, bool], None] | None = None,
+    on_assistant_message: Callable[[str], None] | None = None,
+    on_progress_message: Callable[[str], None] | None = None,
+    context_manager: ContextManager | None = None,
+) -> list[ChatMessage]:
+    """Run an agent turn with streaming token output.
+
+    This is the streaming counterpart of ``run_agent_turn``.  Instead of
+    waiting for the full response, it receives ``StreamToken`` objects as they
+    arrive from the provider via ``model.next_stream()`` and forwards them to
+    the optional ``on_token`` callback, enabling real-time UI updates.
+
+    All other semantics (tool execution, context compression, retries) are
+    identical to the non-streaming variant.
+    """
+    current_messages = list(messages)
+    saw_tool_result = False
+    empty_response_retry_count = 0
+    overflow_retry_count = 0
+    tool_error_count = 0
+    step = 0
+
+    if context_manager:
+        context_manager.messages = current_messages
+        stats = context_manager.get_stats()
+        logger.info(
+            "Context: %d tokens (%.0f%%), %d messages",
+            stats.total_tokens,
+            stats.usage_percentage,
+            stats.messages_count,
+        )
+        if context_manager.should_auto_compact():
+            logger.warning("Context near limit, auto-compacting...")
+            current_messages = context_manager.compact_messages()
+            if on_assistant_message:
+                on_assistant_message(context_manager.get_context_summary())
+
+    while max_steps is None or step < max_steps:
+        step += 1
+        current_messages = _snip_tool_outputs(current_messages)
+
+        # ------ Stream the model response ------
+        text_content: str = ""
+        parsed_calls: list[dict] | None = None
+        try:
+            # For the first step we use next_stream(); retries of the same step
+            # fall back to the non-streaming path so error handling stays simple.
+            if step == 1 or True:  # always stream for now
+                token_stream = model.next_stream(current_messages)
+                text_content, parsed_calls = _accumulate_stream_tokens(
+                    token_stream,
+                    on_token=on_token,
+                )
+            else:
+                # Fallback non-stream (kept as reference; can be removed later)
+                next_step = model.next(current_messages)
+                text_content = next_step.content
+                parsed_calls = [
+                    {"id": c["id"], "toolName": c["toolName"], "input": c.get("input")}
+                    for c in next_step.calls
+                ] if next_step.calls else None
+
+        except KeyboardInterrupt:
+            raise
+        except ContextOverflowError as error:
+            if context_manager is not None and overflow_retry_count < 3:
+                overflow_retry_count += 1
+                logger.warning(
+                    "Context overflow (%s); compacting and retrying (attempt %d)",
+                    error, overflow_retry_count,
+                )
+                context_manager.messages = current_messages
+                current_messages = context_manager.compact_messages(force=True)
+                if on_progress_message:
+                    on_progress_message(context_manager.get_context_summary())
+                step -= 1
+                continue
+            fallback = f"Context too large and could not be compacted further: {error}"
+            logger.error("Context overflow, no recovery: %s", error)
+            if on_assistant_message:
+                on_assistant_message(fallback)
+            current_messages.append({"role": "assistant", "content": fallback})
+            return current_messages
+
+        except ConnectionError as error:
+            fallback = f"Network error (connection failed or dropped): {error}"
+            logger.error("Model API connection error: %s", error)
+            if on_assistant_message:
+                on_assistant_message(fallback)
+            current_messages.append({"role": "assistant", "content": fallback})
+            return current_messages
+
+        except TimeoutError as error:
+            fallback = f"Model API timeout: {error}"
+            logger.error("Model API timeout: %s", error)
+            if on_assistant_message:
+                on_assistant_message(fallback)
+            current_messages.append({"role": "assistant", "content": fallback})
+            return current_messages
+
+        except Exception as error:
+            error_type = type(error).__name__
+            fallback = f"Model API error ({error_type}): {error}"
+            logger.error("Model API error (%s): %s", error_type, error)
+            if on_assistant_message:
+                on_assistant_message(fallback)
+            current_messages.append({"role": "assistant", "content": fallback})
+            return current_messages
+
+        # ------ Record token usage ------
+        if context_manager is not None:
+            usage = getattr(model, "last_usage", None)
+            if isinstance(usage, dict):
+                context_manager.update_usage(
+                    usage.get("input_tokens", 0),
+                    usage.get("output_tokens", 0),
+                )
+
+        # ------ Handle empty responses ------
+        is_empty = len(text_content.strip()) == 0 and not parsed_calls
+
+        if is_empty and empty_response_retry_count < 2:
+            empty_response_retry_count += 1
+            current_messages.append(
+                {
+                    "role": "user",
+                    "content": (
+                        NUDGE_AFTER_EMPTY_RESPONSE if saw_tool_result
+                        else NUDGE_AFTER_EMPTY_NO_TOOLS
+                    ),
+                }
+            )
+            continue
+
+        if is_empty:
+            fallback = "Model returned an empty response and the turn was stopped."
+            if on_assistant_message:
+                on_assistant_message(fallback)
+            current_messages.append({"role": "assistant", "content": fallback})
+            return current_messages
+
+        # ------ Handle tool calls ------
+        if parsed_calls:
+            # Emit the assistant text as progress (if any) before tool calls.
+            if text_content.strip():
+                if on_progress_message:
+                    on_progress_message(text_content)
+                current_messages.append({"role": "assistant_progress", "content": text_content})
+
+            # Record the tool-call messages.
+            for call in parsed_calls:
+                current_messages.append({
+                    "role": "assistant_tool_call",
+                    "toolUseId": call["id"],
+                    "toolName": call["toolName"],
+                    "input": call.get("input"),
+                })
+
+            context = ToolContext(cwd=cwd, permissions=permissions)
+            results = _execute_calls_in_order(
+                parsed_calls, tools, context, on_tool_start, on_tool_result,
+            )
+
+            await_user_result = None
+            for call, result in zip(parsed_calls, results):
+                saw_tool_result = True
+                if not result.ok:
+                    tool_error_count += 1
+                current_messages.append({
+                    "role": "tool_result",
+                    "toolUseId": call["id"],
+                    "toolName": call["toolName"],
+                    "content": result.output,
+                    "isError": not result.ok,
+                })
+                if result.awaitUser and await_user_result is None:
+                    await_user_result = result
+
+            if await_user_result is not None:
+                if on_assistant_message:
+                    on_assistant_message(await_user_result.output)
+                current_messages.append({"role": "assistant", "content": await_user_result.output})
+                return current_messages
+
+            # Continue to the next agent step after tool execution.
+            continue
+
+        # ------ Plain text final answer ------
+        if on_assistant_message:
+            on_assistant_message(text_content)
+        current_messages.append({"role": "assistant", "content": text_content})
+        return current_messages
 
     fallback = "Reached the maximum tool step limit for this turn."
     if on_assistant_message:

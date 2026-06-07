@@ -5,9 +5,9 @@ import random
 import time
 import urllib.error
 import urllib.request
-from typing import Any
+from typing import Any, Generator
 
-from pepsicode.types import AgentStep, ProviderThinkingBlock, StepDiagnostics
+from pepsicode.types import AgentStep, ChatMessage, ProviderThinkingBlock, StepDiagnostics, StreamToken
 
 DEFAULT_MAX_RETRIES = 4
 BASE_RETRY_DELAY_MS = 500
@@ -102,6 +102,115 @@ def _extract_error_message(data: Any, status: int) -> str:
         if isinstance(error, dict) and isinstance(error.get("message"), str):
             return error["message"]
     return f"Model request failed: {status}"
+
+
+# ---------------------------------------------------------------------------
+# SSE (Server-Sent Events) parsing for streaming responses
+# ---------------------------------------------------------------------------
+
+
+def _parse_sse_event(event_str: str) -> dict[str, Any] | None:
+    """Parse a single SSE event block.
+
+    Each event is separated by a blank line (``\\n\\n``).  Inside a block the
+    relevant lines are::
+
+        event: <type>
+        data: <json>
+
+    Returns ``{"event": <type>, "data": <dict>}`` or ``None`` when the block
+    contains nothing useful.
+    """
+    event_type: str | None = None
+    data: Any = None
+
+    for line in event_str.splitlines():
+        if not line or line.startswith(":"):
+            # Heartbeat / comment lines - ignore.
+            continue
+        if line.startswith("event:"):
+            event_type = line[len("event:") :].strip()
+        elif line.startswith("data:"):
+            data_str = line[len("data:") :].strip()
+            if not data_str:
+                continue
+            try:
+                data = json.loads(data_str)
+            except json.JSONDecodeError:
+                # Non-JSON payloads (e.g. literal "[DONE]") are not actionable
+                # here - the upstream caller can yield a "done" token from
+                # the message_stop event instead.
+                data = data_str
+
+    if event_type and data is not None:
+        return {"event": event_type, "data": data}
+    return None
+
+
+def _process_sse_event(event: dict[str, Any]) -> Generator[StreamToken, None, None]:
+    """Translate a parsed SSE event into one or more ``StreamToken`` objects.
+
+    Only the events we care about produce tokens; the rest are ignored so
+    callers can safely iterate the whole stream without bookkeeping.
+    """
+    event_type = event.get("event")
+    data = event.get("data")
+    if not isinstance(data, dict):
+        return
+
+    if event_type == "content_block_start":
+        block = data.get("content_block")
+        if not isinstance(block, dict):
+            return
+        block_kind = block.get("type")
+        if block_kind == "tool_use":
+            yield StreamToken(
+                type="tool_use",
+                tool_name=block.get("name") if isinstance(block.get("name"), str) else None,
+                tool_id=block.get("id") if isinstance(block.get("id"), str) else None,
+            )
+        elif block_kind == "thinking":
+            yield StreamToken(type="thinking")
+
+    elif event_type == "content_block_delta":
+        delta = data.get("delta")
+        if not isinstance(delta, dict):
+            return
+        delta_type = delta.get("type")
+        if delta_type == "text_delta" and isinstance(delta.get("text"), str):
+            yield StreamToken(type="text", content=delta["text"])
+        elif delta_type == "input_json_delta" and isinstance(delta.get("partial_json"), str):
+            yield StreamToken(
+                type="tool_use",
+                tool_input_partial=delta["partial_json"],
+            )
+
+    elif event_type == "message_stop":
+        yield StreamToken(type="done")
+
+    elif event_type == "message_delta":
+        # Final usage / stop_reason - capture token usage when the provider
+        # reports it.  Mirror the non-streaming path so context-manager stats
+        # stay accurate.
+        usage = data.get("usage")
+        if isinstance(usage, dict):
+            # Stash the usage on a sentinel attribute so next_stream() can
+            # assign it back to self.last_usage at the end of the stream.
+            setattr(_process_sse_event, "_pending_usage", {
+                "input_tokens": int(usage.get("input_tokens", 0) or 0),
+                "output_tokens": int(usage.get("output_tokens", 0) or 0),
+            })
+
+
+def _consume_pending_usage() -> dict[str, int] | None:
+    """Read and clear the pending usage stashed by ``_process_sse_event``."""
+    usage = getattr(_process_sse_event, "_pending_usage", None)
+    if usage is not None:
+        try:
+            delattr(_process_sse_event, "_pending_usage")
+        except AttributeError:
+            pass
+    return usage
 
 
 def _parse_assistant_text(content: str) -> tuple[str, str | None]:
@@ -216,6 +325,48 @@ class AnthropicModelAdapter:
             method="POST",
         )
 
+    def _build_stream_request(
+        self, model: str, system_message: str, converted_messages: list[dict[str, Any]]
+    ) -> urllib.request.Request:
+        """Build the streaming variant of the messages request.
+
+        The only difference from ``_build_request`` is the ``"stream": True``
+        flag in the body - everything else (auth, tools, max_tokens) is
+        identical so a stream and a non-stream request remain comparable.
+        """
+        request_body = {
+            "model": model,
+            "system": system_message,
+            "messages": converted_messages,
+            "stream": True,
+            "tools": [
+                {
+                    "name": tool.name,
+                    "description": tool.description,
+                    "input_schema": tool.input_schema,
+                }
+                for tool in self.tools.list()
+            ],
+        }
+        if self.runtime.get("maxOutputTokens") is not None:
+            request_body["max_tokens"] = self.runtime["maxOutputTokens"]
+
+        return urllib.request.Request(
+            url=self.runtime["baseUrl"].rstrip("/") + "/v1/messages",
+            data=json.dumps(request_body).encode("utf-8"),
+            headers={
+                "content-type": "application/json",
+                "anthropic-version": "2023-06-01",
+                "accept": "text/event-stream",
+                **(
+                    {"x-api-key": self.runtime["apiKey"]}
+                    if self.runtime.get("apiKey")
+                    else {"Authorization": f"Bearer {self.runtime['authToken']}"}
+                ),
+            },
+            method="POST",
+        )
+
     def _send(self, request: urllib.request.Request) -> tuple[Any, int]:
         """Send a request with backoff retries.  Returns (json_data, status)."""
         max_retries = _get_retry_limit()
@@ -285,6 +436,88 @@ class AnthropicModelAdapter:
             if isinstance(b, dict) and b.get("type") == "text"
         ]
         return "\n".join(t for t in texts if t).strip()
+
+    def next_stream(
+        self, messages: list[ChatMessage]
+    ) -> Generator[StreamToken, None, None]:
+        """Stream tokens from the model using Anthropic's SSE endpoint.
+
+        Yields ``StreamToken`` objects as they arrive.  A ``done`` token marks
+        the end of the stream.  The adapter's ``last_usage`` attribute is
+        updated when the final usage delta arrives, mirroring ``next()`` so
+        callers don't have to special-case the streaming path.
+        """
+        system_message, converted_messages = _to_anthropic_messages(messages)
+        request = self._build_stream_request(
+            self.runtime["model"], system_message, converted_messages
+        )
+
+        # Reset any pending usage stashed by a previous run.
+        try:
+            delattr(_process_sse_event, "_pending_usage")
+        except AttributeError:
+            pass
+
+        try:
+            response = urllib.request.urlopen(request, timeout=120)  # noqa: S310
+        except urllib.error.HTTPError as error:
+            # Try to surface the provider's error message just like ``_send`` does.
+            try:
+                data = _read_json_body(error)
+            except Exception:  # noqa: BLE001
+                data = {}
+            status = getattr(error, "code", 0)
+            if status in OVERFLOW_STATUSES:
+                raise ContextOverflowError(_extract_error_message(data, status))
+            if status == OVERLOAD_STATUS:
+                raise ServiceOverloadError(_extract_error_message(data, status))
+            raise RuntimeError(_extract_error_message(data, status))
+        except urllib.error.URLError as error:
+            raise RuntimeError(f"Model stream request failed: {error}") from error
+
+        # Read the SSE stream chunk by chunk, buffering partial event blocks.
+        buffer = ""
+        try:
+            # ``iter_chunks`` returns (chunk, consumed_from_buffer); we use
+            # ``read`` here for simplicity and to keep memory bounded.
+            for raw_chunk in response:
+                if not raw_chunk:
+                    continue
+                buffer += raw_chunk.decode("utf-8", errors="replace")
+                # Drain complete ``\\n\\n``-delimited events.
+                while "\n\n" in buffer:
+                    event_str, buffer = buffer.split("\n\n", 1)
+                    event = _parse_sse_event(event_str)
+                    if event is None:
+                        continue
+                    for token in _process_sse_event(event):
+                        if token.type == "done":
+                            usage = _consume_pending_usage()
+                            if usage is not None:
+                                self.last_usage = usage
+                            yield token
+                            return
+                        yield token
+        finally:
+            # Always close the underlying response so the HTTP connection
+            # is released back to the pool.
+            try:
+                response.close()
+            except Exception:  # noqa: BLE001
+                pass
+
+        # Drain any trailing bytes that didn't end with a blank line.
+        if buffer.strip():
+            event = _parse_sse_event(buffer)
+            if event is not None:
+                for token in _process_sse_event(event):
+                    yield token
+
+        # Surface any pending usage that arrived without a ``done`` token.
+        usage = _consume_pending_usage()
+        if usage is not None:
+            self.last_usage = usage
+        yield StreamToken(type="done")
 
     def next(self, messages: list[dict[str, Any]]) -> AgentStep:
         system_message, converted_messages = _to_anthropic_messages(messages)

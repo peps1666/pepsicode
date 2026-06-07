@@ -23,7 +23,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any, Callable
 
-from pepsicode.agent_loop import run_agent_turn
+from pepsicode.agent_loop import run_agent_turn, run_agent_turn_stream
 from pepsicode.background_tasks import list_background_tasks
 from pepsicode.cli_commands import (
     SLASH_COMMANDS,
@@ -98,7 +98,7 @@ from pepsicode.tui.transcript import (
     render_transcript,
 )
 from pepsicode.tui.types import TranscriptEntry
-from pepsicode.types import ChatMessage, ModelAdapter
+from pepsicode.types import ChatMessage, ModelAdapter, StreamToken
 from pepsicode.workspace import resolve_tool_path
 
 # ---------------------------------------------------------------------------
@@ -242,6 +242,9 @@ class ScreenState:
     agent_lock: Any = None
     # Tool execution timing tracker
     tool_start_time: float | None = None
+    # Streaming state: the entry currently being streamed into (if any).
+    streaming_entry_id: int | None = None
+    streaming_text: str = ""
 
 
 # ---------------------------------------------------------------------------
@@ -1493,7 +1496,37 @@ def _handle_input(
     }
     args.messages.append({"role": "user", "content": input_text})
 
+    def on_token(token: StreamToken) -> None:
+        """Handle a single streaming token from the model.
+
+        Creates or updates a transcript entry in real-time so the user sees
+        the response being generated character-by-character.
+        """
+        if token.type == "text":
+            state.streaming_text += token.content
+            if state.streaming_entry_id is None:
+                # Create a new transcript entry for the streaming output.
+                state.streaming_entry_id = _push_transcript_entry(
+                    state, kind="assistant", body=state.streaming_text,
+                )
+            else:
+                # Update the existing entry in-place.
+                for entry in state.transcript:
+                    if entry.id == state.streaming_entry_id:
+                        entry.body = state.streaming_text
+                        break
+            _reset_scroll_if_needed(state)
+            rerender()
+
+        elif token.type == "done":
+            # Finalise: clear streaming markers but keep the entry.
+            state.streaming_entry_id = None
+            state.streaming_text = ""
+
     def on_assistant_message(content: str) -> None:
+        # Clear streaming state since this is a final message.
+        state.streaming_entry_id = None
+        state.streaming_text = ""
         _push_transcript_entry(state, kind="assistant", body=content)
         _reset_scroll_if_needed(state)
         rerender()
@@ -1653,12 +1686,14 @@ def _handle_input(
     def _run_agent_background():
         nonlocal agent_error, agent_result
         try:
-            next_messages = run_agent_turn(
+            # Use streaming agent turn for real-time token output
+            next_messages = run_agent_turn_stream(
                 model=args.model,
                 tools=args.tools,
                 messages=list(args.messages),  # Copy to avoid race condition
                 cwd=args.cwd,
                 permissions=args.permissions,
+                on_token=on_token,
                 on_tool_start=on_tool_start,
                 on_tool_result=on_tool_result,
                 on_assistant_message=on_assistant_message,
@@ -1676,6 +1711,9 @@ def _handle_input(
             state.is_busy = False
             state.active_tool = None
             state.status = None
+            # Clear streaming state
+            state.streaming_entry_id = None
+            state.streaming_text = ""
             rerender()
     
     agent_thread = threading.Thread(target=_run_agent_background, daemon=True)
