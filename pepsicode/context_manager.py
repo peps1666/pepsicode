@@ -27,6 +27,7 @@ DEFAULT_CONTEXT_WINDOWS = {
     "gpt-4o": 128_000,
     "gpt-4o-mini": 128_000,
     "gpt-4-turbo": 128_000,
+    "mimo-v2.5": 1_000_000,
     "default": 128_000,  # Fallback
 }
 

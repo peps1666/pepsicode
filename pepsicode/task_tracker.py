@@ -208,7 +208,7 @@ class TaskManager:
         status_parts = []
         
         if tl.title:
-            status_parts.append(f"馃搵 {tl.title}")
+            status_parts.append(f"📋 {tl.title}")
         
         status_parts.append(
             f"{tl.completed_count}/{tl.total} done "
@@ -221,7 +221,7 @@ class TaskManager:
                 status_parts.append(f"-> {current.description[:50]}")
         
         if tl.failed_count > 0:
-            status_parts.append(f"鈿?{tl.failed_count} failed")
+            status_parts.append(f"❌ {tl.failed_count} failed")
         
         return " | ".join(status_parts)
     

@@ -180,7 +180,7 @@ def _run_review(cwd: str, max_lines: int) -> ToolResult:
     if status:
         lines.extend([
             "",
-            "鈿狅笍  Uncommitted Changes:",
+            "⚠️  Uncommitted Changes:",
             status,
         ])
     else:

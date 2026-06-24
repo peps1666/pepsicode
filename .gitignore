@@ -39,6 +39,7 @@ Thumbs.db
 # External platform configs (not part of this project)
 .claude/
 .codex/
+.codegraph/
 
 # Session artifacts
 session-log.txt

@@ -59,25 +59,25 @@ SLASH_COMMANDS = [
 
 def format_slash_commands() -> str:
     lines = [
-        "鈺斺晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晽",
-        "鈺 馃摎 Available Commands                                  鈺",
-        "鈺犫晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨暎",
+        "═══════════════════════════════════════════════════════════════════════════",
+        "║ \U0001f4ce Available Commands                                  ║",
+        "╟───────────────────────────────────────────────────────────────────────────╢",
     ]
-    
+
     command_groups = {
-        "馃敡 Core Commands": [
+        "\U0001f4dd Core Commands": [
             ("/help", "Show this help message"),
             ("/exit", "Exit pepsi-code"),
             ("/clear", "Clear the current transcript view"),
             ("/history", "Show recent prompt history"),
         ],
-        "馃洜锔?Tool Commands": [
+        "\U0001f6e0️ Tool Commands": [
             ("/tools", "List all available tools"),
             ("/skills", "List discovered SKILL.md workflows"),
             ("/mcp", "Show MCP servers and connection state"),
             ("/cmd", "Run development commands directly"),
         ],
-        "馃搳 Status & Info": [
+        "\U0001f4ca Status & Info": [
             ("/status", "Show application state summary"),
             ("/model", "Show or change current model"),
             ("/cost", "Show API cost and usage report"),
@@ -85,7 +85,7 @@ def format_slash_commands() -> str:
             ("/tasks", "Show current task list"),
             ("/memory", "Show memory system status"),
         ],
-        "📝 File Operations": [
+        "\U0001f4dd File Operations": [
             ("/ls [path]", "List files in directory"),
             ("/grep <pattern>", "Search text in files"),
             ("/read <path>", "Read a file directly"),
@@ -94,7 +94,7 @@ def format_slash_commands() -> str:
             ("/patch <path>", "Apply multiple replacements in one go"),
             ("/modify <path>", "Replace file with reviewable diff"),
         ],
-        "馃捑 Session Management": [
+        "\U0001f4c5 Session Management": [
             ("/resume [id]", "Resume a saved session"),
             ("/transcript-save <path>", "Save transcript to text file"),
             ("/retry", "Retry the last prompt"),
@@ -102,20 +102,20 @@ def format_slash_commands() -> str:
             ("/config-paths", "Show settings file paths"),
         ],
     }
-    
+
     for group_name, commands in command_groups.items():
-        lines.append(f"鈺 {group_name:<54}鈺")
+        lines.append(f"║ {group_name:<54}║")
         for cmd, desc in commands:
             cmd_display = f"    {cmd}"
-            lines.append(f"鈺 {cmd_display:<20} {desc:<33} 鈺")
-        lines.append("鈺犫晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨暎")
-    
+            lines.append(f"║ {cmd_display:<20} {desc:<33} ║")
+        lines.append("╟───────────────────────────────────────────────────────────────────────────╢")
+
     lines.extend([
-        "鈺 馃挕 Tips:                                              鈺",
-        "鈺 - Use Tab to autocomplete commands                    鈺",
-        "鈺 - Prefix with / to access any command                 鈺",
-        "鈺 - Type naturally - I'll understand Chinese & English  鈺",
-        "鈺氣晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨暆",
+        "║ \U0001f4a1 Tips:                                              ║",
+        "║ - Use Tab to autocomplete commands                    ║",
+        "║ - Prefix with / to access any command                 ║",
+        "║ - Type naturally - I'll understand Chinese & English  ║",
+        "╚═══════════════════════════════════════════════════════════════════════════╝",
     ])
     
     return "\n".join(lines)

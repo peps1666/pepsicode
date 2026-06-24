@@ -65,7 +65,7 @@ def _format_container_list(containers: list[dict[str, Any]]) -> str:
     if not containers:
         return "No containers found."
     
-    lines = ["馃惓 Docker Containers", "=" * 60, ""]
+    lines = ["🐳 Docker Containers", "=" * 60, ""]
     
     # Calculate column widths
     id_width = max(12, max((len(c.get("id", "")[:12]) for c in containers), default=12))
@@ -174,7 +174,7 @@ def _run(input_data: dict, context) -> ToolResult:
     timeout = input_data["timeout"]
     project_dir = input_data.get("project_dir", ".")
     
-    lines = ["馃惓 Docker Helper", "=" * 60, ""]
+    lines = ["🐳 Docker Helper", "=" * 60, ""]
     
     try:
         if action == "ps":
@@ -203,7 +203,7 @@ def _run(input_data: dict, context) -> ToolResult:
             if not success:
                 return ToolResult(ok=False, output=f"鉂?Docker logs failed: {stderr}")
             
-            lines.append(f"馃摑 Logs for container: {container}")
+            lines.append(f"📋 Logs for container: {container}")
             lines.append(f"Last {tail} lines:")
             lines.append("")
             lines.append("-" * 60)
@@ -241,7 +241,7 @@ def _run(input_data: dict, context) -> ToolResult:
             if not success:
                 return ToolResult(ok=False, output=f"鉂?Docker compose ps failed: {stderr}")
             
-            lines.append(f"馃摝 Compose Services in {project_dir}")
+            lines.append(f"📦 Compose Services in {project_dir}")
             lines.append("")
             lines.append(stdout[:3000])
         
@@ -256,7 +256,7 @@ def _run(input_data: dict, context) -> ToolResult:
             if not success:
                 return ToolResult(ok=False, output=f"鉂?Docker compose logs failed: {stderr}")
             
-            lines.append(f"馃摑 Logs for service: {service}")
+            lines.append(f"📋 Logs for service: {service}")
             lines.append(f"Last {tail} lines:")
             lines.append("")
             lines.append("-" * 60)
@@ -304,7 +304,7 @@ def _run(input_data: dict, context) -> ToolResult:
             if not success:
                 return ToolResult(ok=False, output=f"鉂?Docker info failed: {stderr}")
             
-            lines.append("馃惓 Docker System Info")
+            lines.append("🐳 Docker System Info")
             lines.append("")
             lines.append(stdout)
     

@@ -173,7 +173,7 @@ def _run(input_data: dict, context) -> ToolResult:
             # Inline diff
             changes = _generate_inline_diff(old_content, new_content, context_lines)
             
-            diff_lines = [f"馃搫 {file_entry['path']}", ""]
+            diff_lines = [f"\U0001f4c4 {file_entry['path']}", ""]
             for change in changes[:10]:  # Limit to 10 changes per file
                 if change["type"] == "replace":
                     diff_lines.append(f"  L{change['old_start']+1} → L{change['new_start']+1}:")
@@ -217,7 +217,7 @@ def _run(input_data: dict, context) -> ToolResult:
             })
     
     # Format output
-    lines = ["馃攳 Diff Viewer", "=" * 70, ""]
+    lines = ["🔍 Diff Viewer", "=" * 70, ""]
     
     lines.append(f"Files compared: {len(files)}")
     lines.append(f"Files with changes: {files_with_changes}")
@@ -234,7 +234,7 @@ def _run(input_data: dict, context) -> ToolResult:
         if diff_entry["status"] == "unchanged":
             lines.append(f"✓ {diff_entry['file']} (no changes)")
         else:
-            lines.append(f"馃摑 {diff_entry['file']}")
+            lines.append(f"📋 {diff_entry['file']}")
             lines.append(diff_entry["diff"])
         
         lines.append("")

@@ -135,7 +135,7 @@ def _run(input_data: dict, context) -> ToolResult:
         if isinstance(source, list):
             source = "\n".join(source)
         preview = source[:60].replace("\n", " ")
-        icon = "馃捇" if cell["cell_type"] == "code" else "馃摑"
+        icon = "📝" if cell["cell_type"] == "code" else "📋"
         lines.append(f"  {icon} [{i}] {cell['cell_type']}: {preview}...")
 
     return ToolResult(ok=True, output="\n".join(lines))

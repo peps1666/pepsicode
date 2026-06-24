@@ -346,9 +346,9 @@ def create_builtin_commands(
             ]
             
             if state.context_usage_percentage > 80:
-                lines.append("鈿狅笍  WARNING: Context is near capacity!")
+                lines.append("⚠️  WARNING: Context is near capacity!")
                 if state.context_usage_percentage > 95:
-                    lines.append("馃敶 Auto-compaction will trigger soon.")
+                    lines.append("🔄 Auto-compaction will trigger soon.")
             
             return "\n".join(lines)
         return "Context tracking not initialized."

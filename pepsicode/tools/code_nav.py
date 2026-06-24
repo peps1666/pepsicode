@@ -185,7 +185,7 @@ def _run_find_symbols(input_data: dict, context) -> ToolResult:
         by_file.setdefault(sym["file"], []).append(sym)
 
     for file, symbols in by_file.items():
-        lines.append(f"馃搫 {file}")
+        lines.append(f"\U0001f4c4 {file}")
         for sym in symbols:
             icon = {"class": "[C]", "function": "[F]", "variable": "[V]"}.get(sym["type"], "[?]")
             type_label = sym["type"][:3].upper()
@@ -198,7 +198,7 @@ def _run_find_symbols(input_data: dict, context) -> ToolResult:
 
             lines.append(f"  {icon} [{type_label}] {sym['name']}{extra} (line {sym['line']})")
             if sym["docstring"]:
-                lines.append(f"      馃挰 {sym['docstring']}")
+                lines.append(f"      💬 {sym['docstring']}")
         lines.append("")
 
     return ToolResult(ok=True, output="\n".join(lines))
@@ -251,7 +251,7 @@ def _run_find_references(input_data: dict, context) -> ToolResult:
         by_file.setdefault(str(rel_path), []).append(ref)
 
     for file, refs in by_file.items():
-        lines.append(f"馃搫 {file} ({len(refs)} refs)")
+        lines.append(f"\U0001f4c4 {file} ({len(refs)} refs)")
         for ref in refs[:20]:  # Limit to 20 per file
             lines.append(f"  L{ref['line']}: {ref['code']}")
         if len(refs) > 20:

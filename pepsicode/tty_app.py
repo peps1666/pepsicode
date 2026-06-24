@@ -1726,6 +1726,13 @@ def _handle_input(
             agent_error = e
         finally:
             args.permissions.end_turn()
+            # Persist context state to disk so /context can read it
+            if args.context_manager:
+                try:
+                    from pepsicode.context_manager import save_context_state
+                    save_context_state(args.context_manager)
+                except Exception:
+                    pass
             with agent_thread_lock:
                 agent_result["done"] = True
             state.is_busy = False

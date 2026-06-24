@@ -112,7 +112,7 @@ def _run(input_data: dict, context) -> ToolResult:
     lines = ["Multi-File Edit Result", "=" * 50, ""]
 
     if dry_run:
-        lines.append("馃攳 DRY RUN - No files were modified")
+        lines.append("🔍 DRY RUN - No files were modified")
         lines.append("")
 
     lines.append(f"Summary:")
@@ -127,7 +127,7 @@ def _run(input_data: dict, context) -> ToolResult:
             "success": "[OK]",
             "error": "[X]",
             "warning": "[!]",
-            "dry_run": "馃攳",
+            "dry_run": "🔍",
         }.get(result["status"], "?")
 
         lines.append(f"{status_icon} {result['file']}")
@@ -141,7 +141,7 @@ def _run(input_data: dict, context) -> ToolResult:
         lines.append("")
 
     if not dry_run and success_count > 0:
-        lines.append("馃挕 Tip: Run your tests to verify the changes work correctly.")
+        lines.append("💡 Tip: Run your tests to verify the changes work correctly.")
 
     return ToolResult(
         ok=error_count == 0,

@@ -234,7 +234,7 @@ def _run(input_data: dict, context) -> ToolResult:
     
     # Run tests
     lines = [
-        "馃И Test Runner",
+        "🧪 Test Runner",
         "=" * 60,
         "",
         f"Framework: {framework}",
@@ -245,7 +245,7 @@ def _run(input_data: dict, context) -> ToolResult:
         "-" * 60,
         "",
     ]
-    
+
     try:
         result = subprocess.run(
             cmd,
@@ -254,25 +254,25 @@ def _run(input_data: dict, context) -> ToolResult:
             text=True,
             timeout=timeout,
         )
-        
+
         output = result.stdout + "\n" + result.stderr
         success = result.returncode == 0
-        
+
         # Parse results
         if framework == "pytest":
             parsed = _parse_pytest_output(output)
         else:
             parsed = _parse_unittest_output(output)
-        
+
         # Format results
-        lines.append("馃搳 Results:")
+        lines.append("📊 Results:")
         lines.append(f"  ✓ Passed:  {parsed.get('passed', 0)}")
         lines.append(f"  ✗ Failed:  {parsed.get('failed', 0)}")
-        lines.append(f"  鈿?Errors:  {parsed.get('errors', 0)}")
+        lines.append(f"  ❌ Errors:  {parsed.get('errors', 0)}")
         lines.append(f"  ⊘ Skipped: {parsed.get('skipped', 0)}")
-        
+
         if parsed.get("coverage"):
-            lines.append(f"  馃搱 Coverage: {parsed['coverage']}%")
+            lines.append(f"  📈 Coverage: {parsed['coverage']}%")
         
         lines.append("")
         
@@ -293,12 +293,12 @@ def _run(input_data: dict, context) -> ToolResult:
         
         # Show warnings
         if parsed.get("warnings", 0) > 0:
-            lines.append(f"鈿狅笍  {parsed['warnings']} warning(s)")
+            lines.append(f"⚠️  {parsed['warnings']} warning(s)")
             lines.append("")
-        
+
         # Show test list if verbose
         if verbose and parsed.get("tests"):
-            lines.append("馃摑 All Tests:")
+            lines.append("📋 All Tests:")
             for test in parsed["tests"][:50]:  # Limit to 50
                 icon = {"passed": "PASS", "failed": "FAIL", "error": "ERROR", "skipped": "SKIP"}.get(test["status"], "?")
                 lines.append(f"  {icon} {test['file']}::{test['name']}")

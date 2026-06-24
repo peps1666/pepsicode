@@ -380,7 +380,7 @@ class ModeState:
         mode_descriptions = {
             PermissionMode.DEFAULT: "Ask for every action",
             PermissionMode.AUTO: "Auto-approve safe operations",
-            PermissionMode.BYPASS: "鈿狅笍 Skip all permissions (dangerous!)",
+            PermissionMode.BYPASS: "⚠️ Skip all permissions (dangerous!)",
             PermissionMode.PLAN: "Read-only mode",
         }
         
@@ -431,9 +431,9 @@ def set_permission_mode(mode: PermissionMode) -> str:
     
     mode_messages = {
         PermissionMode.DEFAULT: "✓ Default mode: All actions require approval",
-        PermissionMode.AUTO: "鈿?Auto mode: Safe operations auto-approved",
-        PermissionMode.BYPASS: "鈿狅笍 BYPASS MODE: All permissions skipped!",
-        PermissionMode.PLAN: "馃摉 Plan mode: Read-only operations allowed",
+        PermissionMode.AUTO: "✅ Auto mode: Safe operations auto-approved",
+        PermissionMode.BYPASS: "⚠️ BYPASS MODE: All permissions skipped!",
+        PermissionMode.PLAN: "📖 Plan mode: Read-only operations allowed",
     }
     
     return mode_messages.get(mode, f"Mode changed to {mode.value}")

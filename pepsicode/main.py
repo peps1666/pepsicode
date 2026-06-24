@@ -22,14 +22,14 @@ from pepsicode.tui.types import TranscriptEntry
 from pepsicode.tty_app import run_tty_app
 from pepsicode.workspace import resolve_tool_path
 
-
+# 当地命令处理器：处理以 "/" 开头的命令，如 "/tools" 列出可用工具，或其他自定义命令
 def _handle_local_command(user_input: str, tools) -> str | None:
     if user_input == "/tools":
         return "\n".join(f"{tool.name}: {tool.description}" for tool in tools.list())
     local_result = try_handle_local_command(user_input, tools=tools)
     return local_result
 
-
+# 渲染欢迎横幅，显示模型、当前工作目录、权限摘要和工具统计信息（如果在详细模式下）
 def _render_banner(runtime: dict | None, cwd: str, permission_summary: list[str], counts: dict[str, int]) -> str:
     model = runtime["model"] if runtime else "unconfigured"
     lines = ["pepsicode - terminal coding agent"]
@@ -45,7 +45,7 @@ def _render_banner(runtime: dict | None, cwd: str, permission_summary: list[str]
         )
     return "\n".join(lines)
 
-
+# 渲染快速入门指南，提供常用命令和示例提示，帮助用户快速上手
 def _render_quick_start() -> str:
     """Show quick start guide"""
     return """
@@ -64,17 +64,18 @@ def _render_quick_start() -> str:
    "Write a technical proposal"
 """
 
-
+# 将新条目追加到对话记录中，自动分配递增的 ID，并支持不同类型的条目（用户、助手、工具等）
 def _append_transcript(transcript: list[TranscriptEntry], **kwargs) -> None:
     transcript.append(TranscriptEntry(id=len(transcript) + 1, **kwargs))
 
-
+# 创建一个简单的基于 CLI 的权限提示，用于非 TTY 回退场景，允许用户通过输入选择权限决策
 def _make_cli_permission_prompt():
     """Create a simple CLI-based permission prompt for non-TTY fallback."""
     def _prompt(request: dict) -> dict:
         print(f"\n{request.get('summary', 'Permission Request')}")
         choices = request.get("choices", [])
         if choices:
+            # 如果提供了选项，则列出选项并提示用户选择
             for choice in choices:
                 print(f"  [{choice.get('key', '')}] {choice.get('label', '')}")
             answer = input("Choose: ").strip()
@@ -85,7 +86,7 @@ def _make_cli_permission_prompt():
         return {"decision": "allow_once" if answer in ("y", "yes") else "deny_once"}
     return _prompt
 
-
+# 将对话记录保存到指定路径，使用工具解析路径并写入格式化的文本内容，确保目录存在
 def _save_transcript_file(cwd: str, permissions, transcript: list[TranscriptEntry], output_path: str) -> str:
     target = resolve_tool_path(ToolContext(cwd=cwd, permissions=permissions), output_path, "write")
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -93,6 +94,7 @@ def _save_transcript_file(cwd: str, permissions, transcript: list[TranscriptEntr
     return str(target)
 
 def main() -> None:
+    # 解析命令行参数，支持恢复会话、列出会话、安装、验证配置和设置日志级别等功能
     parser = argparse.ArgumentParser(
         description="pepsicode - terminal coding agent",
         add_help=True,
@@ -154,34 +156,35 @@ def main() -> None:
     cwd = str(Path.cwd())
     argv = sys.argv[1:]
     
-    # Filter out our custom args before passing to management commands
+    # 过滤掉以 "--" 开头的参数，传递剩余参数给管理命令处理器，如果匹配到管理命令则执行并退出
     management_argv = [a for a in argv if not a.startswith("--")]
     if maybe_handle_management_command(cwd, management_argv):
         return
 
     runtime = None
     try:
+        # 尝试加载运行时配置，如果失败则捕获异常并显示警告信息，提示用户如何正确配置环境变量或设置文件
         runtime = load_runtime_config(cwd)
     except Exception as e:  # noqa: BLE001
         runtime = None
         print(
-            f"鈿狅笍  Warning: Failed to load runtime config: {e}\n",
+            f"⚠️  Warning: Failed to load runtime config: {e}\n",
             file=sys.stderr,
         )
         print(
-            "馃敡 How to fix this:\n"
+            "📝 How to fix this:\n"
             "  1. Set your model name: export ANTHROPIC_MODEL=deepseek-v4-flash\n"
             "  2. Set your API key: export ANTHROPIC_API_KEY=<your-provider-key>\n"
             "  3. Or edit ~/.pepsi-code/settings.json:\n"
             '     {"model": "deepseek-v4-flash", "env": {"ANTHROPIC_BASE_URL": "https://api.deepseek.com/anthropic", "ANTHROPIC_API_KEY": "<your-provider-key>"}}\n'
             "  4. Restart pepsicode\n\n"
-            "馃摉 For more info: https://github.com/peps1666/pepsicode\n"
+            "📖 For more info: https://github.com/peps1666/pepsicode\n"
             "   Falling back to mock model for now...\n",
             file=sys.stderr,
         )
 
-    prompt_handler = _make_cli_permission_prompt() if sys.stdin.isatty() else None
-    tools = create_default_tool_registry(cwd, runtime=runtime)
+    prompt_handler = _make_cli_permission_prompt() if sys.stdin.isatty() else None # 在非 TTY 环境中使用 CLI 权限提示，否则在 TTY 环境中可以使用更丰富的交互式权限界面
+    tools = create_default_tool_registry(cwd, runtime=runtime) # 创建工具注册表，传入当前工作目录和运行时配置，工具注册表负责管理可用的技能和 MCP 服务器
     permissions = PermissionManager(cwd, prompt=prompt_handler)
     model = (
         MockModelAdapter()
@@ -190,7 +193,7 @@ def main() -> None:
     )
     
     # Initialize ContextManager for context window management
-    from pepsicode.context_manager import ContextManager
+    from pepsicode.context_manager import ContextManager, save_context_state
     from pepsicode.logging_config import get_logger
     logger = get_logger("main")
     context_mgr = None
@@ -246,7 +249,7 @@ def main() -> None:
     else:
         print("")
 
-    try:
+    try: 
         if not sys.stdin.isatty():
             for raw_input in sys.stdin:
                 user_input = raw_input.strip()
@@ -302,6 +305,7 @@ def main() -> None:
                     ),
                 }
                 permissions.begin_turn()
+                # 执行一个代理回合，传入当前消息、工具、权限和上下文管理器，获取新的消息列表
                 messages = run_agent_turn(
                     model=model,
                     tools=tools,
@@ -316,12 +320,13 @@ def main() -> None:
                 if context_mgr:
                     stats = context_mgr.get_stats()
                     logger.debug("After turn: %d tokens (%.0f%%)", stats.total_tokens, stats.usage_percentage)
+                    save_context_state(context_mgr)
                 last_assistant = next((message for message in reversed(messages) if message["role"] == "assistant"), None)
                 if last_assistant:
                     _append_transcript(transcript, kind="assistant", body=last_assistant["content"])
                     print(last_assistant["content"])
             return
-
+        # If we're in a TTY, run the full interactive app with the agent loop and rich UI
         run_tty_app(
             runtime=runtime,
             tools=tools,

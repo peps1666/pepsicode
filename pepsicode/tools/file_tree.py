@@ -26,7 +26,7 @@ def _format_time(timestamp: float) -> str:
     dt = datetime.fromtimestamp(timestamp)
     now = time.time()
     diff = now - timestamp
-    
+
     if diff < 3600:
         mins = int(diff / 60)
         return f"{mins}m ago"
@@ -44,45 +44,45 @@ def _get_file_icon(file_path: Path) -> str:
     """Get icon based on file extension."""
     ext = file_path.suffix.lower()
     icons = {
-        '.py': '馃悕',
-        '.js': '馃摐',
-        '.ts': '馃敺',
-        '.jsx': '鈿涳笍',
-        '.tsx': '鈿涳笍',
-        '.html': '馃寪',
-        '.css': '馃帹',
-        '.md': '馃摑',
-        '.json': '馃搵',
-        '.yaml': '鈿欙笍',
-        '.yml': '鈿欙笍',
-        '.toml': '鈿欙笍',
-        '.txt': '馃搫',
-        '.log': '馃搩',
+        '.py': '\U0001f40d',
+        '.js': '\U0001f4dc',
+        '.ts': '\U0001f4dc',
+        '.jsx': '⚛️',
+        '.tsx': '⚛️',
+        '.html': '\U0001f310',
+        '.css': '\U0001f3a8',
+        '.md': '\U0001f4cb',
+        '.json': '\U0001f4e6',
+        '.yaml': '⚙️',
+        '.yml': '⚙️',
+        '.toml': '⚙️',
+        '.txt': '\U0001f4c4',
+        '.log': '\U0001f4dd',
         '.sh': '[sh]',
         '.bat': '[bat]',
-        '.gitignore': '馃毇',
-        '.env': '馃敀',
-        '.lock': '馃敀',
+        '.gitignore': '\U0001f512',
+        '.env': '\U0001f512',
+        '.lock': '\U0001f512',
         '.png': '[img]',
         '.jpg': '[img]',
         '.jpeg': '[img]',
-        '.svg': '馃幁',
-        '.ipynb': '馃摀',
+        '.svg': '\U0001f5bc️',
+        '.ipynb': '\U0001f4d3',
     }
     if file_path.name == 'README':
-        return '馃摉'
-    return icons.get(ext, '馃搫')
+        return '\U0001f4d6'
+    return icons.get(ext, '\U0001f4c4')
 
 
 def _get_file_status_color(file_path: Path) -> str:
     """Get status indicator based on file modification time."""
     now = time.time()
     age = now - file_path.stat().st_mtime
-    
+
     if age < 3600:  # Modified within 1 hour
-        return "馃煝"
+        return "\U0001f7e2"
     elif age < 86400:  # Modified within 24 hours
-        return "馃煛"
+        return "\U0001f7e1"
     else:
         return "[old]"
 
@@ -99,33 +99,33 @@ def _build_tree(
     """Build file tree with proper formatting."""
     if ignore_dirs is None:
         ignore_dirs = {'.git', '__pycache__', 'venv', 'env', '.tox', 'node_modules', '.mypy_cache', '.pytest_cache'}
-    
+
     lines = []
-    
+
     try:
         entries = sorted(path.iterdir(), key=lambda p: (not p.is_dir(), p.name.lower()))
     except PermissionError:
-        return [f"{prefix}{'鈹斺攢鈹€ ' if is_last else '鈹溾攢鈹€ '}馃敀 Permission denied"]
-    
+        return [f"{prefix}{'├── ' if is_last else '└── '}\U0001f512 Permission denied"]
+
     # Filter hidden files
     if not show_hidden:
         entries = [e for e in entries if not e.name.startswith('.')]
-    
+
     # Filter ignored directories
     if path.is_dir():
         entries = [e for e in entries if not (e.is_dir() and e.name in ignore_dirs)]
-    
+
     for i, entry in enumerate(entries):
         is_last_entry = (i == len(entries) - 1)
-        
+
         # Choose connector
-        connector = "鈹斺攢鈹€ " if is_last_entry else "鈹溾攢鈹€ "
-        extension = "    " if is_last_entry else "鈹?  "
-        
+        connector = "├── " if is_last_entry else "└── "
+        extension = "    " if is_last_entry else "│   "
+
         if entry.is_dir():
-            icon = "馃搧"
+            icon = "\U0001f4c1"
             lines.append(f"{prefix}{connector}{icon} {entry.name}")
-            
+
             if current_depth < max_depth:
                 lines.extend(_build_tree(
                     entry,
@@ -143,9 +143,9 @@ def _build_tree(
             status = _get_file_status_color(entry)
             size = _format_size(entry.stat().st_size)
             mod_time = _format_time(entry.stat().st_mtime)
-            
+
             lines.append(f"{prefix}{connector}{status} {icon} {entry.name} ({size}, {mod_time})")
-    
+
     return lines
 
 
@@ -161,9 +161,9 @@ def _validate(input_data: dict) -> dict:
     show_hidden = input_data.get("show_hidden", False)
     if not isinstance(show_hidden, bool):
         raise ValueError("show_hidden must be a boolean")
-    
+
     pattern = input_data.get("pattern")
-    
+
     return {
         "path": path,
         "max_depth": max_depth,
@@ -178,17 +178,17 @@ def _run(input_data: dict, context) -> ToolResult:
     max_depth = input_data["max_depth"]
     show_hidden = input_data["show_hidden"]
     pattern = input_data.get("pattern")
-    
+
     if not target.exists():
         return ToolResult(ok=False, output=f"Path not found: {target}")
-    
+
     # Build tree
     tree_lines = _build_tree(
         target,
         max_depth=max_depth,
         show_hidden=show_hidden,
     )
-    
+
     # Apply pattern filter if provided
     if pattern:
         import fnmatch
@@ -201,7 +201,7 @@ def _run(input_data: dict, context) -> ToolResult:
                 ok=True,
                 output=f"No files match pattern '{pattern}'",
             )
-    
+
     # Count stats
     try:
         total_files = sum(1 for _ in target.rglob("*") if _.is_file() and not _.name.startswith('.'))
@@ -209,41 +209,41 @@ def _run(input_data: dict, context) -> ToolResult:
     except Exception:
         total_files = 0
         total_dirs = 0
-    
+
     # Format output
     lines = [
-        f"馃搨 File Tree: {input_data['path']}",
+        f"\U0001f333 File Tree: {input_data['path']}",
         "=" * 60,
         "",
     ]
-    
+
     # Add target name at root
     if target.is_dir():
-        lines.append(f"馃搧 {target.name}")
+        lines.append(f"\U0001f4c1 {target.name}")
         for line in tree_lines:
             lines.append(f"  {line}")
     else:
         for line in tree_lines:
             lines.append(line)
-    
+
     lines.extend([
         "",
         "-" * 60,
-        f"馃搳 Stats:",
+        f"\U0001f4ca Stats:",
         f"  Files: {total_files}",
         f"  Directories: {total_dirs}",
         f"  Max depth shown: {max_depth}",
     ])
-    
+
     # Legend
     lines.extend([
         "",
-        "馃帹 Legend:",
-        "  馃煝 Modified < 1h ago",
-        "  馃煛 Modified < 24h ago",
-        "  鈿?Modified > 24h ago",
+        "\U0001f3a8 Legend:",
+        "  \U0001f7e2 Modified < 1h ago",
+        "  \U0001f7e1 Modified < 24h ago",
+        "  ⚫ Modified > 24h ago",
     ])
-    
+
     return ToolResult(ok=True, output="\n".join(lines))
 
 

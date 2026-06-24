@@ -204,21 +204,21 @@ def _run(input_data: dict, context) -> ToolResult:
     infos = [i for i in all_issues if i["severity"] == "info"]
 
     if errors:
-        lines.append(f"鉂?Errors ({len(errors)}):")
+        lines.append(f"❌ Errors ({len(errors)}):")
         for issue in errors[:10]:
             lines.append(f"  L{issue.get('line', '?')} {issue['file']}")
             lines.append(f"     {issue['message']}")
         lines.append("")
 
     if warnings:
-        lines.append(f"鈿狅笍  Warnings ({len(warnings)}):")
+        lines.append(f"⚠️  Warnings ({len(warnings)}):")
         for issue in warnings[:10]:
             lines.append(f"  L{issue.get('line', '?')} {issue['file']}")
             lines.append(f"     {issue['message']}")
         lines.append("")
 
     if infos:
-        lines.append(f"鈩癸笍  Info ({len(infos)}):")
+        lines.append(f"ℹ️  Info ({len(infos)}):")
         for issue in infos[:10]:
             lines.append(f"  L{issue.get('line', '?')} {issue['file']}")
             lines.append(f"     {issue['message']}")

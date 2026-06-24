@@ -17,7 +17,7 @@ def _latest_assistant_call(messages):
     call = next((message for message in reversed(messages) if message["role"] == "assistant_tool_call"), None)
     return call["toolName"] if call else None
 
-
+# 一个简单的模拟模型适配器，用于测试和演示，基于用户输入的命令触发不同的工具调用，并返回模拟的结果
 class MockModelAdapter:
     def next(self, messages):
         tool_message = _last_tool_message(messages)

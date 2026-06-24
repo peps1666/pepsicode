@@ -106,12 +106,12 @@ def _get_table_indexes(conn: Any, table_name: str) -> list[dict[str, Any]]:
 
 def _format_schema_output(tables: list[str], schemas: dict, row_counts: dict, indexes: dict) -> str:
     """Format database schema as readable output."""
-    lines = ["馃搳 Database Schema", "=" * 60, ""]
+    lines = ["\U0001f4ca Database Schema", "=" * 60, ""]
     lines.append(f"Tables: {len(tables)}")
     lines.append("")
     
     for table_name in tables:
-        lines.append(f"馃搧 {table_name}")
+        lines.append(f"\U0001f4c1 {table_name}")
         lines.append(f"  Rows: {row_counts.get(table_name, 'N/A')}")
         lines.append("")
         
@@ -120,7 +120,7 @@ def _format_schema_output(tables: list[str], schemas: dict, row_counts: dict, in
         if columns:
             lines.append(f"  Columns:")
             for col in columns:
-                pk_marker = " 馃攽" if col["pk"] else ""
+                pk_marker = " 🔑" if col["pk"] else ""
                 nullable = "" if col["notnull"] else " (nullable)"
                 default = f" = {col['default']}" if col["default"] is not None else ""
                 lines.append(f"    {col['name']}: {col['type']}{pk_marker}{nullable}{default}")
@@ -194,7 +194,7 @@ def _run(input_data: dict, context) -> ToolResult:
             if not tables:
                 return ToolResult(
                     ok=True,
-                    output="馃摥 Database exists but contains no tables.",
+                    output="📭 Database exists but contains no tables.",
                 )
             
             # Get schema for all tables
@@ -229,13 +229,13 @@ def _run(input_data: dict, context) -> ToolResult:
             row_count = _get_table_row_count(conn, table)
             table_indexes = _get_table_indexes(conn, table)
             
-            lines = [f"馃搧 Table Schema: {table}", "=" * 60, ""]
+            lines = [f"\U0001f4c1 Table Schema: {table}", "=" * 60, ""]
             lines.append(f"Rows: {row_count}")
             lines.append("")
             lines.append("Columns:")
             
             for col in columns:
-                pk_marker = " 馃攽" if col["pk"] else ""
+                pk_marker = " 🔑" if col["pk"] else ""
                 nullable = "" if col["notnull"] else " (nullable)"
                 default = f" = {col['default']}" if col["default"] is not None else ""
                 lines.append(f"  {col['name']}: {col['type']}{pk_marker}{nullable}{default}")
@@ -281,7 +281,7 @@ def _run(input_data: dict, context) -> ToolResult:
                 )
             
             # Format results
-            lines = [f"馃搳 Query Results", "=" * 60, ""]
+            lines = [f"\U0001f4ca Query Results", "=" * 60, ""]
             lines.append(f"Rows returned: {len(rows)}")
             lines.append(f"Columns: {', '.join(columns)}")
             lines.append("")

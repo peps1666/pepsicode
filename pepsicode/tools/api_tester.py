@@ -156,7 +156,7 @@ def _run(input_data: dict, context) -> ToolResult:
     timeout = input_data["timeout"]
     
     lines = [
-        "馃攲 API Tester",
+        "🔌 API Tester",
         "=" * 60,
         "",
         f"Request:",

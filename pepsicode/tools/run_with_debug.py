@@ -259,13 +259,13 @@ def _run(input_data: dict, context) -> ToolResult:
         lines.append("")
         
         if parsed_error:
-            lines.append(f"馃攳 Error Analysis:")
+            lines.append(f"🔍 Error Analysis:")
             lines.append(f"  Type: {parsed_error['type']}")
             lines.append(f"  Message: {parsed_error['message']}")
             lines.append("")
-            
+
             if parsed_error.get("frames"):
-                lines.append("馃搷 Stack Trace:")
+                lines.append("📜 Stack Trace:")
                 for i, frame in enumerate(parsed_error["frames"][:3], 1):
                     lines.append(f"  {i}. {frame.get('file', 'unknown')}")
                     if "line" in frame:
