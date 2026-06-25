@@ -11,7 +11,7 @@ context about past decisions, codebase patterns, and project conventions.
 
 from __future__ import annotations
 
-import json
+import logging
 import time
 from dataclasses import dataclass, field
 from enum import Enum
@@ -19,6 +19,8 @@ from pathlib import Path
 from typing import Any
 
 from pepsicode.config import PEPSI_CODE_DIR
+
+logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -189,9 +191,15 @@ class MemoryPaths:
 
 
 class MemoryManager:
-    """Manages layered memory system."""
-    
-    def __init__(self, workspace: str):
+    """Manages layered memory system.
+
+    Storage is delegated to a ``MemoryStore`` backend (file or PostgreSQL).
+    When a PostgreSQL backend is active, writes are mirrored to the file store
+    too, so the human-readable MEMORY.md stays current and there is always a
+    on-disk fallback if the database becomes unavailable.
+    """
+
+    def __init__(self, workspace: str, store: "MemoryStore | None" = None):
         self.workspace = workspace
         self.paths = MemoryPaths.for_workspace(workspace)
         self.memories: dict[MemoryScope, MemoryFile] = {
@@ -199,89 +207,43 @@ class MemoryManager:
             MemoryScope.PROJECT: MemoryFile(scope=MemoryScope.PROJECT),
             MemoryScope.LOCAL: MemoryFile(scope=MemoryScope.LOCAL),
         }
+        # Lazily build the default file store to avoid an import cycle:
+        # memory_store imports names from this module at module load time.
+        from pepsicode.memory_store import FileMemoryStore, MemoryStore  # noqa: F401
+        self.store: MemoryStore = store if store is not None else FileMemoryStore(workspace)
+        # File store is always kept around for mirroring / fallback, even when
+        # the primary backend is PostgreSQL.
+        self._file_store = FileMemoryStore(workspace)
         self._load_all()
-    
+
     def _load_all(self) -> None:
-        """Load all memory files."""
+        """Load all memory files from the active backend."""
         for scope in MemoryScope:
             self._load_scope(scope)
-    
+
     def _load_scope(self, scope: MemoryScope) -> None:
-        """Load memory file for a scope."""
-        path = self._get_scope_path(scope)
-        memory_md = path / "MEMORY.md"
-        memory_json = path / "memory.json"
-        
-        if not memory_md.exists() and not memory_json.exists():
-            return
-        
-        # Load JSON metadata if exists
-        if memory_json.exists():
+        """Load memory entries for a scope from the backend."""
+        entries = self.store.load_scope(scope)
+        self.memories[scope].entries.extend(entries)
+
+    def _save_scope(self, scope: MemoryScope) -> None:
+        """Persist a scope to the primary backend, mirrored to the file store.
+
+        PG is the primary; the file copy is always written so MEMORY.md stays
+        human-readable and survives a database outage.  File-store failures are
+        swallowed (the primary write is what matters); primary failures are
+        logged inside the store itself and do not abort the call.
+        """
+        entries = self.memories[scope].entries
+        # Primary backend first.
+        self.store.save_scope(scope, entries)
+        # Mirror to file store for readability + fallback.  Only attempt when
+        # the primary is not already the file store.
+        if self.store is not self._file_store:
             try:
-                data = json.loads(memory_json.read_text(encoding="utf-8"))
-                for entry_data in data.get("entries", []):
-                    entry = MemoryEntry.from_dict(entry_data)
-                    self.memories[scope].entries.append(entry)
-                return
-            except (json.JSONDecodeError, KeyError):
+                self._file_store.save_scope(scope, entries)
+            except Exception:  # noqa: BLE001 - mirror is best-effort
                 pass
-        
-        # Load from MEMORY.md
-        if memory_md.exists():
-            content = memory_md.read_text(encoding="utf-8")
-            self._parse_memory_md(content, scope)
-    
-    def _parse_memory_md(self, content: str, scope: MemoryScope) -> None:
-        """Parse MEMORY.md file into entries."""
-        lines = content.split("\n")
-        current_category = "general"
-        entry_counter = 0
-        
-        for line in lines:
-            line = line.strip()
-            
-            # Skip headers and metadata
-            if line.startswith("#") or line.startswith("*") or not line:
-                if line.startswith("## "):
-                    current_category = line[3:].strip().lower()
-                continue
-            
-            # Parse list items
-            if line.startswith("- "):
-                entry_content = line[2:]
-                
-                # Extract tags
-                tags = []
-                if "`" in entry_content:
-                    import re
-                    tag_matches = re.findall(r"`([^`]+)`", entry_content)
-                    for tag_match in tag_matches:
-                        tags.extend(tag_match.split())
-                    entry_content = re.sub(r"`[^`]+`", "", entry_content).strip()
-                
-                entry_counter += 1
-                entry = MemoryEntry(
-                    id=f"{scope.value}-{entry_counter}",
-                    scope=scope,
-                    category=current_category,
-                    content=entry_content,
-                    tags=tags,
-                )
-                self.memories[scope].entries.append(entry)
-    
-    def _get_scope_path(self, scope: MemoryScope) -> Path:
-        """Get path for memory scope."""
-        if scope == MemoryScope.USER:
-            return self.paths.user_memory
-        elif scope == MemoryScope.PROJECT:
-            return self.paths.project_memory
-        else:
-            return self.paths.local_memory
-    
-    def _ensure_scope_path(self, scope: MemoryScope) -> None:
-        """Ensure directory exists for scope."""
-        path = self._get_scope_path(scope)
-        path.mkdir(parents=True, exist_ok=True)
     
     def add_entry(
         self,
@@ -291,8 +253,6 @@ class MemoryManager:
         tags: list[str] | None = None,
     ) -> MemoryEntry:
         """Add a new memory entry."""
-        self._ensure_scope_path(scope)
-        
         entry_id = f"{scope.value}-{int(time.time())}-{len(self.memories[scope].entries)}"
         entry = MemoryEntry(
             id=entry_id,
@@ -375,31 +335,7 @@ class MemoryManager:
             return ""
         
         return "\n\n".join(parts)
-    
-    def _save_scope(self, scope: MemoryScope) -> None:
-        """Save memory to disk."""
-        path = self._get_scope_path(scope)
-        self._ensure_scope_path(scope)
-        
-        # Save JSON metadata
-        memory_json = path / "memory.json"
-        data = {
-            "scope": scope.value,
-            "last_updated": time.time(),
-            "entries": [e.to_dict() for e in self.memories[scope].entries],
-        }
-        memory_json.write_text(
-            json.dumps(data, indent=2, ensure_ascii=False),
-            encoding="utf-8",
-        )
-        
-        # Also update MEMORY.md for human readability
-        memory_md = path / "MEMORY.md"
-        memory_md.write_text(
-            self.memories[scope].format_as_markdown(),
-            encoding="utf-8",
-        )
-    
+
     def get_stats(self) -> dict[str, Any]:
         """Get memory statistics."""
         return {
@@ -430,6 +366,36 @@ class MemoryManager:
         """Clear all entries in a scope."""
         self.memories[scope] = MemoryFile(scope=scope)
         self._save_scope(scope)
+
+
+# ---------------------------------------------------------------------------
+# Factory: pick the best available backend (PostgreSQL preferred, file fallback)
+# ---------------------------------------------------------------------------
+
+def create_memory_manager(workspace: str) -> MemoryManager:
+    """Create a MemoryManager backed by PostgreSQL when available.
+
+    Tries ``PostgresMemoryStore`` first.  If psycopg2 is missing or the
+    database is unreachable, silently falls back to ``FileMemoryStore`` so the
+    agent always has working memory - just stored locally instead of in the
+    database.
+    """
+    from pepsicode.memory_store import (
+        FileMemoryStore,
+        PostgresMemoryStore,
+        PG_DBNAME,
+        PG_HOST,
+        PG_PORT,
+    )
+
+    try:
+        store = PostgresMemoryStore(workspace)
+        logger.info("Memory backend: PostgreSQL (%s@%s:%s)",
+                    PG_DBNAME, PG_HOST, PG_PORT)
+        return MemoryManager(workspace=workspace, store=store)
+    except Exception as error:  # noqa: BLE001 - fallback is the whole point
+        logger.info("Memory backend: file (PostgreSQL unavailable: %s)", error)
+        return MemoryManager(workspace=workspace, store=FileMemoryStore(workspace))
 
 
 # ---------------------------------------------------------------------------

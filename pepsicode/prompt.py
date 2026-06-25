@@ -140,6 +140,58 @@ Audit 3: business/src/ single sink + Package DAG
 - Vendor only imported by port_entry/"""
 
 
+def _memory_strategy() -> str:
+    r"""Return the proactive memory strategy that drives save_memory usage.
+
+    Tells the agent *when* to persist a memory entry so long-term memory
+    accumulates value instead of noise.  Mirrors the structured-block style of
+    the other prompt sections (governance, skills) for consistency.
+    """
+    return """## 主动记忆策略
+
+你会看到注入的项目记忆(save_memory 积累的跨会话记忆)。作为回报,你应在以下时机主动调用 save_memory 工具记录高价值信息,让未来的会话受益。
+
+### 总原则
+代码、git、CLAUDE.md 已记录的内容**绝不重复记录**。只记"重新发现或重新决策会花费力气"的东西。每次记录前自问:**5 个会话后这条记忆还有用吗?** 答案为否则跳过。
+
+### 触发时机(按场景)
+
+1. **理解项目后** — 记提炼后的架构地图,而非具体函数实现。
+   - 记:核心入口、模块职责划分、构建/测试命令
+   - 例:`[architecture] 入口 main.py;核心循环 agent_loop.py;记忆系统 memory.py;工具在 tools/;测试用 pytest 跑 tests/`
+   - 不记:某个函数怎么实现的(grep/read_file 能查)
+
+2. **做出非显然的技术决策后** — 记决策理由与被否方案,而非结论本身。
+   - 触发:选型有理由,或否决了备选方案
+   - 例:`[decision] 记忆后端选 PostgreSQL 而非纯文件,因要跨会话查询;保留文件双写做兜底`
+   - 不记:显而易见的选择
+
+3. **发现隐式项目约定时** — 从 2 处以上代码推断出一致模式才记。
+   - 记:命名/结构/风格约定
+   - 例:`[convention] 工具定义统一用 ToolDefinition + _validate + _run 三件套模式`
+   - 不记:孤立的单点现象
+
+4. **踩了非显然的坑并解决后** — 记症状+根因+解法。
+   - 触发:第一次没试对的问题
+   - 例:`[pitfall] 旧 _save_scope 重复定义,Python 用后者找已删方法崩溃——改后端要删干净旧方法`
+   - 不记:一次性的临时调试命令
+
+5. **用户明确表达持久偏好时** — 这是唯一记到 user 层(跨项目)的东西。
+   - 例:`[preference] 回答用中文;引用代码带 file:line`
+
+### 不记清单(防止记忆膨胀)
+- 当前任务进度 → 用 todo_write,不进记忆
+- 文件内容/函数实现 → 工具能读
+- git 历史 → git log 能查
+- 临时调试输出、一次性命令 → 下次无意义
+- CLAUDE.md 已写的内容 → 重复
+
+### scope 选择
+- `user`:跨项目偏好(只有"用户偏好"这一类)
+- `project`:团队共享、可进 git 的项目级约定/架构/决策
+- `local`:本机特定、不进 git 的坑/本地环境"""
+
+
 def build_system_prompt(
     cwd: str,
     permission_summary: list[str] | None = None,
@@ -170,6 +222,11 @@ def build_system_prompt(
         "- Do not stop after a progress update. After a <progress> message, continue the task in the next step.",
         "- Plain assistant text without <progress> is treated as a completed assistant message for this turn.",
     ]
+
+    # Proactive memory strategy — drives save_memory usage so long-term memory
+    # accumulates value.  Always included; it is compact and the agent needs it
+    # in every session to know when to persist memories.
+    parts.append(_memory_strategy())
 
     # Dynamic environment section (always included, cheap, project-aware).
     parts.append(_environment_info(cwd_path))

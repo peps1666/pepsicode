@@ -205,9 +205,11 @@ def main() -> None:
             context_mgr.summarizer = model.summarize
         logger.info("Context manager initialized for model: %s", runtime.get("model", "unknown"))
     
-    # Initialize MemoryManager for cross-session knowledge retention
-    from pepsicode.memory import MemoryManager
-    memory_mgr = MemoryManager(workspace=cwd)
+    # Initialize MemoryManager for cross-session knowledge retention.
+    # The factory prefers PostgreSQL and falls back to the file store, so the
+    # chosen backend is detected automatically without changing call sites.
+    from pepsicode.memory import create_memory_manager
+    memory_mgr = create_memory_manager(cwd)
     logger.info("Memory manager initialized")
     
     messages = [

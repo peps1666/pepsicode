@@ -8,7 +8,7 @@ version = "0.1.0"
 description = "pepsicode, a lightweight terminal coding assistant for local development workflows."
 readme = "README.md"
 requires-python = ">=3.11"
-dependencies = []
+dependencies = ["psycopg2-binary>=2.9"]
 
 [project.optional-dependencies]
 dev = ["pytest>=8.0.0"]

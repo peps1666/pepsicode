@@ -163,30 +163,45 @@ def try_handle_local_command(user_input: str, tools=None) -> str | None:
     if user_input == "/memory":
         # Memory system display
         try:
-            from pepsicode.memory import MemoryManager
-            from pathlib import Path
-            memory_mgr = MemoryManager(project_root=Path(cwd))
-            
+            import os
+            from pepsicode.memory import MemoryManager, MemoryScope
+            memory_mgr = MemoryManager(workspace=os.getcwd())
+
+            # get_stats() returns per-scope counts/size/categories; flatten it
+            # into the per-scope entry counts this command has always shown.
+            stats = memory_mgr.get_stats()
+
             lines = ["Memory System Status", "=" * 40, ""]
-            
-            # Show summary
-            summary = memory_mgr.get_summary()
-            lines.append(f"User memory: {summary['user_entries']} entries")
-            lines.append(f"Project memory: {summary['project_entries']} entries")
-            lines.append(f"Local memory: {summary['local_entries']} entries")
-            lines.append(f"Total: {summary['total_entries']} entries")
+
+            total_entries = 0
+            # Display order: user -> project -> local
+            scope_labels = {
+                MemoryScope.USER: "User memory",
+                MemoryScope.PROJECT: "Project memory",
+                MemoryScope.LOCAL: "Local memory",
+            }
+            for scope in [MemoryScope.USER, MemoryScope.PROJECT, MemoryScope.LOCAL]:
+                scope_stats = stats.get(scope.value, {})
+                count = scope_stats.get("entries", 0)
+                total_entries += count
+                lines.append(f"{scope_labels[scope]}: {count} entries")
+            lines.append(f"Total: {total_entries} entries")
             lines.append("")
-            
-            # Show recent entries
+
+            # Show recent entries (most recently created first)
             lines.append("Recent Entries:")
-            recent = memory_mgr.search("", scope=None)[:10]  # Get 10 most recent
+            all_entries: list = []
+            for scope in MemoryScope:
+                all_entries.extend(memory_mgr.memories[scope].entries)
+            all_entries.sort(key=lambda e: e.created_at, reverse=True)
+            recent = all_entries[:10]
             if recent:
                 for entry in recent:
                     tags_str = f" [{', '.join(entry.tags)}]" if entry.tags else ""
                     lines.append(f"  - {entry.content[:80]}{tags_str}")
             else:
                 lines.append("  No entries yet")
-            
+
             return "\n".join(lines)
         except Exception as e:
             return f"Error loading memory: {e}"

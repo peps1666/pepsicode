@@ -24,6 +24,7 @@ from pepsicode.tools.patch_file import patch_file_tool
 from pepsicode.tools.read_file import read_file_tool
 from pepsicode.tools.run_command import run_command_tool
 from pepsicode.tools.run_with_debug import run_with_debug_tool
+from pepsicode.tools.save_memory import save_memory_tool
 from pepsicode.tools.task import create_task_tool
 from pepsicode.tools.test_runner import test_runner_tool
 from pepsicode.tools.todo_write import todo_write_tool
@@ -56,6 +57,8 @@ def create_default_tool_registry(cwd: str, runtime: dict | None = None) -> ToolR
             api_tester_tool,
             # Task management
             todo_write_tool,
+            # Memory (agent-initiated persistent memory writes)
+            save_memory_tool,
             # Git workflow
             git_tool,
             # Notebook editing
