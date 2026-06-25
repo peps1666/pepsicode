@@ -167,6 +167,15 @@ class MemoryFile:
         return "\n".join(lines)
 
 
+# Import MemoryStore at runtime *after* MemoryScope/MemoryEntry/MemoryFile are
+# defined.  memory_store imports those three names from this module at its own
+# load time, so importing it earlier would cause a circular-import failure.
+# Placed here (not at module top) so the names it needs are already bound, and
+# so the ``MemoryStore`` annotation on MemoryManager resolves for both static
+# checkers and runtime get_type_hints().
+from pepsicode.memory_store import MemoryStore  # noqa: E402
+
+
 # ---------------------------------------------------------------------------
 # Memory Manager
 # ---------------------------------------------------------------------------
@@ -209,7 +218,7 @@ class MemoryManager:
         }
         # Lazily build the default file store to avoid an import cycle:
         # memory_store imports names from this module at module load time.
-        from pepsicode.memory_store import FileMemoryStore, MemoryStore  # noqa: F401
+        from pepsicode.memory_store import FileMemoryStore  # noqa: F401
         self.store: MemoryStore = store if store is not None else FileMemoryStore(workspace)
         # File store is always kept around for mirroring / fallback, even when
         # the primary backend is PostgreSQL.
