@@ -307,4 +307,8 @@ def build_system_prompt(
     if project_claude_md:
         parts.append(f"Project instructions from {cwd_path / 'CLAUDE.md'}:\n{project_claude_md}")
 
+    memory_context = extras.get("memory_context")
+    if memory_context:
+        parts.append(f"Project Memory & Context:\n{memory_context}")
+
     return "\n\n".join(parts)
