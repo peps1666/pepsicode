@@ -13,7 +13,11 @@ from typing import Any, Protocol, runtime_checkable
 
 from pepsicode.tooling import ToolDefinition, ToolResult
 
-# Security constant: shell metacharacters that are forbidden in command arguments
+# =============================================================================
+# Security: command validation constants
+# =============================================================================
+
+# Shell metacharacters forbidden in MCP server arguments to prevent injection
 DANGEROUS_SHELL_CHARS = set('|&;`$(){}<>\n\r')
 
 # Allowlist of permitted commands (common MCP server commands)
@@ -24,7 +28,12 @@ ALLOWED_COMMANDS = {
 }
 
 
-JsonRpcProtocol = str
+JsonRpcProtocol = str  # "content-length" | "newline-json" | "streamable-http"
+
+
+# =============================================================================
+# McpClient Protocol: unified interface for all transport types
+# =============================================================================
 
 
 @runtime_checkable
@@ -39,6 +48,11 @@ class McpClient(Protocol):
     def get_prompt(self, name: str, args: dict[str, str] | None = None) -> ToolResult: ...
     def call_tool(self, name: str, input_data: Any) -> ToolResult: ...
     def close(self) -> None: ...
+
+
+# =============================================================================
+# Utility functions: env interpolation, client factory, name sanitization
+# =============================================================================
 
 
 def _interpolate_env(value: str) -> str:
@@ -70,9 +84,15 @@ class McpServerSummary:
 
 
 def _sanitize_tool_segment(value: str) -> str:
+    """Make a string safe for use as a tool name component (lowercase, alphanum only)."""
     normalized = "".join(char.lower() if char.isalnum() or char in {"_", "-"} else "_" for char in value)
     normalized = normalized.strip("_")
     return normalized or "tool"
+
+
+# =============================================================================
+# Security: command and argument validation
+# =============================================================================
 
 
 def _validate_mcp_command(command: str) -> None:
@@ -149,6 +169,11 @@ def _validate_mcp_args(args: list[str]) -> None:
                 )
 
 
+# =============================================================================
+# Response formatting: convert JSON-RPC results to ToolResult
+# =============================================================================
+
+
 def _normalize_input_schema(schema: dict[str, Any] | None) -> dict[str, Any]:
     return schema if isinstance(schema, dict) else {"type": "object", "additionalProperties": True}
 
@@ -216,6 +241,11 @@ def _format_prompt_result(result: Any) -> ToolResult:
         body_parts.append(f"[{role}]\n{rendered}")
     output = (header + "\n\n".join(body_parts)).strip()
     return ToolResult(ok=True, output=output or json.dumps(result, indent=2, ensure_ascii=False))
+
+
+# =============================================================================
+# StdioMcpClient: communicates via subprocess stdin/stdout
+# =============================================================================
 
 
 class StdioMcpClient:
@@ -520,6 +550,11 @@ class StdioMcpClient:
         self._stderr_thread = None
 
 
+# =============================================================================
+# HttpMcpClient: communicates via HTTP POST (Streamable HTTP transport)
+# =============================================================================
+
+
 class HttpMcpClient:
     """通过 Streamable HTTP（HTTP POST）与 MCP 服务器通信的客户端。"""
 
@@ -670,7 +705,19 @@ class HttpMcpClient:
         pass
 
 
+# =============================================================================
+# create_mcp_backed_tools: main entry point — wire up all MCP servers as tools
+# =============================================================================
+
+
 def create_mcp_backed_tools(*, cwd: str, mcp_servers: dict[str, dict[str, Any]]) -> dict[str, Any]:
+    """Connect to all configured MCP servers and wrap their capabilities as local tools.
+
+    Returns a dict with:
+      - tools: list of ToolDefinition (the actual tools the LLM can call)
+      - servers: list of server summary dicts (for status display)
+      - dispose: callable to shut down all MCP connections
+    """
     clients: list[McpClient] = []
     tools: list[ToolDefinition] = []
     servers: list[dict[str, Any]] = []
@@ -678,6 +725,7 @@ def create_mcp_backed_tools(*, cwd: str, mcp_servers: dict[str, dict[str, Any]])
     prompt_index: dict[str, dict[str, Any]] = {}
 
     try:
+        # --- Phase 1: connect to each server, discover tools/resources/prompts ---
         for server_name, config in mcp_servers.items():
             if config.get("enabled") is False:
                 servers.append(asdict(McpServerSummary(name=server_name, command=config.get("command", ""), status="disabled", toolCount=0, protocol=config.get("protocol"))))
@@ -697,11 +745,14 @@ def create_mcp_backed_tools(*, cwd: str, mcp_servers: dict[str, dict[str, Any]])
                     prompts = []
                 clients.append(client)
 
+                # Index resources and prompts for later meta-tool creation
                 for resource in resources:
                     resource_index[f"{server_name}:{resource.get('uri')}"] = {"serverName": server_name, "resource": resource}
                 for prompt in prompts:
                     prompt_index[f"{server_name}:{prompt.get('name')}"] = {"serverName": server_name, "prompt": prompt}
 
+                # Wrap each MCP tool as a local ToolDefinition
+                # Naming convention: mcp__<server>__<tool>
                 for descriptor in descriptors:
                     wrapped_name = f"mcp__{_sanitize_tool_segment(server_name)}__{_sanitize_tool_segment(str(descriptor.get('name', 'tool')))}"
                     descriptor_name = str(descriptor.get("name", "tool"))
@@ -758,6 +809,8 @@ def create_mcp_backed_tools(*, cwd: str, mcp_servers: dict[str, dict[str, Any]])
                 pass
         raise
 
+    # --- Phase 2: create meta-tools for resources and prompts ---
+    # These are built-in tools that let the LLM browse MCP resources/prompts
     if resource_index:
         tools.append(
             ToolDefinition(
