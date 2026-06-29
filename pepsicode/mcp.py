@@ -7,7 +7,9 @@ import threading
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from queue import Empty, Queue
-from typing import Any
+import urllib.request
+import urllib.error
+from typing import Any, Protocol, runtime_checkable
 
 from pepsicode.tooling import ToolDefinition, ToolResult
 
@@ -23,6 +25,36 @@ ALLOWED_COMMANDS = {
 
 
 JsonRpcProtocol = str
+
+
+@runtime_checkable
+class McpClient(Protocol):
+    """MCP 客户端统一接口，stdio 和 HTTP 传输都实现此协议。"""
+
+    def start(self) -> None: ...
+    def list_tools(self) -> list[dict[str, Any]]: ...
+    def list_resources(self) -> list[dict[str, Any]]: ...
+    def read_resource(self, uri: str) -> ToolResult: ...
+    def list_prompts(self) -> list[dict[str, Any]]: ...
+    def get_prompt(self, name: str, args: dict[str, str] | None = None) -> ToolResult: ...
+    def call_tool(self, name: str, input_data: Any) -> ToolResult: ...
+    def close(self) -> None: ...
+
+
+def _interpolate_env(value: str) -> str:
+    """Replace $VAR or ${VAR} with os.environ values."""
+    import re
+    def _replace(match: re.Match[str]) -> str:
+        var_name = match.group(1) or match.group(2)
+        return os.environ.get(var_name, match.group(0))
+    return re.sub(r'\$([A-Za-z_][A-Za-z0-9_]*)|\$\{([A-Za-z_][A-Za-z0-9_]*)\}', _replace, value)
+
+
+def _create_client(server_name: str, config: dict[str, Any], cwd: str) -> McpClient:
+    """根据配置选择 stdio 或 HTTP 传输的 MCP 客户端。"""
+    if config.get("url"):
+        return HttpMcpClient(server_name, config, cwd)
+    return StdioMcpClient(server_name, config, cwd)
 
 
 @dataclass(slots=True)
@@ -488,8 +520,158 @@ class StdioMcpClient:
         self._stderr_thread = None
 
 
+class HttpMcpClient:
+    """通过 Streamable HTTP（HTTP POST）与 MCP 服务器通信的客户端。"""
+
+    def __init__(self, server_name: str, config: dict[str, Any], cwd: str) -> None:
+        self.server_name = server_name
+        self.config = config
+        self.cwd = cwd
+        self.url: str = str(config.get("url", ""))
+        self.protocol: JsonRpcProtocol = "streamable-http"
+        self.next_id = 1
+        self._headers: dict[str, str] = {}
+        self._build_headers()
+
+    def _build_headers(self) -> None:
+        """构建请求头：先注入 Bearer Token，再合并用户自定义 headers。"""
+        # 从 token 存储注入 Bearer Token
+        try:
+            from pepsicode.config import read_mcp_tokens
+            tokens = read_mcp_tokens()
+            token = tokens.get(self.server_name)
+            if token:
+                self._headers["Authorization"] = f"Bearer {token}"
+        except Exception:
+            pass
+
+        # 合并用户自定义 headers（支持 $ENV_VAR 插值）
+        for key, value in self.config.get("headers", {}).items():
+            self._headers[str(key)] = _interpolate_env(str(value))
+
+    def start(self) -> None:
+        """发送 initialize 握手请求。"""
+        if not self.url:
+            raise RuntimeError(f'MCP server "{self.server_name}" has no url configured.')
+        self._request(
+            "initialize",
+            {
+                "protocolVersion": "2024-11-05",
+                "capabilities": {},
+                "clientInfo": {"name": "pepsicode", "version": "0.1.0"},
+            },
+            timeout_seconds=10.0,
+        )
+        self._notify("notifications/initialized", {})
+
+    def _request(self, method: str, params: Any, timeout_seconds: float = 5.0) -> Any:
+        """发送 JSON-RPC 请求并等待响应。"""
+        message_id = self.next_id
+        self.next_id += 1
+        payload = {
+            "jsonrpc": "2.0",
+            "id": message_id,
+            "method": method,
+            "params": params,
+        }
+        body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        headers = {
+            "Content-Type": "application/json",
+            "Accept": "application/json, text/event-stream",
+            **self._headers,
+        }
+        req = urllib.request.Request(self.url, data=body, headers=headers, method="POST")
+        try:
+            with urllib.request.urlopen(req, timeout=timeout_seconds) as resp:
+                raw = resp.read().decode("utf-8")
+        except urllib.error.HTTPError as e:
+            error_body = ""
+            try:
+                error_body = e.read().decode("utf-8", errors="replace")
+            except Exception:
+                pass
+            raise RuntimeError(
+                f"MCP {self.server_name}: HTTP {e.code} {e.reason}"
+                + (f"\n{error_body}" if error_body else "")
+            ) from e
+        except urllib.error.URLError as e:
+            raise RuntimeError(f"MCP {self.server_name}: connection failed: {e.reason}") from e
+
+        # 解析响应（可能是 SSE 格式或纯 JSON）
+        result = self._parse_response(raw)
+        if result.get("error"):
+            details = result["error"].get("data")
+            suffix = f"\n{json.dumps(details, indent=2, ensure_ascii=False)}" if details else ""
+            raise RuntimeError(f"MCP {self.server_name}: {result['error']['message']}{suffix}")
+        return result.get("result")
+
+    def _parse_response(self, raw: str) -> dict[str, Any]:
+        """解析 HTTP 响应体，支持纯 JSON 和 SSE 格式。"""
+        # 尝试直接解析为 JSON
+        try:
+            return json.loads(raw)
+        except json.JSONDecodeError:
+            pass
+        # 尝试从 SSE 格式提取最后一条 JSON 消息
+        last_json = None
+        for line in raw.split("\n"):
+            line = line.strip()
+            if line.startswith("data:"):
+                data_str = line[len("data:"):].strip()
+                if data_str:
+                    try:
+                        last_json = json.loads(data_str)
+                    except json.JSONDecodeError:
+                        continue
+        if last_json is not None:
+            return last_json
+        raise RuntimeError(f"MCP {self.server_name}: failed to parse response:\n{raw[:500]}")
+
+    def _notify(self, method: str, params: Any) -> None:
+        """发送 JSON-RPC 通知（无 id，不等待响应）。"""
+        payload = {"jsonrpc": "2.0", "method": method, "params": params}
+        body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        headers = {
+            "Content-Type": "application/json",
+            "Accept": "application/json, text/event-stream",
+            **self._headers,
+        }
+        req = urllib.request.Request(self.url, data=body, headers=headers, method="POST")
+        try:
+            urllib.request.urlopen(req, timeout=5.0).read()
+        except Exception:
+            pass  # 通知不需要处理响应
+
+    def list_tools(self) -> list[dict[str, Any]]:
+        result = self._request("tools/list", {})
+        return list(result.get("tools", []) if isinstance(result, dict) else [])
+
+    def list_resources(self) -> list[dict[str, Any]]:
+        result = self._request("resources/list", {}, timeout_seconds=3.0)
+        return list(result.get("resources", []) if isinstance(result, dict) else [])
+
+    def read_resource(self, uri: str) -> ToolResult:
+        return _format_read_resource_result(self._request("resources/read", {"uri": uri}, timeout_seconds=5.0))
+
+    def list_prompts(self) -> list[dict[str, Any]]:
+        result = self._request("prompts/list", {}, timeout_seconds=3.0)
+        return list(result.get("prompts", []) if isinstance(result, dict) else [])
+
+    def get_prompt(self, name: str, args: dict[str, str] | None = None) -> ToolResult:
+        return _format_prompt_result(
+            self._request("prompts/get", {"name": name, "arguments": args or {}}, timeout_seconds=5.0)
+        )
+
+    def call_tool(self, name: str, input_data: Any) -> ToolResult:
+        return _format_tool_call_result(self._request("tools/call", {"name": name, "arguments": input_data or {}}))
+
+    def close(self) -> None:
+        """HTTP 无状态连接，无需清理。"""
+        pass
+
+
 def create_mcp_backed_tools(*, cwd: str, mcp_servers: dict[str, dict[str, Any]]) -> dict[str, Any]:
-    clients: list[StdioMcpClient] = []
+    clients: list[McpClient] = []
     tools: list[ToolDefinition] = []
     servers: list[dict[str, Any]] = []
     resource_index: dict[str, dict[str, Any]] = {}
@@ -501,7 +683,7 @@ def create_mcp_backed_tools(*, cwd: str, mcp_servers: dict[str, dict[str, Any]])
                 servers.append(asdict(McpServerSummary(name=server_name, command=config.get("command", ""), status="disabled", toolCount=0, protocol=config.get("protocol"))))
                 continue
 
-            client = StdioMcpClient(server_name, config, cwd)
+            client = _create_client(server_name, config, cwd)
             try:
                 client.start()
                 descriptors = client.list_tools()

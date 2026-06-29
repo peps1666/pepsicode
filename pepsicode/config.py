@@ -183,6 +183,29 @@ def save_scoped_mcp_servers(scope: str, servers: dict[str, Any], cwd: str | Path
     target.write_text(json.dumps({"mcpServers": servers}, indent=2) + "\n", encoding="utf-8")
 
 
+# MCP Token 存储（用于 HTTP 传输的 Bearer Token 认证）
+PEPSI_CODE_MCP_TOKENS_PATH = PEPSI_CODE_DIR / "mcp-tokens.json"
+
+
+def read_mcp_tokens() -> dict[str, str]:
+    """读取 MCP 服务器的 Bearer Token 存储。"""
+    if not PEPSI_CODE_MCP_TOKENS_PATH.exists():
+        return {}
+    try:
+        parsed = json.loads(PEPSI_CODE_MCP_TOKENS_PATH.read_text(encoding="utf-8"))
+        return parsed if isinstance(parsed, dict) else {}
+    except (json.JSONDecodeError, OSError):
+        return {}
+
+
+def save_mcp_tokens(tokens: dict[str, str]) -> None:
+    """保存 MCP 服务器的 Bearer Token 存储。"""
+    PEPSI_CODE_MCP_TOKENS_PATH.parent.mkdir(parents=True, exist_ok=True)
+    PEPSI_CODE_MCP_TOKENS_PATH.write_text(
+        json.dumps(tokens, indent=2) + "\n", encoding="utf-8"
+    )
+
+
 def validate_config(cwd: str | Path | None = None) -> tuple[bool, list[str]]:
     """验证配置完整性，返回 (是否有效，错误列表)
     

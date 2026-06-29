@@ -1,6 +1,14 @@
 from __future__ import annotations
 
-from pepsicode.config import get_mcp_config_path, load_scoped_mcp_servers, save_scoped_mcp_servers
+from typing import Any
+
+from pepsicode.config import (
+    get_mcp_config_path,
+    load_scoped_mcp_servers,
+    save_scoped_mcp_servers,
+    read_mcp_tokens,
+    save_mcp_tokens,
+)
 from pepsicode.skills import discover_skills, install_skill, remove_managed_skill
 
 
@@ -8,8 +16,12 @@ def _print_usage() -> None:
     print(
         "pepsicode management commands\n\n"
         "pepsicode mcp list [--project]\n"
-        "pepsicode mcp add <name> [--project] [--protocol <auto|content-length|newline-json>] [--env KEY=VALUE ...] -- <command> [args...]\n"
-        "pepsicode mcp remove <name> [--project]\n\n"
+        "pepsicode mcp add <name> [--project] [--url <url>] [--header KEY=VALUE ...]\n"
+        "    [--protocol <auto|content-length|newline-json|streamable-http>]\n"
+        "    [--env KEY=VALUE ...] -- <command> [args...]\n"
+        "pepsicode mcp remove <name> [--project]\n"
+        "pepsicode mcp login <name> --token <bearer-token>\n"
+        "pepsicode mcp logout <name>\n\n"
         "pepsicode skills list\n"
         "pepsicode skills add <path-to-skill-or-dir> [--name <name>] [--project]\n"
         "pepsicode skills remove <name> [--project]"
@@ -70,9 +82,12 @@ def _handle_mcp_command(cwd: str, args: list[str]) -> bool:
             print(f"No MCP servers configured in {get_mcp_config_path(scope, cwd)}.")
             return True
         for name, server in servers.items():
-            args_summary = " ".join(server.get("args", []))
-            protocol = f" protocol={server['protocol']}" if server.get("protocol") else ""
-            print(f"{name}: {server['command']} {args_summary}{protocol}".strip())
+            if server.get("url"):
+                print(f"{name}: url={server['url']} type=http")
+            else:
+                args_summary = " ".join(server.get("args", []))
+                protocol = f" protocol={server['protocol']}" if server.get("protocol") else ""
+                print(f"{name}: {server['command']} {args_summary}{protocol}".strip())
         return True
     if subcommand == "add":
         if "--" not in rest:
@@ -83,18 +98,25 @@ def _handle_mcp_command(cwd: str, args: list[str]) -> bool:
         if not head or not command_parts:
             raise RuntimeError("Missing MCP server name or command.")
         name = head.pop(0)
+        url = _take_option(head, "--url")
         protocol = _take_option(head, "--protocol")
         env = _parse_env_pairs(_take_repeat_option(head, "--env"))
+        headers = _parse_env_pairs(_take_repeat_option(head, "--header"))
         if head:
             raise RuntimeError(f"Unknown arguments: {' '.join(head)}")
         command, *command_args = command_parts
         existing = load_scoped_mcp_servers(scope, cwd)
-        existing[name] = {
+        server_config: dict[str, Any] = {
             "command": command,
             "args": command_args,
             "env": env or None,
             "protocol": protocol,
         }
+        if url:
+            server_config["url"] = url
+        if headers:
+            server_config["headers"] = headers
+        existing[name] = server_config
         save_scoped_mcp_servers(scope, existing, cwd)
         print(f"Added MCP server {name} to {get_mcp_config_path(scope, cwd)}")
         return True
@@ -109,6 +131,32 @@ def _handle_mcp_command(cwd: str, args: list[str]) -> bool:
         del existing[name]
         save_scoped_mcp_servers(scope, existing, cwd)
         print(f"Removed MCP server {name} from {get_mcp_config_path(scope, cwd)}")
+        return True
+    if subcommand == "login":
+        if not rest:
+            raise RuntimeError("Missing MCP server name.")
+        name = rest[0]
+        token = _take_option(rest, "--token")
+        if not token:
+            raise RuntimeError("Missing --token <bearer-token>.")
+        if rest:
+            raise RuntimeError(f"Unknown arguments: {' '.join(rest)}")
+        tokens = read_mcp_tokens()
+        tokens[name] = token
+        save_mcp_tokens(tokens)
+        print(f"Saved token for MCP server {name}")
+        return True
+    if subcommand == "logout":
+        if not rest:
+            raise RuntimeError("Missing MCP server name.")
+        name = rest[0]
+        tokens = read_mcp_tokens()
+        if name not in tokens:
+            print(f"No token found for MCP server {name}")
+            return True
+        del tokens[name]
+        save_mcp_tokens(tokens)
+        print(f"Removed token for MCP server {name}")
         return True
     _print_usage()
     return True
