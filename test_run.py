@@ -16,20 +16,21 @@ from pepsicode.prompt import build_system_prompt
 from pepsicode.tools import create_default_tool_registry
 from pepsicode.tty_app import run_tty_app
 
+
 def main():
     cwd = str(Path.cwd())
     print("Starting pepsicode Python in mock mode...")
     print()
-    
+
     try:
         runtime = load_runtime_config(cwd)
     except Exception as e:
         print(f"鈿狅笍  Config warning: {e}")
         runtime = None
-    
+
     tools = create_default_tool_registry(cwd, runtime=runtime)
     permissions = PermissionManager(cwd, prompt=None)
-    
+
     messages = [
         {
             "role": "system",
@@ -43,7 +44,7 @@ def main():
             ),
         }
     ]
-    
+
     print(f"鉁?Model: {runtime.get('model', 'mock') if runtime else 'mock'}")
     print(f"鉁?Tools: {len(tools.list())} available")
     print(f"鉁?Skills: {len(tools.get_skills())} discovered")
@@ -51,7 +52,7 @@ def main():
     print()
     print("Starting TUI... (type /exit to quit)")
     print()
-    
+
     try:
         run_tty_app(
             runtime=runtime,
@@ -66,9 +67,11 @@ def main():
     except Exception as e:
         print(f"\n\n鉂?Error: {e}")
         import traceback
+
         traceback.print_exc()
     finally:
         tools.dispose()
+
 
 if __name__ == "__main__":
     main()

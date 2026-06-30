@@ -1,13 +1,18 @@
 """Smoke test for TUI performance optimizations."""
+
+from pepsicode.tty_app import _get_terminal_size, _ThrottledRenderer
 from pepsicode.tui.chrome import (
-    render_banner, render_footer_bar, render_panel, render_slash_menu,
-    _cached_terminal_size, string_display_width, strip_ansi, _ANSI_RE
+    _ANSI_RE,
+    _cached_terminal_size,
+    render_footer_bar,
+    render_panel,
+    string_display_width,
+    strip_ansi,
 )
-from pepsicode.tui.transcript import render_transcript, get_transcript_window_size
-from pepsicode.tui.markdown import render_markdownish
 from pepsicode.tui.input_parser import parse_input_chunk
+from pepsicode.tui.markdown import render_markdownish
+from pepsicode.tui.transcript import get_transcript_window_size, render_transcript
 from pepsicode.tui.types import TranscriptEntry
-from pepsicode.tty_app import _ThrottledRenderer, _get_terminal_size
 
 # Test cached terminal size
 cols, rows = _cached_terminal_size()
@@ -50,9 +55,13 @@ print(f"tty_app terminal size: {ts}")
 
 # Test ThrottledRenderer
 call_count = 0
+
+
 def test_render():
     global call_count
     call_count += 1
+
+
 tr = _ThrottledRenderer(test_render, min_interval=0.01)
 tr.force()
 tr.force()
@@ -79,13 +88,13 @@ print(f"Transcript window size: {ws}")
 
 # Test _ANSI_RE is pre-compiled
 import re
+
 assert isinstance(_ANSI_RE, re.Pattern)
 print(f"_ANSI_RE is pre-compiled: {type(_ANSI_RE)}")
 
 # Test input_parser pre-compiled regexes
-from pepsicode.tui.input_parser import (
-    _SGR_MOUSE_RE, _CSI_CURSOR_RE, _CSI_TILDE_RE, _SS3_RE, _ESC_CHAR_RE
-)
+from pepsicode.tui.input_parser import _CSI_CURSOR_RE, _CSI_TILDE_RE, _ESC_CHAR_RE, _SGR_MOUSE_RE, _SS3_RE
+
 for name, pattern in [
     ("_SGR_MOUSE_RE", _SGR_MOUSE_RE),
     ("_CSI_CURSOR_RE", _CSI_CURSOR_RE),
@@ -97,9 +106,8 @@ for name, pattern in [
 print("All input_parser regexes are pre-compiled")
 
 # Test markdown pre-compiled regexes
-from pepsicode.tui.markdown import (
-    _RE_TABLE_SEP, _RE_TABLE_ROW, _RE_LIST_ITEM, _RE_INLINE_CODE, _RE_BOLD
-)
+from pepsicode.tui.markdown import _RE_BOLD, _RE_INLINE_CODE, _RE_LIST_ITEM, _RE_TABLE_ROW, _RE_TABLE_SEP
+
 for name, pattern in [
     ("_RE_TABLE_SEP", _RE_TABLE_SEP),
     ("_RE_TABLE_ROW", _RE_TABLE_ROW),

@@ -1,13 +1,17 @@
 """Quick smoke test for all TUI optimizations."""
+
 import sys
-import os
+
 sys.stdout.reconfigure(encoding="utf-8")
 
-from pepsicode.tui.chrome import string_display_width, wrap_panel_body_line, _stripped_display_width
+from pepsicode.tui.chrome import _stripped_display_width, string_display_width, wrap_panel_body_line
 from pepsicode.tui.markdown import render_markdownish
 from pepsicode.tui.transcript import (
-    TranscriptEntry, get_transcript_window_size, render_transcript,
-    get_transcript_max_scroll_offset, _get_entry_lines, _compute_total_lines
+    TranscriptEntry,
+    _compute_total_lines,
+    _get_entry_lines,
+    get_transcript_max_scroll_offset,
+    render_transcript,
 )
 
 print("=== 1. Markdown single-pass inline test ===")

@@ -1,11 +1,17 @@
 """Benchmark: scaling behavior with increasing session size."""
+
 import sys
 import time
+
 sys.stdout.reconfigure(encoding="utf-8")
 
 from pepsicode.tui.transcript import (
-    TranscriptEntry, render_transcript, _render_transcript_lines,
-    _compute_total_lines, _entry_cache, _line_count_cache
+    TranscriptEntry,
+    _compute_total_lines,
+    _entry_cache,
+    _line_count_cache,
+    _render_transcript_lines,
+    render_transcript,
 )
 
 for size in [100, 500, 2000, 5000]:
@@ -14,15 +20,23 @@ for size in [100, 500, 2000, 5000]:
         if i % 3 == 0:
             entries.append(TranscriptEntry(id=i, kind="user", body=f"User message {i} with typical content"))
         elif i % 3 == 1:
-            entries.append(TranscriptEntry(
-                id=i, kind="assistant",
-                body=f"Here is a **response** with `code` and some longer text.\n- point 1\n- point 2\n- point 3"
-            ))
+            entries.append(
+                TranscriptEntry(
+                    id=i,
+                    kind="assistant",
+                    body="Here is a **response** with `code` and some longer text.\n- point 1\n- point 2\n- point 3",
+                )
+            )
         else:
-            entries.append(TranscriptEntry(
-                id=i, kind="tool", body=f"file content line 1\nline 2\nline 3\nline 4\nline 5",
-                toolName="read_file", status="success"
-            ))
+            entries.append(
+                TranscriptEntry(
+                    id=i,
+                    kind="tool",
+                    body="file content line 1\nline 2\nline 3\nline 4\nline 5",
+                    toolName="read_file",
+                    status="success",
+                )
+            )
 
     # Warm cache
     _entry_cache.clear()

@@ -1,22 +1,20 @@
 """Test the SSE parser and StreamToken generator without hitting the network."""
-import sys
-import json
-from typing import Any, Generator
-from unittest.mock import MagicMock, patch
 
+import sys
+
+from pepsicode.agent_loop import _accumulate_stream_tokens, run_agent_turn_stream
 from pepsicode.anthropic_adapter import (
+    _consume_pending_usage,
     _parse_sse_event,
     _process_sse_event,
-    _consume_pending_usage,
 )
-from pepsicode.agent_loop import _accumulate_stream_tokens, run_agent_turn_stream
-from pepsicode.types import StreamToken, ChatMessage, AgentStep
+from pepsicode.types import ChatMessage, StreamToken
 
 
 def test_parse_sse_event():
     """Verify basic event parsing."""
     event_str = (
-        'event: content_block_delta\n'
+        "event: content_block_delta\n"
         'data: {"type":"content_block_delta","index":0,'
         '"delta":{"type":"text_delta","text":"Hello"}}\n\n'
     )
@@ -131,23 +129,23 @@ def test_process_message_delta_usage():
 def test_end_to_end_text_stream():
     """Simulate a full text-only response and verify the token stream."""
     sse = (
-        'event: message_start\n'
+        "event: message_start\n"
         'data: {"type":"message_start","message":{"id":"msg_1"}}\n\n'
-        'event: content_block_start\n'
+        "event: content_block_start\n"
         'data: {"type":"content_block_start","index":0,'
         '"content_block":{"type":"text","text":""}}\n\n'
-        'event: content_block_delta\n'
+        "event: content_block_delta\n"
         'data: {"type":"content_block_delta","index":0,'
         '"delta":{"type":"text_delta","text":"Hello"}}\n\n'
-        'event: content_block_delta\n'
+        "event: content_block_delta\n"
         'data: {"type":"content_block_delta","index":0,'
         '"delta":{"type":"text_delta","text":" world"}}\n\n'
-        'event: content_block_stop\n'
+        "event: content_block_stop\n"
         'data: {"type":"content_block_stop","index":0}\n\n'
-        'event: message_delta\n'
+        "event: message_delta\n"
         'data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},'
         '"usage":{"input_tokens":10,"output_tokens":2}}\n\n'
-        'event: message_stop\n'
+        "event: message_stop\n"
         'data: {"type":"message_stop"}\n\n'
     )
 
@@ -159,7 +157,7 @@ def test_end_to_end_text_stream():
     # cross-chunk event boundary.
     step = 17
     for i in range(0, len(raw_bytes), step):
-        chunk = raw_bytes[i:i + step]
+        chunk = raw_bytes[i : i + step]
         buffer += chunk.decode("utf-8")
         while "\n\n" in buffer:
             event_str, buffer = buffer.split("\n\n", 1)
@@ -284,33 +282,43 @@ def test_accumulate_tool_with_no_input():
 
 def test_run_agent_turn_stream_end_to_end():
     """End-to-end test: verify run_agent_turn_stream invokes on_token correctly."""
+
     # Create a mock model that yields tokens via next_stream.
     class MockModel:
         last_usage = {"input_tokens": 10, "output_tokens": 5}
+
         def next_stream(self, messages):
-            return iter([
-                StreamToken(type="text", content="Hello"),
-                StreamToken(type="text", content=" world"),
-                StreamToken(type="done"),
-            ])
+            return iter(
+                [
+                    StreamToken(type="text", content="Hello"),
+                    StreamToken(type="text", content=" world"),
+                    StreamToken(type="done"),
+                ]
+            )
 
     class MockTools:
         def list(self):
             return []
+
         def get_skills(self):
             return []
+
         def get_mcp_servers(self):
             return {}
+
         def get_mcp_config(self):
             return {}
+
         def find(self, name):
             return None
 
     class MockPermissions:
         def begin_turn(self):
             pass
+
         def end_turn(self):
             pass
+
         def get_summary(self):
             return {}
 
