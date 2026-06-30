@@ -209,4 +209,3 @@ def maybe_handle_management_command(cwd: str, argv: list[str]) -> bool:
         _print_usage()
         return True
     return False
-

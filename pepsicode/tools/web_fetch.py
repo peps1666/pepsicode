@@ -13,6 +13,7 @@ def _is_safe_url(url: str) -> tuple[bool, str]:
     """Check whether the URL is safe (not an internal/private address)."""
     try:
         from urllib.parse import urlparse
+
         parsed = urlparse(url)
         hostname = parsed.hostname
 
@@ -94,14 +95,16 @@ def _run(input_data: dict, context) -> ToolResult:
             if truncated:
                 text = text[:max_chars] + f"\n\n... [Content truncated at {max_chars} chars]"
 
-            header = "\n".join([
-                f"URL: {url}",
-                f"CONTENT_TYPE: {content_type}",
-                f"STATUS: {response.status}",
-                f"CHARS: {len(text)}",
-                f"TRUNCATED: {'yes' if truncated else 'no'}",
-                "",
-            ])
+            header = "\n".join(
+                [
+                    f"URL: {url}",
+                    f"CONTENT_TYPE: {content_type}",
+                    f"STATUS: {response.status}",
+                    f"CHARS: {len(text)}",
+                    f"TRUNCATED: {'yes' if truncated else 'no'}",
+                    "",
+                ]
+            )
 
             return ToolResult(ok=True, output=header + text)
 

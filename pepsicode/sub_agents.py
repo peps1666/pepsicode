@@ -25,20 +25,23 @@ from pepsicode.state import AppState, Store
 # Agent types
 # ---------------------------------------------------------------------------
 
+
 class AgentType(str, Enum):
     """Sub-agent types (inspired by Claude Code's built-in agents)."""
-    EXPLORE = "explore"           # Read-only, fast (like Haiku)
-    PLAN = "plan"                 # Read-only, thorough (like Sonnet in plan mode)
-    GENERAL = "general"           # Full tools, complex tasks
+
+    EXPLORE = "explore"  # Read-only, fast (like Haiku)
+    PLAN = "plan"  # Read-only, thorough (like Sonnet in plan mode)
+    GENERAL = "general"  # Full tools, complex tasks
 
 
 @dataclass
 class AgentDefinition:
     """Sub-agent definition.
-    
+
     Inspired by Claude Code's agent definitions with custom system prompts,
     tool whitelists, and model selection.
     """
+
     type: AgentType
     name: str
     description: str
@@ -106,9 +109,11 @@ class AgentDefinition:
 # Agent instance (runtime)
 # ---------------------------------------------------------------------------
 
+
 @dataclass
 class AgentInstance:
     """Running agent instance."""
+
     id: str
     definition: AgentDefinition
     parent_session_id: str
@@ -127,9 +132,10 @@ class AgentInstance:
 # Sub-agent manager
 # ---------------------------------------------------------------------------
 
+
 class SubAgentManager:
     """Manages sub-agent lifecycle.
-    
+
     Inspired by Claude Code's coordinator/ system.
     """
 
@@ -154,12 +160,12 @@ class SubAgentManager:
         model: str | None = None,
     ) -> AgentInstance:
         """Spawn a new sub-agent.
-        
+
         Args:
             agent_type: Type of agent to spawn
             task_description: Task description for the agent
             model: Optional model override
-        
+
         Returns:
             AgentInstance
         """
@@ -246,10 +252,7 @@ class SubAgentManager:
 
     def get_active_agents(self) -> list[AgentInstance]:
         """Get all running agents."""
-        return [
-            agent for agent in self.agents.values()
-            if agent.status == "running"
-        ]
+        return [agent for agent in self.agents.values() if agent.status == "running"]
 
     def format_agent_status(self) -> str:
         """Format status report for all agents."""
@@ -270,13 +273,15 @@ class SubAgentManager:
             if instance.completed_at:
                 duration = instance.completed_at - instance.started_at
 
-            lines.extend([
-                f"{status_icon} {instance.definition.name} ({agent_id})",
-                f"  Task: {instance.task_description[:60]}",
-                f"  Status: {instance.status}",
-                f"  Turns: {instance.turn_count}/{instance.definition.max_turns}",
-                f"  Duration: {duration:.0f}s",
-            ])
+            lines.extend(
+                [
+                    f"{status_icon} {instance.definition.name} ({agent_id})",
+                    f"  Task: {instance.task_description[:60]}",
+                    f"  Status: {instance.status}",
+                    f"  Turns: {instance.turn_count}/{instance.definition.max_turns}",
+                    f"  Duration: {duration:.0f}s",
+                ]
+            )
 
             if instance.result:
                 result_preview = instance.result[:100]
@@ -318,16 +323,17 @@ class SubAgentManager:
 # Integration helpers
 # ---------------------------------------------------------------------------
 
+
 def should_use_sub_agent(
     task_complexity: str,
     available_context: float,
 ) -> bool:
     """Decide if a task should be delegated to a sub-agent.
-    
+
     Args:
         task_complexity: "simple", "moderate", "complex"
         available_context: Percentage of context window available
-    
+
     Returns:
         True if should use sub-agent
     """
@@ -341,10 +347,10 @@ def should_use_sub_agent(
 
 def choose_agent_type(task_description: str) -> AgentType:
     """Choose appropriate agent type based on task.
-    
+
     Args:
         task_description: User's task description
-    
+
     Returns:
         Recommended AgentType
     """

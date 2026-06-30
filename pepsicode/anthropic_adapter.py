@@ -66,6 +66,7 @@ def _parse_retry_after_ms(retry_after: str | None) -> int | None:
     # Try HTTP-date format: "Thu, 01 Dec 2025 16:00:00 GMT"
     try:
         from email.utils import parsedate_to_datetime
+
         target = parsedate_to_datetime(retry_after)
         delta_ms = int((target.timestamp() - time.time()) * 1000)
         return max(0, delta_ms)
@@ -196,7 +197,10 @@ def _process_sse_event(event: dict[str, Any]) -> Generator[StreamToken, None, No
         if isinstance(usage, dict):
             # Stash the usage on a sentinel attribute so next_stream() can
             # assign it back to self.last_usage at the end of the stream.
-            _process_sse_event._pending_usage = {"input_tokens": int(usage.get("input_tokens", 0) or 0), "output_tokens": int(usage.get("output_tokens", 0) or 0)}
+            _process_sse_event._pending_usage = {
+                "input_tokens": int(usage.get("input_tokens", 0) or 0),
+                "output_tokens": int(usage.get("output_tokens", 0) or 0),
+            }
 
 
 def _consume_pending_usage() -> dict[str, int] | None:
@@ -267,7 +271,12 @@ def _to_anthropic_messages(messages: list[dict[str, Any]]) -> tuple[str, list[di
             _push_anthropic_message(
                 converted,
                 "assistant",
-                {"type": "tool_use", "id": message["toolUseId"], "name": message["toolName"], "input": message["input"]},
+                {
+                    "type": "tool_use",
+                    "id": message["toolUseId"],
+                    "name": message["toolName"],
+                    "input": message["input"],
+                },
             )
             continue
         _push_anthropic_message(
@@ -290,7 +299,9 @@ class AnthropicModelAdapter:
         # Last token usage reported by the API ({"input_tokens", "output_tokens"}).
         self.last_usage: dict[str, int] | None = None
 
-    def _build_request(self, model: str, system_message: str, converted_messages: list[dict[str, Any]]) -> urllib.request.Request:
+    def _build_request(
+        self, model: str, system_message: str, converted_messages: list[dict[str, Any]]
+    ) -> urllib.request.Request:
         request_body = {
             "model": model,
             "system": system_message,
@@ -427,16 +438,10 @@ class AnthropicModelAdapter:
             return ""
         if status >= 400 or not isinstance(data, dict):
             return ""
-        texts = [
-            b.get("text", "")
-            for b in data.get("content", [])
-            if isinstance(b, dict) and b.get("type") == "text"
-        ]
+        texts = [b.get("text", "") for b in data.get("content", []) if isinstance(b, dict) and b.get("type") == "text"]
         return "\n".join(t for t in texts if t).strip()
 
-    def next_stream(
-        self, messages: list[ChatMessage]
-    ) -> Generator[StreamToken, None, None]:
+    def next_stream(self, messages: list[ChatMessage]) -> Generator[StreamToken, None, None]:
         """Stream tokens from the model using Anthropic's SSE endpoint.
 
         Yields ``StreamToken`` objects as they arrive.  A ``done`` token marks
@@ -445,9 +450,7 @@ class AnthropicModelAdapter:
         callers don't have to special-case the streaming path.
         """
         system_message, converted_messages = _to_anthropic_messages(messages)
-        request = self._build_stream_request(
-            self.runtime["model"], system_message, converted_messages
-        )
+        request = self._build_stream_request(self.runtime["model"], system_message, converted_messages)
 
         # Reset any pending usage stashed by a previous run.
         try:

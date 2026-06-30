@@ -69,10 +69,13 @@ def _run(input_data: dict, context) -> ToolResult:
         found = False
         for i, existing_cell in enumerate(existing_cells):
             existing_id = existing_cell.get("id")
-            existing_source = "".join(existing_cell.get("source", [])) if isinstance(existing_cell.get("source"), list) else existing_cell.get("source", "")
+            existing_source = (
+                "".join(existing_cell.get("source", []))
+                if isinstance(existing_cell.get("source"), list)
+                else existing_cell.get("source", "")
+            )
 
-            if (cell_id and existing_id and cell_id == existing_id) or \
-               (not cell_id and existing_source == source):
+            if (cell_id and existing_id and cell_id == existing_id) or (not cell_id and existing_source == source):
                 # Update existing cell
                 updated_cell = dict(existing_cell)
                 updated_cell["cell_type"] = cell_type
@@ -90,15 +93,18 @@ def _run(input_data: dict, context) -> ToolResult:
         if not found:
             # Add new cell
             import uuid
+
             new_cell_id = cell_id or str(uuid.uuid4())[:8]
-            notebook["cells"].append({
-                "id": new_cell_id,
-                "cell_type": cell_type,
-                "source": source if "\n" not in source else source.split("\n"),
-                "metadata": {},
-                "outputs": [],
-                "execution_count": None,
-            })
+            notebook["cells"].append(
+                {
+                    "id": new_cell_id,
+                    "cell_type": cell_type,
+                    "source": source if "\n" not in source else source.split("\n"),
+                    "metadata": {},
+                    "outputs": [],
+                    "execution_count": None,
+                }
+            )
 
     # Add remaining existing cells that weren't updated
     for existing_cell in existing_cells:
@@ -107,7 +113,11 @@ def _run(input_data: dict, context) -> ToolResult:
             notebook["cells"].append(existing_cell)
         elif not existing_id:
             # Check if content matches any new cell
-            existing_source = "".join(existing_cell.get("source", [])) if isinstance(existing_cell.get("source"), list) else existing_cell.get("source", "")
+            existing_source = (
+                "".join(existing_cell.get("source", []))
+                if isinstance(existing_cell.get("source"), list)
+                else existing_cell.get("source", "")
+            )
             if not any(nc["source"] == existing_source for nc in new_cells):
                 notebook["cells"].append(existing_cell)
 
@@ -156,7 +166,11 @@ notebook_edit_tool = ToolDefinition(
                     "type": "object",
                     "properties": {
                         "id": {"type": "string", "description": "Cell ID (to match existing)"},
-                        "cell_type": {"type": "string", "enum": ["code", "markdown"], "description": "Cell type (default: code)"},
+                        "cell_type": {
+                            "type": "string",
+                            "enum": ["code", "markdown"],
+                            "description": "Cell type (default: code)",
+                        },
                         "source": {"type": "string", "description": "Cell content"},
                     },
                     "required": ["source"],

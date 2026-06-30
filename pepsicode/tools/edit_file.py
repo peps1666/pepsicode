@@ -38,7 +38,16 @@ def _run(input_data: dict, context):
 edit_file_tool = ToolDefinition(
     name="edit_file",
     description="Replace a substring in a file after the user reviews the diff.",
-    input_schema={"type": "object", "properties": {"path": {"type": "string"}, "old": {"type": "string"}, "new": {"type": "string"}, "replace_all": {"type": "boolean"}}, "required": ["path", "old", "new"]},
+    input_schema={
+        "type": "object",
+        "properties": {
+            "path": {"type": "string"},
+            "old": {"type": "string"},
+            "new": {"type": "string"},
+            "replace_all": {"type": "boolean"},
+        },
+        "required": ["path", "old", "new"],
+    },
     validator=_validate,
     run=_run,
 )

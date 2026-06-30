@@ -25,7 +25,7 @@ def _run(input_data: dict, context) -> ToolResult:
     file_count = 0
 
     # Skip common large directories
-    SKIP_DIRS = {'.git', 'node_modules', '__pycache__', '.venv', 'venv', '.tox', 'dist', 'build'}
+    SKIP_DIRS = {".git", "node_modules", "__pycache__", ".venv", "venv", ".tox", "dist", "build"}
     MAX_FILES = 5000
 
     try:
@@ -72,9 +72,12 @@ def _run(input_data: dict, context) -> ToolResult:
 grep_files_tool = ToolDefinition(
     name="grep_files",
     description="Search UTF-8 text files under the workspace using a regex pattern.",
-    input_schema={"type": "object", "properties": {"pattern": {"type": "string"}, "path": {"type": "string"}}, "required": ["pattern"]},
+    input_schema={
+        "type": "object",
+        "properties": {"pattern": {"type": "string"}, "path": {"type": "string"}},
+        "required": ["pattern"],
+    },
     validator=_validate,
     run=_run,
     concurrency_safe=True,
 )
-

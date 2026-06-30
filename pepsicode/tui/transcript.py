@@ -79,9 +79,7 @@ def _render_transcript_entry(entry: TranscriptEntry) -> str:
             dots = f"{ACCENT}{ICON_DOT}{RESET}" * (entry.collapsePhase or 0)
             body = f"{SUBTLE}collapsing{dots}{RESET}"
         else:
-            body = preview_tool_body(
-                entry.toolName or "", render_markdownish(entry.body)
-            )
+            body = preview_tool_body(entry.toolName or "", render_markdownish(entry.body))
 
         return f"{label}\n{_indent_block(body)}"
 
@@ -171,6 +169,7 @@ def _get_entry_line_count(entry: TranscriptEntry) -> int:
 # Windowed transcript rendering
 # ---------------------------------------------------------------------------
 
+
 def _compute_total_lines(entries: list[TranscriptEntry]) -> int:
     """Compute total line count across all entries including separators."""
     if not entries:
@@ -224,9 +223,7 @@ def _render_visible_window(
     return result
 
 
-def get_transcript_max_scroll_offset(
-    entries: list[TranscriptEntry], window_size: int | None = None
-) -> int:
+def get_transcript_max_scroll_offset(entries: list[TranscriptEntry], window_size: int | None = None) -> int:
     """Calculate the maximum possible scroll offset."""
     if not entries:
         return 0
@@ -235,9 +232,7 @@ def get_transcript_max_scroll_offset(
     return max(0, total - ws)
 
 
-def render_transcript(
-    entries: list[TranscriptEntry], scroll_offset: int, window_size: int | None = None
-) -> str:
+def render_transcript(entries: list[TranscriptEntry], scroll_offset: int, window_size: int | None = None) -> str:
     """Render a windowed view of the transcript."""
     if not entries:
         return ""
@@ -262,6 +257,7 @@ def render_transcript(
 # ---------------------------------------------------------------------------
 # Legacy full-render API
 # ---------------------------------------------------------------------------
+
 
 def _render_transcript_lines(entries: list[TranscriptEntry]) -> list[str]:
     """Render all entries into a list of lines with separators."""

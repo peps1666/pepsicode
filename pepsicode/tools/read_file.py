@@ -95,9 +95,12 @@ def _run(input_data: dict, context) -> ToolResult:
 read_file_tool = ToolDefinition(
     name="read_file",
     description="Read a UTF-8 text file relative to the workspace root.",
-    input_schema={"type": "object", "properties": {"path": {"type": "string"}, "offset": {"type": "number"}, "limit": {"type": "number"}}, "required": ["path"]},
+    input_schema={
+        "type": "object",
+        "properties": {"path": {"type": "string"}, "offset": {"type": "number"}, "limit": {"type": "number"}},
+        "required": ["path"],
+    },
     validator=_validate,
     run=_run,
     concurrency_safe=True,
 )
-

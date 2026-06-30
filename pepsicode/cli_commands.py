@@ -51,7 +51,9 @@ SLASH_COMMANDS = [
     SlashCommand("/read", "/read <path>", "Read a file directly.", "Files"),
     SlashCommand("/write", "/write <path>::<content>", "Write a file directly.", "Files"),
     SlashCommand("/edit", "/edit <path>::<search>::<replace>", "Edit a file by exact replacement.", "Files"),
-    SlashCommand("/patch", "/patch <path>::<search1>::<replace1>...", "Apply multiple replacements to one file.", "Files"),
+    SlashCommand(
+        "/patch", "/patch <path>::<search1>::<replace1>...", "Apply multiple replacements to one file.", "Files"
+    ),
     SlashCommand("/modify", "/modify <path>::<content>", "Replace a file with reviewable diff.", "Files"),
 ]
 
@@ -109,13 +111,15 @@ def format_slash_commands() -> str:
             lines.append(f"║ {cmd_display:<20} {desc:<33} ║")
         lines.append("╟───────────────────────────────────────────────────────────────────────────╢")
 
-    lines.extend([
-        "║ \U0001f4a1 Tips:                                              ║",
-        "║ - Use Tab to autocomplete commands                    ║",
-        "║ - Prefix with / to access any command                 ║",
-        "║ - Type naturally - I'll understand Chinese & English  ║",
-        "╚═══════════════════════════════════════════════════════════════════════════╝",
-    ])
+    lines.extend(
+        [
+            "║ \U0001f4a1 Tips:                                              ║",
+            "║ - Use Tab to autocomplete commands                    ║",
+            "║ - Prefix with / to access any command                 ║",
+            "║ - Type naturally - I'll understand Chinese & English  ║",
+            "╚═══════════════════════════════════════════════════════════════════════════╝",
+        ]
+    )
 
     return "\n".join(lines)
 
@@ -150,13 +154,11 @@ def try_handle_local_command(user_input: str, tools=None) -> str | None:
         skills = tools.get_skills() if tools else []
         if not skills:
             return "No skills discovered. Add skills under ~/.pepsi-code/skills/<name>/SKILL.md, .pepsi-code/skills/<name>/SKILL.md, .claude/skills/<name>/SKILL.md, or ~/.claude/skills/<name>/SKILL.md."
-        return "\n".join(
-            f"{skill['name']}  {skill['description']}  [{skill['source']}]"
-            for skill in skills
-        )
+        return "\n".join(f"{skill['name']}  {skill['description']}  [{skill['source']}]" for skill in skills)
 
     if user_input == "/config":
         from pepsicode.config import format_config_diagnostic
+
         return format_config_diagnostic()
 
     if user_input == "/memory":
@@ -165,6 +167,7 @@ def try_handle_local_command(user_input: str, tools=None) -> str | None:
             import os
 
             from pepsicode.memory import MemoryManager, MemoryScope
+
             memory_mgr = MemoryManager(workspace=os.getcwd())
 
             # get_stats() returns per-scope counts/size/categories; flatten it
@@ -210,6 +213,7 @@ def try_handle_local_command(user_input: str, tools=None) -> str | None:
         # Context usage display
         try:
             from pepsicode.context_manager import load_context_state
+
             ctx_mgr = load_context_state()
             if ctx_mgr:
                 return ctx_mgr.format_context_details()

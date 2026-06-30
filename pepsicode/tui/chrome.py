@@ -28,20 +28,20 @@ BRIGHT_BLUE = "[94m"
 BRIGHT_MAGENTA = "[95m"
 BRIGHT_WHITE = "[97m"
 # Extended 256-color palette -- Claude-style amber-only accent
-BORDER = "[38;5;214m"      # amber (unified with ACCENT)
+BORDER = "[38;5;214m"  # amber (unified with ACCENT)
 BORDER_DIM = "[38;5;237m"  # dark gray for secondary borders
-ACCENT = "[38;5;214m"      # warm amber accent
-SUBTLE = "[38;5;243m"      # gray for subtle text
+ACCENT = "[38;5;214m"  # warm amber accent
+SUBTLE = "[38;5;243m"  # gray for subtle text
 HIGHLIGHT_BG = "[48;5;238m"  # dark bg highlight for selections
 
 # ---------------------------------------------------------------------------
 # Unicode decorative characters -- Claude-style minimal set
 # ---------------------------------------------------------------------------
-ICON_PROMPT = ">"     # >
+ICON_PROMPT = ">"  # >
 ICON_SUCCESS = "[OK]"
 ICON_ERROR = "[X]"
 ICON_DIVIDER = "-"
-ICON_DOT = "·"        # middle dot
+ICON_DOT = "·"  # middle dot
 ICON_ARROW = ">"
 # Compatibility aliases for old icon names (used in other modules)
 ICON_pepsicode = ICON_DOT
@@ -107,6 +107,7 @@ def invalidate_terminal_size_cache() -> None:
 # Width computation -- optimized hot path
 # ---------------------------------------------------------------------------
 
+
 def _build_wide_char_set() -> frozenset[int]:
     """Pre-compute the set of codepoint ranges that are double-width."""
     return frozenset()  # placeholder -- we use range checks below
@@ -137,9 +138,9 @@ def char_display_width(char: str) -> int:
 
 # Pre-compiled regex for wide character detection (CJK + Emoji)
 _WIDE_CHAR_PATTERN = re.compile(
-    r'[\u4e00-\u9fff\u3000-\u303f\u3040-\u309f\u30a0-\u30ff'
-    r'\uff00-\uffef\u2e80-\u2eff\u1100-\u11ff'
-    r'\U0001F300-\U0001FAF6\U00020000-\U0003FFFD]'
+    r"[\u4e00-\u9fff\u3000-\u303f\u3040-\u309f\u30a0-\u30ff"
+    r"\uff00-\uffef\u2e80-\u2eff\u1100-\u11ff"
+    r"\U0001F300-\U0001FAF6\U00020000-\U0003FFFD]"
 )
 
 
@@ -521,13 +522,16 @@ def render_slash_menu(commands: list[Any], selected_index: int) -> str:
 
     # Group by category preserving order
     from itertools import groupby
+
     grouped: list[tuple[str, list[Any]]] = []
     for cat, cmds in groupby(commands, key=lambda c: getattr(c, "category", "General")):
         grouped.append((cat, list(cmds)))
 
     rows: list[str] = []
     # Header
-    rows.append(f"  {ACCENT}{ICON_ARROW}{RESET} {BOLD}commands{RESET}  {SUBTLE}Tab/Enter to select, Esc to close{RESET}")
+    rows.append(
+        f"  {ACCENT}{ICON_ARROW}{RESET} {BOLD}commands{RESET}  {SUBTLE}Tab/Enter to select, Esc to close{RESET}"
+    )
     rows.append(f"  {SUBTLE}{ICON_DIVIDER * min(50, inner_width)}{RESET}")
 
     flat_index = 0
@@ -551,11 +555,7 @@ def render_slash_menu(commands: list[Any], selected_index: int) -> str:
                     f"{HIGHLIGHT_BG}  {SUBTLE}{desc}{RESET}"
                 )
             else:
-                line = (
-                    f"   {SUBTLE}{shortcut}{RESET}"
-                    f"  {usage}"
-                    f"  {SUBTLE}{desc}{RESET}"
-                )
+                line = f"   {SUBTLE}{shortcut}{RESET}" f"  {usage}" f"  {SUBTLE}{desc}{RESET}"
             rows.append(truncate_plain(line, width))
             flat_index += 1
 
@@ -639,18 +639,12 @@ def colorize_unified_diff_block(block: str) -> str:
 
 def _looks_like_diff_block(detail: str) -> bool:
     """Check if a detail string looks like a unified diff block."""
-    return (
-        "\n" in detail
-        and ("--- a/" in detail or "+++ b/" in detail or "@@ " in detail)
-    )
+    return "\n" in detail and ("--- a/" in detail or "+++ b/" in detail or "@@ " in detail)
 
 
 def colorize_edit_permission_details(details: list[str]) -> list[str]:
     """Colorize diff blocks in permission details."""
-    return [
-        colorize_unified_diff_block(d) if _looks_like_diff_block(d) else d
-        for d in details
-    ]
+    return [colorize_unified_diff_block(d) if _looks_like_diff_block(d) else d for d in details]
 
 
 def get_permission_prompt_max_scroll_offset(request: dict[str, Any], expanded: bool = False) -> int:
@@ -671,14 +665,16 @@ def flatten_detail_lines(details: list[str]) -> list[str]:
     return result
 
 
-def slice_visible_details(flat_lines: list[str], scroll_offset: int, max_visible: int | None = None) -> tuple[list[str], int]:
+def slice_visible_details(
+    flat_lines: list[str], scroll_offset: int, max_visible: int | None = None
+) -> tuple[list[str], int]:
     """Return the visible slice of detail lines and total count."""
     if max_visible is None:
         _, rows = _cached_terminal_size()
         max_visible = max(4, rows - 20)
     total = len(flat_lines)
     offset = max(0, min(scroll_offset, max(0, total - max_visible)))
-    return flat_lines[offset:offset + max_visible], total
+    return flat_lines[offset : offset + max_visible], total
 
 
 def render_permission_prompt(
@@ -706,19 +702,25 @@ def render_permission_prompt(
         if details:
             flat = flatten_detail_lines(details)
             if not expanded:
-                lines.append(f"{SUBTLE}  {ICON_ARROW} {len(flat)} lines hidden {SUBTLE}|{RESET} {DIM}press 'v' to expand | Ctrl+O toggle{RESET}")
+                lines.append(
+                    f"{SUBTLE}  {ICON_ARROW} {len(flat)} lines hidden {SUBTLE}|{RESET} {DIM}press 'v' to expand | Ctrl+O toggle{RESET}"
+                )
             else:
                 colorized = colorize_edit_permission_details(flat)
                 visible, total = slice_visible_details(colorized, scroll_offset)
                 lines.extend(visible)
                 if total > len(visible):
-                    lines.append(f"{SUBTLE}  {ICON_DIVIDER * 3} scroll {scroll_offset+1}/{total} (Wheel/PgUp/PgDn) {ICON_DIVIDER * 3}{RESET}")
+                    lines.append(
+                        f"{SUBTLE}  {ICON_DIVIDER * 3} scroll {scroll_offset+1}/{total} (Wheel/PgUp/PgDn) {ICON_DIVIDER * 3}{RESET}"
+                    )
             lines.append("")
         for i, choice in enumerate(request.get("choices", [])):
             label = choice.get("label", "")
             key = choice.get("key", "")
             if i == selected_choice_index:
-                lines.append(f"  {HIGHLIGHT_BG}{ACCENT}{ICON_ARROW}{RESET}{HIGHLIGHT_BG} {BRIGHT_WHITE}{BOLD}{label}{RESET}{HIGHLIGHT_BG} {SUBTLE}({key}){RESET}")
+                lines.append(
+                    f"  {HIGHLIGHT_BG}{ACCENT}{ICON_ARROW}{RESET}{HIGHLIGHT_BG} {BRIGHT_WHITE}{BOLD}{label}{RESET}{HIGHLIGHT_BG} {SUBTLE}({key}){RESET}"
+                )
             else:
                 lines.append(f"    {SUBTLE}{ICON_DOT}{RESET} {label} {SUBTLE}({key}){RESET}")
     return render_panel("Action Required", "\n".join(lines), right_title="Permission")

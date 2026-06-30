@@ -13,6 +13,7 @@ from pepsicode.tooling import ToolDefinition, ToolResult
 # Test Discovery
 # ---------------------------------------------------------------------------
 
+
 def _discover_test_files(path: Path, pattern: str = "test_*.py") -> list[Path]:
     """Discover test files matching pattern."""
     test_files = []
@@ -36,6 +37,7 @@ def _discover_test_files(path: Path, pattern: str = "test_*.py") -> list[Path]:
 # Test Output Parsers
 # ---------------------------------------------------------------------------
 
+
 def _parse_pytest_output(output: str) -> dict[str, Any]:
     """Parse pytest output into structured format."""
     results = {
@@ -50,47 +52,49 @@ def _parse_pytest_output(output: str) -> dict[str, Any]:
     }
 
     # Parse summary line
-    summary_match = re.search(r'(\d+) passed', output)
+    summary_match = re.search(r"(\d+) passed", output)
     if summary_match:
         results["passed"] = int(summary_match.group(1))
 
-    failed_match = re.search(r'(\d+) failed', output)
+    failed_match = re.search(r"(\d+) failed", output)
     if failed_match:
         results["failed"] = int(failed_match.group(1))
 
-    error_match = re.search(r'(\d+) error', output)
+    error_match = re.search(r"(\d+) error", output)
     if error_match:
         results["errors"] = int(error_match.group(1))
 
-    skipped_match = re.search(r'(\d+) skipped', output)
+    skipped_match = re.search(r"(\d+) skipped", output)
     if skipped_match:
         results["skipped"] = int(skipped_match.group(1))
 
-    warning_match = re.search(r'(\d+) warning', output)
+    warning_match = re.search(r"(\d+) warning", output)
     if warning_match:
         results["warnings"] = int(warning_match.group(1))
 
     # Parse individual test results
-    test_pattern = re.compile(r'(PASSED|FAILED|ERROR|SKIPPED|XFAIL|XPASS)\s+(.+?)(?:::(\w+))?', re.MULTILINE)
+    test_pattern = re.compile(r"(PASSED|FAILED|ERROR|SKIPPED|XFAIL|XPASS)\s+(.+?)(?:::(\w+))?", re.MULTILINE)
     for match in test_pattern.finditer(output):
         status = match.group(1)
         file_path = match.group(2)
         test_name = match.group(3)
 
-        results["tests"].append({
-            "file": file_path.strip(),
-            "name": test_name or "unknown",
-            "status": status.lower(),
-        })
+        results["tests"].append(
+            {
+                "file": file_path.strip(),
+                "name": test_name or "unknown",
+                "status": status.lower(),
+            }
+        )
 
     # Parse failure details
-    failure_pattern = re.compile(r'FAILURES\s*\n(.*?)(?=\n={50,}|\Z)', re.DOTALL)
+    failure_pattern = re.compile(r"FAILURES\s*\n(.*?)(?=\n={50,}|\Z)", re.DOTALL)
     failure_match = failure_pattern.search(output)
     if failure_match:
         results["failure_details"] = failure_match.group(1)[:2000]
 
     # Parse coverage if present
-    coverage_pattern = re.compile(r'TOTAL\s+\d+\s+\d+\s+(\d+)%')
+    coverage_pattern = re.compile(r"TOTAL\s+\d+\s+\d+\s+(\d+)%")
     coverage_match = coverage_pattern.search(output)
     if coverage_match:
         results["coverage"] = int(coverage_match.group(1))
@@ -110,14 +114,14 @@ def _parse_unittest_output(output: str) -> dict[str, Any]:
     }
 
     # Parse summary
-    summary_match = re.search(r'Ran (\d+) test', output)
+    summary_match = re.search(r"Ran (\d+) test", output)
     if summary_match:
         total = int(summary_match.group(1))
         if "OK" in output:
             results["passed"] = total
         else:
-            failed_match = re.search(r'failures=(\d+)', output)
-            error_match = re.search(r'errors=(\d+)', output)
+            failed_match = re.search(r"failures=(\d+)", output)
+            error_match = re.search(r"errors=(\d+)", output)
 
             results["failed"] = int(failed_match.group(1)) if failed_match else 0
             results["errors"] = int(error_match.group(1)) if error_match else 0
@@ -129,6 +133,7 @@ def _parse_unittest_output(output: str) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 # Tool Implementation
 # ---------------------------------------------------------------------------
+
 
 def _validate(input_data: dict) -> dict:
     path = input_data.get("path", ".")
@@ -178,7 +183,7 @@ def _run(input_data: dict, context) -> ToolResult:
         return ToolResult(
             ok=False,
             output=f"No test files found in {input_data['path']}\n\n"
-                   f"Expected files matching: test_*.py or *_test.py",
+            f"Expected files matching: test_*.py or *_test.py",
         )
 
     # Apply pattern filter if provided
@@ -284,7 +289,7 @@ def _run(input_data: dict, context) -> ToolResult:
                 lines.append(parsed["failure_details"][:2000])
             else:
                 # Extract from output
-                failure_pattern = re.compile(r'FAILURES\s*\n(.*?)(?=\n={50,}|\Z)', re.DOTALL)
+                failure_pattern = re.compile(r"FAILURES\s*\n(.*?)(?=\n={50,}|\Z)", re.DOTALL)
                 failure_match = failure_pattern.search(output)
                 if failure_match:
                     lines.append(failure_match.group(1)[:2000])
@@ -300,7 +305,9 @@ def _run(input_data: dict, context) -> ToolResult:
         if verbose and parsed.get("tests"):
             lines.append("📋 All Tests:")
             for test in parsed["tests"][:50]:  # Limit to 50
-                icon = {"passed": "PASS", "failed": "FAIL", "error": "ERROR", "skipped": "SKIP"}.get(test["status"], "?")
+                icon = {"passed": "PASS", "failed": "FAIL", "error": "ERROR", "skipped": "SKIP"}.get(
+                    test["status"], "?"
+                )
                 lines.append(f"  {icon} {test['file']}::{test['name']}")
             if len(parsed["tests"]) > 50:
                 lines.append(f"  ... and {len(parsed['tests']) - 50} more")
@@ -335,9 +342,16 @@ test_runner_tool = ToolDefinition(
         "type": "object",
         "properties": {
             "path": {"type": "string", "description": "Directory or file path to test (default: current directory)"},
-            "framework": {"type": "string", "enum": ["auto", "pytest", "unittest"], "description": "Test framework to use (default: auto)"},
+            "framework": {
+                "type": "string",
+                "enum": ["auto", "pytest", "unittest"],
+                "description": "Test framework to use (default: auto)",
+            },
             "verbose": {"type": "boolean", "description": "Show detailed output (default: false)"},
-            "coverage": {"type": "boolean", "description": "Enable coverage reporting (default: false, requires pytest-cov)"},
+            "coverage": {
+                "type": "boolean",
+                "description": "Enable coverage reporting (default: false, requires pytest-cov)",
+            },
             "pattern": {"type": "string", "description": "Filter tests by name pattern"},
             "timeout": {"type": "number", "description": "Timeout in seconds (default: 60, max: 300)"},
         },

@@ -29,7 +29,7 @@ def _normalize_path(target_path: str) -> str:
 
 def _is_within_directory(root: str, target: str) -> bool:
     """Check if target is within root directory.
-    
+
     On Windows, uses case-insensitive comparison since NTFS paths are
     case-insensitive by default.
     """
@@ -93,9 +93,17 @@ def _classify_dangerous_command(command: str, args: list[str]) -> str | None:
             return f"chmod 777 opens permissions to all users ({signature})"
 
     if command in {
-        "node", "python", "python3", "pythonw",
-        "bun", "bash", "sh", "zsh", "fish",
-        "powershell", "pwsh",
+        "node",
+        "python",
+        "python3",
+        "pythonw",
+        "bun",
+        "bash",
+        "sh",
+        "zsh",
+        "fish",
+        "powershell",
+        "pwsh",
     }:
         return f"{command} can execute arbitrary local code ({signature})"
 
@@ -125,6 +133,7 @@ def _read_permission_store() -> dict[str, Any]:
     except (json.JSONDecodeError, OSError) as e:
         # Corrupted file - return an empty store and log a warning
         import warnings
+
         warnings.warn(f"Corrupted permissions file, resetting: {e}")
         return {}
 
@@ -136,14 +145,11 @@ def _write_permission_store(store: dict[str, Any]) -> None:
     PEPSI_CODE_PERMISSIONS_PATH.parent.mkdir(parents=True, exist_ok=True)
 
     # Write to a temporary file first
-    fd, tmp_path = tempfile.mkstemp(
-        dir=PEPSI_CODE_PERMISSIONS_PATH.parent,
-        suffix=".tmp"
-    )
+    fd, tmp_path = tempfile.mkstemp(dir=PEPSI_CODE_PERMISSIONS_PATH.parent, suffix=".tmp")
     try:
-        with os.fdopen(fd, 'w', encoding='utf-8') as f:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
             json.dump(store, f, indent=2)
-            f.write('\n')
+            f.write("\n")
         # Atomic replace
         os.replace(tmp_path, PEPSI_CODE_PERMISSIONS_PATH)
     except Exception:
@@ -226,16 +232,22 @@ class PermissionManager:
         normalized_target = _normalize_path(target_path)
         if _is_within_directory(self.workspace_root, normalized_target):
             return
-        if normalized_target in self.session_denied_paths or _matches_directory_prefix(normalized_target, self.denied_directory_prefixes):
+        if normalized_target in self.session_denied_paths or _matches_directory_prefix(
+            normalized_target, self.denied_directory_prefixes
+        ):
             raise RuntimeError(f"Access denied for path outside cwd: {normalized_target}")
-        if normalized_target in self.session_allowed_paths or _matches_directory_prefix(normalized_target, self.allowed_directory_prefixes):
+        if normalized_target in self.session_allowed_paths or _matches_directory_prefix(
+            normalized_target, self.allowed_directory_prefixes
+        ):
             return
         if self.prompt is None:
             raise RuntimeError(
                 f"Path {normalized_target} is outside cwd {self.workspace_root}. Start pepsicode in TTY mode to approve it."
             )
 
-        scope_directory = normalized_target if intent in {"list", "command_cwd"} else str(Path(normalized_target).parent)
+        scope_directory = (
+            normalized_target if intent in {"list", "command_cwd"} else str(Path(normalized_target).parent)
+        )
         result = self.prompt(
             {
                 "kind": "path",
@@ -324,10 +336,7 @@ class PermissionManager:
 
     def ensure_edit(self, target_path: str, diff_preview: str) -> None:
         normalized_target = _normalize_path(target_path)
-        if (
-            normalized_target in self.session_denied_edits
-            or normalized_target in self.denied_edit_patterns
-        ):
+        if normalized_target in self.session_denied_edits or normalized_target in self.denied_edit_patterns:
             raise RuntimeError(f"Edit denied: {normalized_target}")
         if (
             normalized_target in self.session_allowed_edits
@@ -337,7 +346,9 @@ class PermissionManager:
         ):
             return
         if self.prompt is None:
-            raise RuntimeError(f"Edit requires approval: {normalized_target}. Start pepsicode in TTY mode to review it.")
+            raise RuntimeError(
+                f"Edit requires approval: {normalized_target}. Start pepsicode in TTY mode to review it."
+            )
         result = self.prompt(
             {
                 "kind": "edit",

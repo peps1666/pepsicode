@@ -59,43 +59,49 @@ def _install_launcher_script() -> str | None:
         target_bin_dir = PEPSI_CODE_DIR / "bin"
         launcher_path = target_bin_dir / "pepsicode.bat"
         python_exe = sys.executable.replace("/", "\\")
-        launcher_script = "\r\n".join([
-            "@echo off",
-            "REM pepsicode Python Launcher for Windows",
-            f'"{python_exe}" -m pepsicode.main %*',
-            "",
-        ])
+        launcher_script = "\r\n".join(
+            [
+                "@echo off",
+                "REM pepsicode Python Launcher for Windows",
+                f'"{python_exe}" -m pepsicode.main %*',
+                "",
+            ]
+        )
         launcher_command = "pepsicode.bat"
     elif sys.platform == "darwin":
         # macOS: Use ~/.local/bin with bash script (also works with zsh)
         target_bin_dir = home / ".local" / "bin"
         launcher_path = target_bin_dir / "pepsicode-py"
         python_exe = sys.executable
-        launcher_script = "\n".join([
-            "#!/usr/bin/env bash",
-            "# pepsicode Python Launcher for macOS",
-            "# Works with bash, zsh, and other shells",
-            "set -euo pipefail",
-            f'exec "{python_exe}" -m pepsicode.main "$@"',
-            "",
-        ])
+        launcher_script = "\n".join(
+            [
+                "#!/usr/bin/env bash",
+                "# pepsicode Python Launcher for macOS",
+                "# Works with bash, zsh, and other shells",
+                "set -euo pipefail",
+                f'exec "{python_exe}" -m pepsicode.main "$@"',
+                "",
+            ]
+        )
         launcher_command = "pepsicode-py"
     else:
         # Linux: Use ~/.local/bin with bash script
         target_bin_dir = home / ".local" / "bin"
         launcher_path = target_bin_dir / "pepsicode-py"
         python_exe = sys.executable
-        launcher_script = "\n".join([
-            "#!/usr/bin/env bash",
-            "# pepsicode Python Launcher for Linux",
-            "set -euo pipefail",
-            f'exec "{python_exe}" -m pepsicode.main "$@"',
-            "",
-        ])
+        launcher_script = "\n".join(
+            [
+                "#!/usr/bin/env bash",
+                "# pepsicode Python Launcher for Linux",
+                "set -euo pipefail",
+                f'exec "{python_exe}" -m pepsicode.main "$@"',
+                "",
+            ]
+        )
         launcher_command = "pepsicode-py"
 
     resolved = str(target_bin_dir.resolve())
-    if '..' in str(target_bin_dir) or '~' in str(target_bin_dir):
+    if ".." in str(target_bin_dir) or "~" in str(target_bin_dir):
         print("Warning: install path contains unsafe characters, skipping installation.")
         return None
 
@@ -111,7 +117,7 @@ def _install_launcher_script() -> str | None:
         # Atomic write
         fd, tmp_path = tempfile.mkstemp(dir=str(target_bin_dir), suffix=".tmp")
         try:
-            with os.fdopen(fd, 'w', encoding='utf-8') as f:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
                 f.write(launcher_script)
             os.replace(tmp_path, str(launcher_path))
         except Exception:
@@ -188,14 +194,16 @@ def main() -> None:
     # Save configuration
     print("\nSaving configuration...")
     try:
-        save_mini_code_settings({
-            "model": model,
-            "env": {
-                "ANTHROPIC_BASE_URL": base_url,
-                "ANTHROPIC_AUTH_TOKEN": auth_token,
-                "ANTHROPIC_MODEL": model,
-            },
-        })
+        save_mini_code_settings(
+            {
+                "model": model,
+                "env": {
+                    "ANTHROPIC_BASE_URL": base_url,
+                    "ANTHROPIC_AUTH_TOKEN": auth_token,
+                    "ANTHROPIC_MODEL": model,
+                },
+            }
+        )
         print(f"Configuration saved to: {PEPSI_CODE_SETTINGS_PATH}")
     except OSError as e:
         print(f"\nError: failed to save configuration: {e}")
@@ -228,14 +236,14 @@ def main() -> None:
                 print(f'  export PATH="{target_bin_dir}:$PATH"')
                 print()
                 print("Quick add on macOS:")
-                print(f'  echo \'export PATH="{target_bin_dir}:$PATH"\' >> ~/.zshrc')
+                print(f"  echo 'export PATH=\"{target_bin_dir}:$PATH\"' >> ~/.zshrc")
                 print("  source ~/.zshrc")
             else:
                 print("Add the following line to ~/.bashrc or ~/.zshrc:")
                 print(f'  export PATH="{target_bin_dir}:$PATH"')
                 print()
                 print("Quick add on Linux (bash):")
-                print(f'  echo \'export PATH="{target_bin_dir}:$PATH"\' >> ~/.bashrc')
+                print(f"  echo 'export PATH=\"{target_bin_dir}:$PATH\"' >> ~/.bashrc")
                 print("  source ~/.bashrc")
         else:
             print()

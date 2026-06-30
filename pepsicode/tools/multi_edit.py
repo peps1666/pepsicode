@@ -45,46 +45,54 @@ def _run(input_data: dict, context) -> ToolResult:
 
         # Validate file exists
         if not file_path.exists():
-            results.append({
-                "file": change["file"],
-                "status": "error",
-                "message": f"File not found: {file_path}",
-            })
+            results.append(
+                {
+                    "file": change["file"],
+                    "status": "error",
+                    "message": f"File not found: {file_path}",
+                }
+            )
             error_count += 1
             continue
 
         try:
             content = file_path.read_text(encoding="utf-8")
         except Exception as e:
-            results.append({
-                "file": change["file"],
-                "status": "error",
-                "message": f"Read error: {e}",
-            })
+            results.append(
+                {
+                    "file": change["file"],
+                    "status": "error",
+                    "message": f"Read error: {e}",
+                }
+            )
             error_count += 1
             continue
 
         # Count occurrences
         occurrences = content.count(old_text)
         if occurrences == 0:
-            results.append({
-                "file": change["file"],
-                "status": "warning",
-                "message": "Pattern not found",
-                "old_preview": old_text[:50],
-            })
+            results.append(
+                {
+                    "file": change["file"],
+                    "status": "warning",
+                    "message": "Pattern not found",
+                    "old_preview": old_text[:50],
+                }
+            )
             continue
 
         total_changes += occurrences
 
         if dry_run:
-            results.append({
-                "file": change["file"],
-                "status": "dry_run",
-                "message": f"Would replace {occurrences} occurrence(s)",
-                "old_preview": old_text[:50],
-                "new_preview": new_text[:50],
-            })
+            results.append(
+                {
+                    "file": change["file"],
+                    "status": "dry_run",
+                    "message": f"Would replace {occurrences} occurrence(s)",
+                    "old_preview": old_text[:50],
+                    "new_preview": new_text[:50],
+                }
+            )
             continue
 
         # Perform replacement
@@ -92,20 +100,24 @@ def _run(input_data: dict, context) -> ToolResult:
 
         try:
             file_path.write_text(new_content, encoding="utf-8")
-            results.append({
-                "file": change["file"],
-                "status": "success",
-                "message": f"Replaced {occurrences} occurrence(s)",
-                "old_preview": old_text[:50],
-                "new_preview": new_text[:50],
-            })
+            results.append(
+                {
+                    "file": change["file"],
+                    "status": "success",
+                    "message": f"Replaced {occurrences} occurrence(s)",
+                    "old_preview": old_text[:50],
+                    "new_preview": new_text[:50],
+                }
+            )
             success_count += 1
         except Exception as e:
-            results.append({
-                "file": change["file"],
-                "status": "error",
-                "message": f"Write error: {e}",
-            })
+            results.append(
+                {
+                    "file": change["file"],
+                    "status": "error",
+                    "message": f"Write error: {e}",
+                }
+            )
             error_count += 1
 
     # Format output
@@ -168,7 +180,10 @@ multi_edit_tool = ToolDefinition(
                     "required": ["file", "old", "new"],
                 },
             },
-            "dry_run": {"type": "boolean", "description": "If true, only preview changes without modifying files (default: false)"},
+            "dry_run": {
+                "type": "boolean",
+                "description": "If true, only preview changes without modifying files (default: false)",
+            },
         },
         "required": ["changes"],
     },

@@ -65,6 +65,7 @@ class StreamToken:
         tool_id:         tool use id (set when a tool_use block starts)
         tool_input_partial:  incremental JSON for a tool_use input (string delta)
     """
+
     type: Literal["text", "tool_use", "thinking", "done"]
     content: str = ""
     tool_name: str | None = None
@@ -74,7 +75,4 @@ class StreamToken:
 
 class ModelAdapter(Protocol):
     def next(self, messages: list[ChatMessage]) -> AgentStep: ...
-    def next_stream(
-        self, messages: list[ChatMessage]
-    ) -> Generator[StreamToken, None, None]: ...
-
+    def next_stream(self, messages: list[ChatMessage]) -> Generator[StreamToken, None, None]: ...

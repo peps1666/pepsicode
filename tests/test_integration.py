@@ -78,8 +78,10 @@ def tools(tmp_workspace: Path) -> ToolRegistry:
 @pytest.fixture
 def auto_allow_permissions(tmp_workspace: Path) -> PermissionManager:
     """PermissionManager that auto-allows everything (for testing)."""
+
     def _auto_allow(request: dict) -> dict:
         return {"decision": "allow_once"}
+
     return PermissionManager(str(tmp_workspace), prompt=_auto_allow)
 
 
@@ -106,9 +108,7 @@ def system_messages(tmp_workspace: Path, auto_allow_permissions: PermissionManag
 class TestAgentLoopIntegration:
     """Test the full agent loop with MockModel driving tool execution."""
 
-    def test_list_files_via_agent(
-        self, mock_model, tools, system_messages, tmp_workspace, auto_allow_permissions
-    ):
+    def test_list_files_via_agent(self, mock_model, tools, system_messages, tmp_workspace, auto_allow_permissions):
         """Agent receives /ls 鈫?calls list_files tool 鈫?returns result."""
         system_messages.append({"role": "user", "content": "/ls"})
 
@@ -155,9 +155,7 @@ class TestAgentLoopIntegration:
         assert any(m["role"] == "tool_result" for m in result)
         assert any(m["role"] == "assistant_tool_call" for m in result)
 
-    def test_read_file_via_agent(
-        self, mock_model, tools, system_messages, tmp_workspace, auto_allow_permissions
-    ):
+    def test_read_file_via_agent(self, mock_model, tools, system_messages, tmp_workspace, auto_allow_permissions):
         """Agent receives /read 鈫?calls read_file tool 鈫?returns file content."""
         system_messages.append({"role": "user", "content": "/read hello.txt"})
 
@@ -169,20 +167,18 @@ class TestAgentLoopIntegration:
             permissions=auto_allow_permissions,
         )
 
-        last_assistant = next(
-            (m for m in reversed(result) if m["role"] == "assistant"), None
-        )
+        last_assistant = next((m for m in reversed(result) if m["role"] == "assistant"), None)
         assert last_assistant is not None
         assert "Hello, world!" in last_assistant["content"]
 
-    def test_write_file_via_agent(
-        self, mock_model, tools, system_messages, tmp_workspace, auto_allow_permissions
-    ):
+    def test_write_file_via_agent(self, mock_model, tools, system_messages, tmp_workspace, auto_allow_permissions):
         """Agent receives /write 鈫?calls write_file tool 鈫?file is created."""
-        system_messages.append({
-            "role": "user",
-            "content": "/write output.txt::Test content from integration test",
-        })
+        system_messages.append(
+            {
+                "role": "user",
+                "content": "/write output.txt::Test content from integration test",
+            }
+        )
 
         result = run_agent_turn(
             model=mock_model,
@@ -198,14 +194,14 @@ class TestAgentLoopIntegration:
         content = output_file.read_text(encoding="utf-8")
         assert "Test content from integration test" in content
 
-    def test_edit_file_via_agent(
-        self, mock_model, tools, system_messages, tmp_workspace, auto_allow_permissions
-    ):
+    def test_edit_file_via_agent(self, mock_model, tools, system_messages, tmp_workspace, auto_allow_permissions):
         """Agent receives /edit 鈫?calls edit_file tool 鈫?file is modified."""
-        system_messages.append({
-            "role": "user",
-            "content": "/edit hello.txt::Hello, world!::Hello, pepsicode!",
-        })
+        system_messages.append(
+            {
+                "role": "user",
+                "content": "/edit hello.txt::Hello, world!::Hello, pepsicode!",
+            }
+        )
 
         result = run_agent_turn(
             model=mock_model,
@@ -219,14 +215,14 @@ class TestAgentLoopIntegration:
         assert "Hello, pepsicode!" in content
         assert "Hello, world!" not in content
 
-    def test_grep_files_via_agent(
-        self, mock_model, tools, system_messages, tmp_workspace, auto_allow_permissions
-    ):
+    def test_grep_files_via_agent(self, mock_model, tools, system_messages, tmp_workspace, auto_allow_permissions):
         """Agent receives /grep 鈫?calls grep_files tool 鈫?returns matches."""
-        system_messages.append({
-            "role": "user",
-            "content": f"/grep greet::{tmp_workspace / 'src'}",
-        })
+        system_messages.append(
+            {
+                "role": "user",
+                "content": f"/grep greet::{tmp_workspace / 'src'}",
+            }
+        )
 
         result = run_agent_turn(
             model=mock_model,
@@ -236,15 +232,11 @@ class TestAgentLoopIntegration:
             permissions=auto_allow_permissions,
         )
 
-        last_assistant = next(
-            (m for m in reversed(result) if m["role"] == "assistant"), None
-        )
+        last_assistant = next((m for m in reversed(result) if m["role"] == "assistant"), None)
         assert last_assistant is not None
         assert "greet" in last_assistant["content"]
 
-    def test_run_command_via_agent(
-        self, mock_model, tools, system_messages, tmp_workspace, auto_allow_permissions
-    ):
+    def test_run_command_via_agent(self, mock_model, tools, system_messages, tmp_workspace, auto_allow_permissions):
         """Agent receives /cmd 鈫?calls run_command tool 鈫?returns output."""
         cmd = "echo integration_test_ok"
         system_messages.append({"role": "user", "content": f"/cmd {cmd}"})
@@ -257,15 +249,11 @@ class TestAgentLoopIntegration:
             permissions=auto_allow_permissions,
         )
 
-        last_assistant = next(
-            (m for m in reversed(result) if m["role"] == "assistant"), None
-        )
+        last_assistant = next((m for m in reversed(result) if m["role"] == "assistant"), None)
         assert last_assistant is not None
         assert "integration_test_ok" in last_assistant["content"]
 
-    def test_tools_listing_via_agent(
-        self, mock_model, tools, system_messages, tmp_workspace, auto_allow_permissions
-    ):
+    def test_tools_listing_via_agent(self, mock_model, tools, system_messages, tmp_workspace, auto_allow_permissions):
         """Agent receives /tools 鈫?returns tool list (no tool call needed)."""
         system_messages.append({"role": "user", "content": "/tools"})
 
@@ -277,9 +265,7 @@ class TestAgentLoopIntegration:
             permissions=auto_allow_permissions,
         )
 
-        last_assistant = next(
-            (m for m in reversed(result) if m["role"] == "assistant"), None
-        )
+        last_assistant = next((m for m in reversed(result) if m["role"] == "assistant"), None)
         assert last_assistant is not None
         assert "list_files" in last_assistant["content"]
 
@@ -288,15 +274,19 @@ class TestAgentLoopIntegration:
 
         class InfiniteToolCallModel:
             """Model that always returns tool calls, never stops."""
+
             def next(self, messages):
                 import time
+
                 return AgentStep(
                     type="tool_calls",
-                    calls=[{
-                        "id": f"inf-{int(time.time()*1000)}",
-                        "toolName": "list_files",
-                        "input": {},
-                    }],
+                    calls=[
+                        {
+                            "id": f"inf-{int(time.time()*1000)}",
+                            "toolName": "list_files",
+                            "input": {},
+                        }
+                    ],
                 )
 
         system_messages.append({"role": "user", "content": "infinite loop"})
@@ -309,9 +299,7 @@ class TestAgentLoopIntegration:
             max_steps=3,
         )
 
-        last_assistant = next(
-            (m for m in reversed(result) if m["role"] == "assistant"), None
-        )
+        last_assistant = next((m for m in reversed(result) if m["role"] == "assistant"), None)
         assert last_assistant is not None
         assert "maximum" in last_assistant["content"].lower() or "limit" in last_assistant["content"].lower()
 
@@ -331,9 +319,7 @@ class TestAgentLoopIntegration:
             permissions=auto_allow_permissions,
         )
 
-        last_assistant = next(
-            (m for m in reversed(result) if m["role"] == "assistant"), None
-        )
+        last_assistant = next((m for m in reversed(result) if m["role"] == "assistant"), None)
         assert last_assistant is not None
         assert "network error" in last_assistant["content"].lower() or "connection" in last_assistant["content"].lower()
 
@@ -353,9 +339,7 @@ class TestAgentLoopIntegration:
             permissions=auto_allow_permissions,
         )
 
-        last_assistant = next(
-            (m for m in reversed(result) if m["role"] == "assistant"), None
-        )
+        last_assistant = next((m for m in reversed(result) if m["role"] == "assistant"), None)
         assert last_assistant is not None
         assert "timeout" in last_assistant["content"].lower()
 
@@ -368,9 +352,7 @@ class TestAgentLoopIntegration:
 class TestContextManagerIntegration:
     """Test ContextManager works correctly within agent loop."""
 
-    def test_context_tracking(
-        self, mock_model, tools, system_messages, tmp_workspace, auto_allow_permissions
-    ):
+    def test_context_tracking(self, mock_model, tools, system_messages, tmp_workspace, auto_allow_permissions):
         """Context manager tracks token usage during agent turn."""
         ctx = ContextManager(model="claude-sonnet-4-20250514")
 
@@ -400,9 +382,7 @@ class TestContextManagerIntegration:
 class TestPermissionIntegration:
     """Test permission system within the agent loop."""
 
-    def test_deny_command_permission(
-        self, mock_model, tools, system_messages, tmp_workspace
-    ):
+    def test_deny_command_permission(self, mock_model, tools, system_messages, tmp_workspace):
         """Permission denial prevents command execution."""
         deny_called = False
 
@@ -431,9 +411,7 @@ class TestPermissionIntegration:
             if last_tool.get("isError"):
                 assert "permission" in last_tool["content"].lower() or "denied" in last_tool["content"].lower()
 
-    def test_allow_always_command(
-        self, mock_model, tools, system_messages, tmp_workspace
-    ):
+    def test_allow_always_command(self, mock_model, tools, system_messages, tmp_workspace):
         """'allow_always' permission is remembered for subsequent calls."""
         call_count = 0
 
@@ -558,11 +536,9 @@ class TestTranscriptPoolIntegration:
 class TestMultiStepInteraction:
     """Test realistic multi-step workflows through the agent loop."""
 
-    def test_read_then_write_workflow(
-        self, mock_model, tools, system_messages, tmp_workspace, auto_allow_permissions
-    ):
+    def test_read_then_write_workflow(self, mock_model, tools, system_messages, tmp_workspace, auto_allow_permissions):
         """Simulate a read 鈫?write workflow as independent turns.
-        
+
         Note: MockModel is stateless and prioritises tool_result processing,
         so each "turn" starts from a fresh system prompt to avoid the model
         seeing stale tool_result messages from a previous turn.
@@ -585,10 +561,12 @@ class TestMultiStepInteraction:
 
         # Turn 2: Write a new file (fresh messages so MockModel sees /write)
         msgs_t2 = list(system_messages)
-        msgs_t2.append({
-            "role": "user",
-            "content": "/write src/new_module.py::# Auto-generated\ndef hello():\n    return 'world'",
-        })
+        msgs_t2.append(
+            {
+                "role": "user",
+                "content": "/write src/new_module.py::# Auto-generated\ndef hello():\n    return 'world'",
+            }
+        )
 
         msgs_t2 = run_agent_turn(
             model=mock_model,
@@ -602,16 +580,16 @@ class TestMultiStepInteraction:
         assert new_file.exists()
         assert "hello" in new_file.read_text(encoding="utf-8")
 
-    def test_grep_then_edit_workflow(
-        self, mock_model, tools, system_messages, tmp_workspace, auto_allow_permissions
-    ):
+    def test_grep_then_edit_workflow(self, mock_model, tools, system_messages, tmp_workspace, auto_allow_permissions):
         """Simulate grep 鈫?edit workflow as independent turns."""
         # Turn 1: Grep for pattern
         msgs_t1 = list(system_messages)
-        msgs_t1.append({
-            "role": "user",
-            "content": f"/grep get_cwd::{tmp_workspace / 'src'}",
-        })
+        msgs_t1.append(
+            {
+                "role": "user",
+                "content": f"/grep get_cwd::{tmp_workspace / 'src'}",
+            }
+        )
 
         msgs_t1 = run_agent_turn(
             model=mock_model,
@@ -628,10 +606,12 @@ class TestMultiStepInteraction:
 
         # Turn 2: Edit the file (fresh messages)
         msgs_t2 = list(system_messages)
-        msgs_t2.append({
-            "role": "user",
-            "content": "/edit src/utils.py::def get_cwd() -> str:::def get_current_dir() -> str:",
-        })
+        msgs_t2.append(
+            {
+                "role": "user",
+                "content": "/edit src/utils.py::def get_cwd() -> str:::def get_current_dir() -> str:",
+            }
+        )
 
         msgs_t2 = run_agent_turn(
             model=mock_model,
@@ -653,15 +633,15 @@ class TestMultiStepInteraction:
 class TestPatchFileIntegration:
     """Test patch_file tool through agent loop."""
 
-    def test_multi_replacement_patch(
-        self, mock_model, tools, system_messages, tmp_workspace, auto_allow_permissions
-    ):
+    def test_multi_replacement_patch(self, mock_model, tools, system_messages, tmp_workspace, auto_allow_permissions):
         """Patch file with multiple replacements in one call."""
         messages = list(system_messages)
-        messages.append({
-            "role": "user",
-            "content": "/patch src/main.py::greet::welcome::Hello::Hi",
-        })
+        messages.append(
+            {
+                "role": "user",
+                "content": "/patch src/main.py::greet::welcome::Hello::Hi",
+            }
+        )
 
         messages = run_agent_turn(
             model=mock_model,
@@ -817,7 +797,7 @@ class TestFullPipelineSmokeTest:
 
     def test_main_flow_mock_model(self, tmp_workspace):
         """Simulate the non-TTY main loop flow with mock model.
-        
+
         Each turn uses fresh system messages because MockModel is stateless
         and prioritises tool_result processing over new user messages.
         """

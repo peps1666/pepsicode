@@ -12,6 +12,7 @@ from pepsicode.tooling import ToolDefinition, ToolResult
 # API Tester Helpers
 # ---------------------------------------------------------------------------
 
+
 def _format_headers(headers: dict[str, str]) -> str:
     """Format headers for display."""
     if not headers:
@@ -60,6 +61,7 @@ def _build_request(method: str, url: str, headers: dict, body: Any, auth: dict |
             headers["Authorization"] = f"Bearer {auth.get('token', '')}"
         elif auth_type == "basic":
             import base64
+
             credentials = f"{auth.get('username', '')}:{auth.get('password', '')}"
             encoded = base64.b64encode(credentials.encode()).decode()
             headers["Authorization"] = f"Basic {encoded}"
@@ -96,9 +98,7 @@ def _validate_response(response_text: str, expected_schema: dict | None = None) 
             else:
                 actual_type = type(parsed[key]).__name__
                 if actual_type != expected_type:
-                    validation_result["errors"].append(
-                        f"Field '{key}': expected {expected_type}, got {actual_type}"
-                    )
+                    validation_result["errors"].append(f"Field '{key}': expected {expected_type}, got {actual_type}")
                     validation_result["valid"] = False
 
     return validation_result
@@ -107,6 +107,7 @@ def _validate_response(response_text: str, expected_schema: dict | None = None) 
 # ---------------------------------------------------------------------------
 # Tool Implementation
 # ---------------------------------------------------------------------------
+
 
 def _validate(input_data: dict) -> dict:
     method = input_data.get("method", "GET").upper()
@@ -192,7 +193,7 @@ def _run(input_data: dict, context) -> ToolResult:
 
     except urllib.error.HTTPError as e:
         status_code = e.code
-        response_headers = dict(e.headers) if hasattr(e, 'headers') else {}
+        response_headers = dict(e.headers) if hasattr(e, "headers") else {}
         try:
             response_body = e.read().decode("utf-8", errors="replace")
         except Exception:
@@ -212,7 +213,9 @@ def _run(input_data: dict, context) -> ToolResult:
 
     # Format response
     lines.append("Response:")
-    lines.append(f"  Status: {status_code} {'OK' if status_code == expected_status else 'X (expected ' + str(expected_status) + ')'}")
+    lines.append(
+        f"  Status: {status_code} {'OK' if status_code == expected_status else 'X (expected ' + str(expected_status) + ')'}"
+    )
     lines.append(f"  Time: {elapsed_ms}ms")
     lines.append("")
 
@@ -278,7 +281,11 @@ api_tester_tool = ToolDefinition(
     input_schema={
         "type": "object",
         "properties": {
-            "method": {"type": "string", "enum": ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"], "description": "HTTP method (default: GET)"},
+            "method": {
+                "type": "string",
+                "enum": ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"],
+                "description": "HTTP method (default: GET)",
+            },
             "url": {"type": "string", "description": "API endpoint URL"},
             "headers": {"type": "object", "description": "Request headers"},
             "body": {"description": "Request body (dict, list, or string)"},

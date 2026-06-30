@@ -192,7 +192,11 @@ def _run(input_data: dict, context) -> ToolResult:
         use_shell=use_shell,
         background_shell=background_shell,
     )
-    force_prompt_reason = None if use_shell or known_command else f"Unknown command '{normalized_command}' is not in the built-in read-only/development set"
+    force_prompt_reason = (
+        None
+        if use_shell or known_command
+        else f"Unknown command '{normalized_command}' is not in the built-in read-only/development set"
+    )
 
     if context.permissions is not None:
         if force_prompt_reason:
@@ -245,7 +249,7 @@ def _run(input_data: dict, context) -> ToolResult:
             capture_output=True,
             text=True,
             encoding="utf-8",  # explicitly specify UTF-8
-            errors="replace",   # replace undecodable characters instead of raising
+            errors="replace",  # replace undecodable characters instead of raising
             check=False,
             timeout=COMMAND_TIMEOUT,
         )
@@ -261,7 +265,11 @@ def _run(input_data: dict, context) -> ToolResult:
 run_command_tool = ToolDefinition(
     name="run_command",
     description="Run a common development command from an allowlist.",
-    input_schema={"type": "object", "properties": {"command": {"type": "string"}, "args": {"type": "array"}, "cwd": {"type": "string"}}, "required": ["command"]},
+    input_schema={
+        "type": "object",
+        "properties": {"command": {"type": "string"}, "args": {"type": "array"}, "cwd": {"type": "string"}},
+        "required": ["command"],
+    },
     validator=_validate,
     run=_run,
 )

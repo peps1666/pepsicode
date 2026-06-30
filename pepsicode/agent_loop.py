@@ -33,9 +33,7 @@ def _snip_tool_outputs(messages: list[ChatMessage]) -> list[ChatMessage]:
     subsequent passes.  The most recent ``SNIP_PROTECT_RECENT`` tool results
     are left at full fidelity so the model sees what it just did.
     """
-    tool_result_indices = [
-        i for i, m in enumerate(messages) if m.get("role") == "tool_result"
-    ]
+    tool_result_indices = [i for i, m in enumerate(messages) if m.get("role") == "tool_result"]
     if len(tool_result_indices) <= SNIP_PROTECT_RECENT:
         return messages
     protected = set(tool_result_indices[-SNIP_PROTECT_RECENT:])
@@ -66,6 +64,7 @@ def _snip_tool_outputs(messages: list[ChatMessage]) -> list[ChatMessage]:
             "content": "\n".join([*head, f"[snipped {removed} lines]", *tail]),
         }
     return messages
+
 
 # Constants: reusable nudge/prompt text
 NUDGE_CONTINUE = (
@@ -107,7 +106,9 @@ def _is_empty_assistant_response(content: str) -> bool:
     return len(content.strip()) == 0
 
 
-def _format_diagnostics(stop_reason: str | None, block_types: list[str] | None, ignored_block_types: list[str] | None) -> str:
+def _format_diagnostics(
+    stop_reason: str | None, block_types: list[str] | None, ignored_block_types: list[str] | None
+) -> str:
     parts: list[str] = []
     if stop_reason:
         parts.append(f"stop_reason={stop_reason}")
@@ -118,7 +119,9 @@ def _format_diagnostics(stop_reason: str | None, block_types: list[str] | None, 
     return f" Diagnostics: {'; '.join(parts)}." if parts else ""
 
 
-def _is_recoverable_thinking_stop(*, is_empty: bool, stop_reason: str | None, block_types: list[str] | None, ignored_block_types: list[str] | None) -> bool:
+def _is_recoverable_thinking_stop(
+    *, is_empty: bool, stop_reason: str | None, block_types: list[str] | None, ignored_block_types: list[str] | None
+) -> bool:
     if not is_empty:
         return False
     if stop_reason not in {"pause_turn", "max_tokens"}:
@@ -170,8 +173,7 @@ def _execute_calls_in_order(
                     on_tool_start(calls[k]["toolName"], calls[k]["input"])
             with ThreadPoolExecutor(max_workers=min(MAX_PARALLEL_TOOLS, len(run))) as pool:
                 future_by_index = {
-                    k: pool.submit(tools.execute, calls[k]["toolName"], calls[k]["input"], context)
-                    for k in run
+                    k: pool.submit(tools.execute, calls[k]["toolName"], calls[k]["input"], context) for k in run
                 }
                 for k in run:
                     results[k] = future_by_index[k].result()
@@ -214,8 +216,9 @@ def run_agent_turn(
     if context_manager:
         context_manager.messages = current_messages
         stats = context_manager.get_stats()
-        logger.info("Context: %d tokens (%.0f%%), %d messages",
-                   stats.total_tokens, stats.usage_percentage, stats.messages_count)
+        logger.info(
+            "Context: %d tokens (%.0f%%), %d messages", stats.total_tokens, stats.usage_percentage, stats.messages_count
+        )
 
         # Auto-compact if usage is near the limit
         if context_manager.should_auto_compact():
@@ -239,7 +242,9 @@ def run_agent_turn(
             # than failing the turn (mirrors Claude Code's 400/413 handling).
             if context_manager is not None and overflow_retry_count < 3:
                 overflow_retry_count += 1
-                logger.warning("Context overflow (%s); compacting and retrying (attempt %d)", error, overflow_retry_count)
+                logger.warning(
+                    "Context overflow (%s); compacting and retrying (attempt %d)", error, overflow_retry_count
+                )
                 context_manager.messages = current_messages
                 current_messages = context_manager.compact_messages(force=True)
                 if on_progress_message:
@@ -289,12 +294,12 @@ def run_agent_turn(
         if next_step.type == "assistant":
             is_empty = _is_empty_assistant_response(next_step.content)
             if not is_empty and _should_treat_assistant_as_progress(
-                kind=getattr(next_step, 'kind', None),
+                kind=getattr(next_step, "kind", None),
                 content=next_step.content,
                 saw_tool_result=saw_tool_result,
             ):
                 # Preserve thinking blocks before progress message
-                thinking_blocks = getattr(next_step, 'thinkingBlocks', None)
+                thinking_blocks = getattr(next_step, "thinkingBlocks", None)
                 if thinking_blocks:
                     current_messages.append({"role": "assistant_thinking", "blocks": thinking_blocks})
                 if on_progress_message:
@@ -305,7 +310,7 @@ def run_agent_turn(
                         "role": "user",
                         "content": (
                             NUDGE_AFTER_TOOL_RESULT
-                            if saw_tool_result and getattr(next_step, 'kind', None) != "progress"
+                            if saw_tool_result and getattr(next_step, "kind", None) != "progress"
                             else NUDGE_CONTINUE
                         ),
                     }
@@ -314,16 +319,19 @@ def run_agent_turn(
 
             diagnostics = next_step.diagnostics
 
-            if _is_recoverable_thinking_stop(
-                is_empty=is_empty,
-                stop_reason=diagnostics.stopReason if diagnostics else None,
-                block_types=diagnostics.blockTypes if diagnostics else None,
-                ignored_block_types=diagnostics.ignoredBlockTypes if diagnostics else None,
-            ) and recoverable_thinking_retry_count < 3:
+            if (
+                _is_recoverable_thinking_stop(
+                    is_empty=is_empty,
+                    stop_reason=diagnostics.stopReason if diagnostics else None,
+                    block_types=diagnostics.blockTypes if diagnostics else None,
+                    ignored_block_types=diagnostics.ignoredBlockTypes if diagnostics else None,
+                )
+                and recoverable_thinking_retry_count < 3
+            ):
                 recoverable_thinking_retry_count += 1
                 stop_reason = diagnostics.stopReason if diagnostics else None
                 # Preserve thinking blocks from the interrupted response
-                thinking_blocks = getattr(next_step, 'thinkingBlocks', None)
+                thinking_blocks = getattr(next_step, "thinkingBlocks", None)
                 if thinking_blocks:
                     current_messages.append({"role": "assistant_thinking", "blocks": thinking_blocks})
                 progress_content = (
@@ -337,11 +345,7 @@ def run_agent_turn(
                 current_messages.append(
                     {
                         "role": "user",
-                        "content": (
-                            RESUME_AFTER_PAUSE
-                            if stop_reason == "pause_turn"
-                            else RESUME_AFTER_MAX_TOKENS
-                        ),
+                        "content": (RESUME_AFTER_PAUSE if stop_reason == "pause_turn" else RESUME_AFTER_MAX_TOKENS),
                     }
                 )
                 continue
@@ -351,11 +355,7 @@ def run_agent_turn(
                 current_messages.append(
                     {
                         "role": "user",
-                        "content": (
-                            NUDGE_AFTER_EMPTY_RESPONSE
-                            if saw_tool_result
-                            else NUDGE_AFTER_EMPTY_NO_TOOLS
-                        ),
+                        "content": (NUDGE_AFTER_EMPTY_RESPONSE if saw_tool_result else NUDGE_AFTER_EMPTY_NO_TOOLS),
                     }
                 )
                 continue
@@ -377,14 +377,14 @@ def run_agent_turn(
                 if on_assistant_message:
                     on_assistant_message(fallback)
                 # Preserve thinking blocks even on empty response
-                thinking_blocks = getattr(next_step, 'thinkingBlocks', None)
+                thinking_blocks = getattr(next_step, "thinkingBlocks", None)
                 if thinking_blocks:
                     current_messages.append({"role": "assistant_thinking", "blocks": thinking_blocks})
                 current_messages.append({"role": "assistant", "content": fallback})
                 return current_messages
 
             # Preserve thinking blocks before final assistant response
-            thinking_blocks = getattr(next_step, 'thinkingBlocks', None)
+            thinking_blocks = getattr(next_step, "thinkingBlocks", None)
             if thinking_blocks:
                 current_messages.append({"role": "assistant_thinking", "blocks": thinking_blocks})
             if on_assistant_message:
@@ -393,7 +393,7 @@ def run_agent_turn(
             return current_messages
 
         # Preserve thinking blocks before tool call messages (always, even without content)
-        thinking_blocks = getattr(next_step, 'thinkingBlocks', None)
+        thinking_blocks = getattr(next_step, "thinkingBlocks", None)
         if thinking_blocks:
             current_messages.append({"role": "assistant_thinking", "blocks": thinking_blocks})
 
@@ -438,7 +438,7 @@ def run_agent_turn(
         )
 
         await_user_result = None
-        for call, result in zip(next_step.calls, results):
+        for call, result in zip(next_step.calls, results, strict=False):
             saw_tool_result = True
             if not result.ok:
                 tool_error_count += 1
@@ -510,6 +510,7 @@ def _accumulate_stream_tokens(
                 if current_tool is not None and current_input_json:
                     try:
                         import json as _json
+
                         current_tool["input"] = _json.loads(current_input_json)
                     except Exception:  # noqa: BLE001
                         current_tool["input"] = current_input_json
@@ -532,6 +533,7 @@ def _accumulate_stream_tokens(
         if current_input_json:
             try:
                 import json as _json
+
                 current_tool["input"] = _json.loads(current_input_json)
             except Exception:  # noqa: BLE001
                 current_tool["input"] = current_input_json
@@ -608,10 +610,11 @@ def run_agent_turn_stream(
                 # Fallback non-stream (kept as reference; can be removed later)
                 next_step = model.next(current_messages)
                 text_content = next_step.content
-                parsed_calls = [
-                    {"id": c["id"], "toolName": c["toolName"], "input": c.get("input")}
-                    for c in next_step.calls
-                ] if next_step.calls else None
+                parsed_calls = (
+                    [{"id": c["id"], "toolName": c["toolName"], "input": c.get("input")} for c in next_step.calls]
+                    if next_step.calls
+                    else None
+                )
 
         except KeyboardInterrupt:
             raise
@@ -620,7 +623,8 @@ def run_agent_turn_stream(
                 overflow_retry_count += 1
                 logger.warning(
                     "Context overflow (%s); compacting and retrying (attempt %d)",
-                    error, overflow_retry_count,
+                    error,
+                    overflow_retry_count,
                 )
                 context_manager.messages = current_messages
                 current_messages = context_manager.compact_messages(force=True)
@@ -677,10 +681,7 @@ def run_agent_turn_stream(
             current_messages.append(
                 {
                     "role": "user",
-                    "content": (
-                        NUDGE_AFTER_EMPTY_RESPONSE if saw_tool_result
-                        else NUDGE_AFTER_EMPTY_NO_TOOLS
-                    ),
+                    "content": (NUDGE_AFTER_EMPTY_RESPONSE if saw_tool_result else NUDGE_AFTER_EMPTY_NO_TOOLS),
                 }
             )
             continue
@@ -702,30 +703,38 @@ def run_agent_turn_stream(
 
             # Record the tool-call messages.
             for call in parsed_calls:
-                current_messages.append({
-                    "role": "assistant_tool_call",
-                    "toolUseId": call["id"],
-                    "toolName": call["toolName"],
-                    "input": call.get("input"),
-                })
+                current_messages.append(
+                    {
+                        "role": "assistant_tool_call",
+                        "toolUseId": call["id"],
+                        "toolName": call["toolName"],
+                        "input": call.get("input"),
+                    }
+                )
 
             context = ToolContext(cwd=cwd, permissions=permissions)
             results = _execute_calls_in_order(
-                parsed_calls, tools, context, on_tool_start, on_tool_result,
+                parsed_calls,
+                tools,
+                context,
+                on_tool_start,
+                on_tool_result,
             )
 
             await_user_result = None
-            for call, result in zip(parsed_calls, results):
+            for call, result in zip(parsed_calls, results, strict=False):
                 saw_tool_result = True
                 if not result.ok:
                     tool_error_count += 1
-                current_messages.append({
-                    "role": "tool_result",
-                    "toolUseId": call["id"],
-                    "toolName": call["toolName"],
-                    "content": result.output,
-                    "isError": not result.ok,
-                })
+                current_messages.append(
+                    {
+                        "role": "tool_result",
+                        "toolUseId": call["id"],
+                        "toolName": call["toolName"],
+                        "content": result.output,
+                        "isError": not result.ok,
+                    }
+                )
                 if result.awaitUser and await_user_result is None:
                     await_user_result = result
 

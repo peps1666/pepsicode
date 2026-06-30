@@ -11,6 +11,7 @@ from pepsicode.tooling import ToolDefinition, ToolResult
 # Docker Helpers
 # ---------------------------------------------------------------------------
 
+
 def _run_docker_command(args: list[str], timeout: int = 30) -> tuple[bool, str, str]:
     """Run a docker command and return result."""
     cmd = ["docker"] + args
@@ -84,7 +85,9 @@ def _format_container_list(containers: list[dict[str, Any]]) -> str:
         ports = c.get("ports", "")
         image = c.get("image", "")
 
-        line = f"{container_id:<{id_width}} {name:<{name_width}} {status:<{status_width}} {ports:<{ports_width}} {image}"
+        line = (
+            f"{container_id:<{id_width}} {name:<{name_width}} {status:<{status_width}} {ports:<{ports_width}} {image}"
+        )
         lines.append(line)
 
     lines.append("")
@@ -97,7 +100,7 @@ def _parse_container_ps(output: str) -> list[dict[str, Any]]:
     """Parse docker ps output into structured data."""
     containers = []
 
-    lines = output.strip().split('\n')
+    lines = output.strip().split("\n")
     if len(lines) < 2:
         return containers
 
@@ -105,15 +108,17 @@ def _parse_container_ps(output: str) -> list[dict[str, Any]]:
     for line in lines[1:]:
         parts = line.split()
         if len(parts) >= 7:
-            containers.append({
-                "id": parts[0],
-                "image": parts[1],
-                "command": ' '.join(parts[2:4]).strip('"'),
-                "created": parts[4],
-                "status": ' '.join(parts[5:7]),
-                "name": parts[-1] if len(parts) > 7 else "",
-                "ports": "",
-            })
+            containers.append(
+                {
+                    "id": parts[0],
+                    "image": parts[1],
+                    "command": " ".join(parts[2:4]).strip('"'),
+                    "created": parts[4],
+                    "status": " ".join(parts[5:7]),
+                    "name": parts[-1] if len(parts) > 7 else "",
+                    "ports": "",
+                }
+            )
 
     return containers
 
@@ -122,10 +127,13 @@ def _parse_container_ps(output: str) -> list[dict[str, Any]]:
 # Tool Implementation
 # ---------------------------------------------------------------------------
 
+
 def _validate(input_data: dict) -> dict:
     action = input_data.get("action")
     if action not in ("ps", "logs", "exec", "compose_ps", "compose_logs", "compose_up", "compose_down", "info"):
-        raise ValueError("action must be one of: ps, logs, exec, compose_ps, compose_logs, compose_up, compose_down, info")
+        raise ValueError(
+            "action must be one of: ps, logs, exec, compose_ps, compose_logs, compose_up, compose_down, info"
+        )
 
     container = input_data.get("container")
     command = input_data.get("command")
@@ -178,7 +186,11 @@ def _run(input_data: dict, context) -> ToolResult:
         if action == "ps":
             # List containers
             success, stdout, stderr = _run_docker_command(
-                ["ps", "--format", "{{.ID}}\t{{.Image}}\t{{.Command}}\t{{.CreatedAt}}\t{{.Status}}\t{{.Ports}}\t{{.Names}}"],
+                [
+                    "ps",
+                    "--format",
+                    "{{.ID}}\t{{.Image}}\t{{.Command}}\t{{.CreatedAt}}\t{{.Status}}\t{{.Ports}}\t{{.Names}}",
+                ],
                 timeout,
             )
 
@@ -328,7 +340,10 @@ docker_helper_tool = ToolDefinition(
             "service": {"type": "string", "description": "Service name (required for compose actions)"},
             "tail": {"type": "number", "description": "Number of log lines to show (default: 100)"},
             "timeout": {"type": "number", "description": "Timeout in seconds (default: 30)"},
-            "project_dir": {"type": "string", "description": "Docker Compose project directory (default: current directory)"},
+            "project_dir": {
+                "type": "string",
+                "description": "Docker Compose project directory (default: current directory)",
+            },
         },
         "required": ["action"],
     },

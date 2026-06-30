@@ -48,7 +48,7 @@ SYSTEM_PROMPT_RESERVED = 1
 
 import re
 
-_CJK_PATTERN = re.compile(r'[\u4E00-\u9FFF\u3040-\u309F\u30A0-\u30FF\uAC00-\uD7AF]')
+_CJK_PATTERN = re.compile(r"[\u4E00-\u9FFF\u3040-\u309F\u30A0-\u30FF\uAC00-\uD7AF]")
 
 
 def estimate_tokens(text: str) -> int:
@@ -182,9 +182,11 @@ def _heuristic_summary(messages: list[dict[str, Any]]) -> str:
 # Context tracking
 # ---------------------------------------------------------------------------
 
+
 @dataclass
 class ContextStats:
     """Current context window statistics."""
+
     total_tokens: int = 0
     context_window: int = 0
     usage_percentage: float = 0.0
@@ -199,6 +201,7 @@ class ContextStats:
 @dataclass
 class ContextManager:
     """Manages context window tracking and auto-compaction."""
+
     model: str = "default"
     context_window: int = 0
     messages: list[dict[str, Any]] = field(default_factory=list)
@@ -213,9 +216,7 @@ class ContextManager:
 
     def __post_init__(self):
         if self.context_window == 0:
-            self.context_window = DEFAULT_CONTEXT_WINDOWS.get(
-                self.model, DEFAULT_CONTEXT_WINDOWS["default"]
-            )
+            self.context_window = DEFAULT_CONTEXT_WINDOWS.get(self.model, DEFAULT_CONTEXT_WINDOWS["default"])
 
     def update_usage(self, input_tokens: int, output_tokens: int) -> None:
         """Record real token usage reported by the API for the latest call."""
@@ -242,13 +243,10 @@ class ContextManager:
                 pass
         return _heuristic_summary(dropped)
 
-
     def update_model(self, model: str) -> None:
         """Update model and adjust context window."""
         self.model = model
-        self.context_window = DEFAULT_CONTEXT_WINDOWS.get(
-            model, DEFAULT_CONTEXT_WINDOWS["default"]
-        )
+        self.context_window = DEFAULT_CONTEXT_WINDOWS.get(model, DEFAULT_CONTEXT_WINDOWS["default"])
 
     def add_message(self, message: dict[str, Any]) -> None:
         """Add a message and update tracking."""
@@ -327,21 +325,12 @@ class ContextManager:
         # real-system set so empty/no-op markers cannot accumulate; genuine
         # markers (which carry summaries) are re-added below only when work is
         # done.
-        system_messages = [
-            m for m in self.messages
-            if m.get("role") == "system" and not m.get("_compaction_marker")
-        ]
-        prior_markers = [
-            m for m in self.messages
-            if m.get("role") == "system" and m.get("_compaction_marker")
-        ]
+        system_messages = [m for m in self.messages if m.get("role") == "system" and not m.get("_compaction_marker")]
+        prior_markers = [m for m in self.messages if m.get("role") == "system" and m.get("_compaction_marker")]
         other_messages = [m for m in self.messages if m.get("role") != "system"]
 
         # Remove old progress messages first
-        filtered = [
-            m for m in other_messages
-            if m.get("role") != "assistant_progress"
-        ]
+        filtered = [m for m in other_messages if m.get("role") != "assistant_progress"]
         progress_removed = len(other_messages) - len(filtered)
 
         # If still too large, drop oldest messages one at a time, recording
@@ -355,10 +344,9 @@ class ContextManager:
                 role = filtered[i].get("role")
                 # Drop tool-call + its result as a pair
                 if role == "assistant_tool_call":
-                    if (i + 1 < len(filtered) and
-                            filtered[i + 1].get("role") == "tool_result"):
-                        dropped.extend(filtered[i:i + 2])
-                        del filtered[i:i + 2]
+                    if i + 1 < len(filtered) and filtered[i + 1].get("role") == "tool_result":
+                        dropped.extend(filtered[i : i + 2])
+                        del filtered[i : i + 2]
                     else:
                         dropped.append(filtered[i])
                         del filtered[i]
@@ -383,12 +371,8 @@ class ContextManager:
         # Repair tool_use/tool_result pairing.  Positional dropping above can
         # leave a tool_result whose assistant_tool_call was dropped (or vice
         # versa); Anthropic rejects such orphans with a 400.  Pair by id.
-        call_ids = {
-            m.get("toolUseId") for m in filtered if m.get("role") == "assistant_tool_call"
-        }
-        result_ids = {
-            m.get("toolUseId") for m in filtered if m.get("role") == "tool_result"
-        }
+        call_ids = {m.get("toolUseId") for m in filtered if m.get("role") == "assistant_tool_call"}
+        result_ids = {m.get("toolUseId") for m in filtered if m.get("role") == "tool_result"}
         repaired = []
         for m in filtered:
             role = m.get("role")
@@ -426,12 +410,14 @@ class ContextManager:
         compacted = system_messages + prior_markers + [compaction_marker] + filtered
 
         # Record compaction
-        self.compaction_history.append({
-            "timestamp": time.time(),
-            "before_tokens": stats.total_tokens,
-            "after_tokens": estimate_messages_tokens(compacted),
-            "messages_removed": max(0, stats.messages_count - len(compacted)),
-        })
+        self.compaction_history.append(
+            {
+                "timestamp": time.time(),
+                "before_tokens": stats.total_tokens,
+                "after_tokens": estimate_messages_tokens(compacted),
+                "messages_removed": max(0, stats.messages_count - len(compacted)),
+            }
+        )
 
         self.messages = compacted
         # The stale API token count described the pre-compaction payload; clear
@@ -495,6 +481,7 @@ class ContextManager:
 # ---------------------------------------------------------------------------
 # Persistence
 # ---------------------------------------------------------------------------
+
 
 def save_context_state(manager: ContextManager) -> None:
     """Save context manager state to disk."""

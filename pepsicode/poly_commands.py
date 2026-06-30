@@ -23,15 +23,18 @@ from pepsicode.state import AppState, Store
 # Command types
 # ---------------------------------------------------------------------------
 
+
 class CommandType(str, Enum):
     """Command execution types (inspired by Claude Code)."""
-    PROMPT = "prompt"           # Expands into system prompt
-    LOCAL = "local"             # Executes and returns result
-    INTERACTIVE = "interactive" # Interactive UI mode
+
+    PROMPT = "prompt"  # Expands into system prompt
+    LOCAL = "local"  # Executes and returns result
+    INTERACTIVE = "interactive"  # Interactive UI mode
 
 
 class CommandAvailability(str, Enum):
     """Command availability contexts."""
+
     CLAUDE_AI = "claude-ai"
     CONSOLE = "console"
     TTY = "tty"
@@ -42,12 +45,14 @@ class CommandAvailability(str, Enum):
 # Command metadata
 # ---------------------------------------------------------------------------
 
+
 @dataclass
 class CommandMetadata:
     """Command metadata for discovery and filtering.
-    
+
     Inspired by Claude Code's CommandBase type.
     """
+
     name: str
     description: str
     usage: str = ""
@@ -71,6 +76,7 @@ class CommandMetadata:
 # ---------------------------------------------------------------------------
 # Command base classes
 # ---------------------------------------------------------------------------
+
 
 class CommandBase(ABC):
     """Abstract base for all commands."""
@@ -118,9 +124,10 @@ class CommandResult:
 # Local commands (direct execution)
 # ---------------------------------------------------------------------------
 
+
 class LocalCommand(CommandBase):
     """Local command that executes and returns result.
-    
+
     Inspired by Claude Code's LocalCommand type.
     """
 
@@ -149,9 +156,10 @@ class LocalCommand(CommandBase):
 # Prompt commands (expand into system prompt)
 # ---------------------------------------------------------------------------
 
+
 class PromptCommand(CommandBase):
     """Prompt command that expands into system prompt.
-    
+
     Inspired by Claude Code's PromptCommand type.
     """
 
@@ -180,9 +188,10 @@ class PromptCommand(CommandBase):
 # Interactive commands (UI mode)
 # ---------------------------------------------------------------------------
 
+
 class InteractiveCommand(CommandBase):
     """Interactive command with UI mode.
-    
+
     Inspired by Claude Code's LocalJSXCommand type.
     """
 
@@ -211,9 +220,10 @@ class InteractiveCommand(CommandBase):
 # Command Registry
 # ---------------------------------------------------------------------------
 
+
 class CommandRegistry:
     """Registry for polyorphic commands.
-    
+
     Inspired by Claude Code's command loading system.
     """
 
@@ -251,10 +261,7 @@ class CommandRegistry:
                 pass
 
         # Filter by availability
-        return [
-            cmd for cmd in self._commands.values()
-            if cmd.meets_availability(mode)
-        ]
+        return [cmd for cmd in self._commands.values() if cmd.meets_availability(mode)]
 
     async def execute(
         self,
@@ -277,16 +284,17 @@ class CommandRegistry:
 # Built-in command factory
 # ---------------------------------------------------------------------------
 
+
 def create_builtin_commands(
     app_state: Store[AppState] | None = None,
     cost_tracker: Any = None,
 ) -> list[CommandBase]:
     """Create all built-in commands.
-    
+
     Args:
         app_state: Application state store
         cost_tracker: Cost tracker instance
-    
+
     Returns:
         List of built-in commands
     """
@@ -299,34 +307,39 @@ def create_builtin_commands(
             return cost_tracker.format_cost_report(detailed=detailed)
         return "Cost tracking not initialized."
 
-    commands.append(LocalCommand(
-        metadata=CommandMetadata(
-            name="/cost",
-            description="Show API cost and usage report",
-            usage="/cost [--detailed]",
-            aliases=["/cost-report"],
-            tags=["cost", "usage"],
-        ),
-        handler=cost_handler,
-    ))
+    commands.append(
+        LocalCommand(
+            metadata=CommandMetadata(
+                name="/cost",
+                description="Show API cost and usage report",
+                usage="/cost [--detailed]",
+                aliases=["/cost-report"],
+                tags=["cost", "usage"],
+            ),
+            handler=cost_handler,
+        )
+    )
 
     # /status - Show app state summary
     def status_handler(args: str, context: dict) -> str:
         if app_state:
             from pepsicode.state import format_app_state_summary
+
             return format_app_state_summary(app_state.get_state())
         return "App state not initialized."
 
-    commands.append(LocalCommand(
-        metadata=CommandMetadata(
-            name="/status",
-            description="Show application state summary",
-            usage="/status",
-            aliases=["/state"],
-            tags=["status", "state"],
-        ),
-        handler=status_handler,
-    ))
+    commands.append(
+        LocalCommand(
+            metadata=CommandMetadata(
+                name="/status",
+                description="Show application state summary",
+                usage="/status",
+                aliases=["/state"],
+                tags=["status", "state"],
+            ),
+            handler=status_handler,
+        )
+    )
 
     # /context - Show context window usage
     def context_handler(args: str, context: dict) -> str:
@@ -351,42 +364,48 @@ def create_builtin_commands(
             return "\n".join(lines)
         return "Context tracking not initialized."
 
-    commands.append(LocalCommand(
-        metadata=CommandMetadata(
-            name="/context",
-            description="Show context window usage",
-            usage="/context",
-            aliases=["/ctx"],
-            tags=["context", "tokens"],
-        ),
-        handler=context_handler,
-    ))
+    commands.append(
+        LocalCommand(
+            metadata=CommandMetadata(
+                name="/context",
+                description="Show context window usage",
+                usage="/context",
+                aliases=["/ctx"],
+                tags=["context", "tokens"],
+            ),
+            handler=context_handler,
+        )
+    )
 
     # /memory - Show memory status
     def memory_handler(args: str, context: dict) -> str:
         try:
             from pepsicode.memory import MemoryManager
+
             workspace = context.get("workspace", ".")
             mm = MemoryManager(workspace)
             return mm.format_stats()
         except Exception as e:
             return f"Memory system error: {e}"
 
-    commands.append(LocalCommand(
-        metadata=CommandMetadata(
-            name="/memory",
-            description="Show memory system status",
-            usage="/memory",
-            aliases=["/mem"],
-            tags=["memory"],
-        ),
-        handler=memory_handler,
-    ))
+    commands.append(
+        LocalCommand(
+            metadata=CommandMetadata(
+                name="/memory",
+                description="Show memory system status",
+                usage="/memory",
+                aliases=["/mem"],
+                tags=["memory"],
+            ),
+            handler=memory_handler,
+        )
+    )
 
     # /tasks - Show task list
     def tasks_handler(args: str, context: dict) -> str:
         try:
             from pepsicode.task_tracker import TaskManager
+
             tm = TaskManager()
             if tm.active_list:
                 return tm.format_details()
@@ -394,15 +413,17 @@ def create_builtin_commands(
         except Exception as e:
             return f"Task system error: {e}"
 
-    commands.append(LocalCommand(
-        metadata=CommandMetadata(
-            name="/tasks",
-            description="Show current task list",
-            usage="/tasks",
-            aliases=["/task"],
-            tags=["tasks", "progress"],
-        ),
-        handler=tasks_handler,
-    ))
+    commands.append(
+        LocalCommand(
+            metadata=CommandMetadata(
+                name="/tasks",
+                description="Show current task list",
+                usage="/tasks",
+                aliases=["/task"],
+                tags=["tasks", "progress"],
+            ),
+            handler=tasks_handler,
+        )
+    )
 
     return commands

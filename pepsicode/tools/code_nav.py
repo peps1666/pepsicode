@@ -11,6 +11,7 @@ from pepsicode.tooling import ToolDefinition, ToolResult
 # AST Analysis Helpers
 # ---------------------------------------------------------------------------
 
+
 def _get_symbol_type(node: ast.AST) -> str | None:
     """Get symbol type from AST node."""
     if isinstance(node, ast.ClassDef):
@@ -81,15 +82,17 @@ def _extract_symbols_from_file(file_path: Path) -> list[dict[str, Any]]:
                 except Exception:
                     bases.append("?")
 
-        symbols.append({
-            "type": symbol_type,
-            "name": name,
-            "line": lineno,
-            "docstring": docstring_preview,
-            "args": args if symbol_type == "function" else [],
-            "decorators": decorators,
-            "bases": bases if symbol_type == "class" else [],
-        })
+        symbols.append(
+            {
+                "type": symbol_type,
+                "name": name,
+                "line": lineno,
+                "docstring": docstring_preview,
+                "args": args if symbol_type == "function" else [],
+                "decorators": decorators,
+                "bases": bases if symbol_type == "class" else [],
+            }
+        )
 
     return symbols
 
@@ -118,12 +121,14 @@ def _find_symbol_references(file_path: Path, symbol_name: str) -> list[dict[str,
             end = min(len(lines), i + 2)
             context = "\n".join(lines[start:end])
 
-            references.append({
-                "file": str(file_path),
-                "line": i,
-                "code": line.strip()[:100],
-                "context": context,
-            })
+            references.append(
+                {
+                    "file": str(file_path),
+                    "line": i,
+                    "code": line.strip()[:100],
+                    "context": context,
+                }
+            )
 
     return references
 
@@ -131,6 +136,7 @@ def _find_symbol_references(file_path: Path, symbol_name: str) -> list[dict[str,
 # ---------------------------------------------------------------------------
 # Tool Implementations
 # ---------------------------------------------------------------------------
+
 
 def _validate_find_symbols(input_data: dict) -> dict:
     path = input_data.get("path", ".")
@@ -332,7 +338,11 @@ find_symbols_tool = ToolDefinition(
         "type": "object",
         "properties": {
             "path": {"type": "string", "description": "File or directory path to search (default: current directory)"},
-            "symbol_type": {"type": "string", "enum": ["all", "class", "function", "variable"], "description": "Filter by symbol type (default: all)"},
+            "symbol_type": {
+                "type": "string",
+                "enum": ["all", "class", "function", "variable"],
+                "description": "Filter by symbol type (default: all)",
+            },
         },
     },
     validator=_validate_find_symbols,

@@ -11,10 +11,11 @@ from pepsicode.tooling import ToolDefinition, ToolResult
 # Database Explorer Helpers
 # ---------------------------------------------------------------------------
 
+
 def _parse_connection_string(conn_string: str) -> dict[str, Any]:
     """Parse database connection string."""
     # Support SQLite: sqlite:///path/to/db.db
-    sqlite_match = re.match(r'sqlite:///(.+)', conn_string)
+    sqlite_match = re.match(r"sqlite:///(.+)", conn_string)
     if sqlite_match:
         return {
             "type": "sqlite",
@@ -22,7 +23,7 @@ def _parse_connection_string(conn_string: str) -> dict[str, Any]:
         }
 
     # Support SQLite relative path: sqlite://db.db
-    sqlite_relative = re.match(r'sqlite://(.+)', conn_string)
+    sqlite_relative = re.match(r"sqlite://(.+)", conn_string)
     if sqlite_relative:
         return {
             "type": "sqlite",
@@ -69,14 +70,16 @@ def _get_table_schema(conn: Any, table_name: str) -> list[dict[str, Any]]:
 
     columns = []
     for row in cursor.fetchall():
-        columns.append({
-            "cid": row[0],
-            "name": row[1],
-            "type": row[2],
-            "notnull": bool(row[3]),
-            "default": row[4],
-            "pk": bool(row[5]),
-        })
+        columns.append(
+            {
+                "cid": row[0],
+                "name": row[1],
+                "type": row[2],
+                "notnull": bool(row[3]),
+                "default": row[4],
+                "pk": bool(row[5]),
+            }
+        )
 
     return columns
 
@@ -95,11 +98,13 @@ def _get_table_indexes(conn: Any, table_name: str) -> list[dict[str, Any]]:
 
     indexes = []
     for row in cursor.fetchall():
-        indexes.append({
-            "seq": row[0],
-            "name": row[1],
-            "unique": bool(row[2]),
-        })
+        indexes.append(
+            {
+                "seq": row[0],
+                "name": row[1],
+                "unique": bool(row[2]),
+            }
+        )
 
     return indexes
 
@@ -144,6 +149,7 @@ def _format_schema_output(tables: list[str], schemas: dict, row_counts: dict, in
 # ---------------------------------------------------------------------------
 # Tool Implementation
 # ---------------------------------------------------------------------------
+
 
 def _validate(input_data: dict) -> dict:
     connection = input_data.get("connection")
@@ -307,8 +313,7 @@ def _run(input_data: dict, context) -> ToolResult:
                 # Print rows
                 for row_dict in row_strs:
                     row_str = " | ".join(
-                        str(row_dict.get(col, ""))[:50].ljust(min(col_widths[col], 20))
-                        for col in columns
+                        str(row_dict.get(col, ""))[:50].ljust(min(col_widths[col], 20)) for col in columns
                     )
                     lines.append(row_str)
 
@@ -329,8 +334,15 @@ db_explorer_tool = ToolDefinition(
     input_schema={
         "type": "object",
         "properties": {
-            "connection": {"type": "string", "description": "Database connection string (e.g., 'sqlite:///app.db' or 'sqlite://app.db')"},
-            "action": {"type": "string", "enum": ["explore", "schema", "query"], "description": "Action to perform (default: explore)"},
+            "connection": {
+                "type": "string",
+                "description": "Database connection string (e.g., 'sqlite:///app.db' or 'sqlite://app.db')",
+            },
+            "action": {
+                "type": "string",
+                "enum": ["explore", "schema", "query"],
+                "description": "Action to perform (default: explore)",
+            },
             "query": {"type": "string", "description": "SQL SELECT query (required when action is 'query')"},
             "table": {"type": "string", "description": "Table name (required when action is 'schema')"},
             "limit": {"type": "number", "description": "Maximum rows to return (default: 100, max: 1000)"},

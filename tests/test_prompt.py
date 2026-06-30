@@ -9,7 +9,16 @@ def test_build_system_prompt_includes_skills_and_mcp(tmp_path: Path) -> None:
         ["cwd: test"],
         {
             "skills": [{"name": "demo", "description": "demo skill"}],
-            "mcpServers": [{"name": "fake", "status": "connected", "toolCount": 1, "resourceCount": 1, "promptCount": 1, "protocol": "newline-json"}],
+            "mcpServers": [
+                {
+                    "name": "fake",
+                    "status": "connected",
+                    "toolCount": 1,
+                    "resourceCount": 1,
+                    "promptCount": 1,
+                    "protocol": "newline-json",
+                }
+            ],
         },
     )
 
@@ -23,11 +32,7 @@ def test_build_system_prompt_mentions_sequential_thinking_server(tmp_path: Path)
     prompt = build_system_prompt(
         str(tmp_path),
         [],
-        {
-            "mcpServers": [
-                {"name": "SequentialThinking", "status": "connected", "toolCount": 1}
-            ]
-        },
+        {"mcpServers": [{"name": "SequentialThinking", "status": "connected", "toolCount": 1}]},
     )
 
     assert "SEQUENTIAL THINKING MCP SERVER IS CONNECTED" in prompt

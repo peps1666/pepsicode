@@ -21,4 +21,3 @@ ask_user_tool = ToolDefinition(
     validator=_validate,
     run=_run,
 )
-

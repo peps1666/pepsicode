@@ -49,11 +49,7 @@ def _environment_info(cwd_path: Path) -> str:
     if branch:
         lines.append(f"- Git branch: {branch}")
     try:
-        entries = sorted(
-            p.name + ("/" if p.is_dir() else "")
-            for p in cwd_path.iterdir()
-            if not p.name.startswith(".")
-        )
+        entries = sorted(p.name + ("/" if p.is_dir() else "") for p in cwd_path.iterdir() if not p.name.startswith("."))
         if entries:
             preview = ", ".join(entries[:20])
             if len(entries) > 20:
@@ -66,7 +62,7 @@ def _environment_info(cwd_path: Path) -> str:
 
 def _engineering_governance_rules() -> str:
     r"""Return engineering governance rules as system prompt section.
-    
+
     These rules are mandatory and apply to all code generation activities.
     Based on: D:\Desktop\engineering-governance
     """
@@ -234,7 +230,11 @@ def build_system_prompt(
     # Engineering governance rules — OPT-IN only.  Enabled when the project or
     # global config sets "governance": true, or PEPSI_CODE_GOVERNANCE=1.  These
     # rules are project-specific and otherwise inappropriate / token-costly.
-    governance_enabled = bool(extras.get("governance")) or os.environ.get("PEPSI_CODE_GOVERNANCE") in {"1", "true", "True"}
+    governance_enabled = bool(extras.get("governance")) or os.environ.get("PEPSI_CODE_GOVERNANCE") in {
+        "1",
+        "true",
+        "True",
+    }
     if governance_enabled:
         parts.append(_engineering_governance_rules())
 

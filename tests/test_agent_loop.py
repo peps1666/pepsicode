@@ -69,7 +69,12 @@ def test_agent_turn_emits_callbacks() -> None:
     )
     model = ScriptedModel(
         [
-            AgentStep(type="tool_calls", content="working", contentKind="progress", calls=[{"id": "1", "toolName": "echo", "input": {"text": "hi"}}]),
+            AgentStep(
+                type="tool_calls",
+                content="working",
+                contentKind="progress",
+                calls=[{"id": "1", "toolName": "echo", "input": {"text": "hi"}}],
+            ),
             AgentStep(type="assistant", content="done"),
         ]
     )
@@ -194,10 +199,7 @@ def test_agent_turn_retries_empty_response_then_continues() -> None:
     )
 
     assert messages[-1] == {"role": "assistant", "content": "done"}
-    assert any(
-        message["role"] == "user" and "last response was empty" in message["content"]
-        for message in messages
-    )
+    assert any(message["role"] == "user" and "last response was empty" in message["content"] for message in messages)
 
 
 def test_agent_turn_handles_recoverable_pause_turn() -> None:

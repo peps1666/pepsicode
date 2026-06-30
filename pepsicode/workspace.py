@@ -21,4 +21,3 @@ def resolve_tool_path(context: ToolContext, input_path: str, intent: str) -> Pat
             raise PermissionError(f"Path escapes workspace: {input_path}")
 
     return normalized
-

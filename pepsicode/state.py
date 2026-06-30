@@ -20,9 +20,10 @@ T = TypeVar("T")
 # Store
 # ---------------------------------------------------------------------------
 
+
 class Store(Generic[T]):
     """Zustand-style state management.
-    
+
     Provides predictable state updates with subscriber notifications.
     Inspired by Claude Code's Zustand store implementation.
     """
@@ -33,7 +34,7 @@ class Store(Generic[T]):
         on_change: Callable[[T, T], None] | None = None,
     ):
         """Initialize store with initial state.
-        
+
         Args:
             initial_state: Initial state value
             on_change: Optional callback invoked on state changes
@@ -49,7 +50,7 @@ class Store(Generic[T]):
 
     def set_state(self, updater: Callable[[T], T]) -> None:
         """Update state using an updater function.
-        
+
         Args:
             updater: Function that takes current state and returns new state
         """
@@ -77,10 +78,10 @@ class Store(Generic[T]):
 
     def subscribe(self, listener: Callable[[], None]) -> Callable[[], None]:
         """Subscribe to state changes.
-        
+
         Args:
             listener: Callback invoked on state changes
-        
+
         Returns:
             Unsubscribe function
         """
@@ -107,12 +108,14 @@ class Store(Generic[T]):
 # AppState
 # ---------------------------------------------------------------------------
 
+
 @dataclass
 class AppState:
     """Global application state.
-    
+
     Inspired by Claude Code's AppState type.
     """
+
     # Session info
     session_id: str = ""
     workspace: str = ""
@@ -160,16 +163,17 @@ class AppState:
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def create_app_store(
     initial: dict[str, Any] | None = None,
     on_change: Callable[[AppState, AppState], None] | None = None,
 ) -> Store[AppState]:
     """Create a new AppState store.
-    
+
     Args:
         initial: Optional initial state overrides
         on_change: Optional change callback
-    
+
     Returns:
         Store[AppState] instance
     """
@@ -184,10 +188,10 @@ def create_app_store(
 
 def format_app_state_summary(state: AppState) -> str:
     """Format app state as a human-readable summary.
-    
+
     Args:
         state: Current AppState
-    
+
     Returns:
         Formatted summary string
     """
@@ -203,8 +207,7 @@ def format_app_state_summary(state: AppState) -> str:
         "Context:",
         f"  Messages: {state.message_count}",
         f"  Tool calls: {state.tool_call_count}",
-        f"  Tokens: {state.token_usage:,} / {state.context_window_size:,} "
-        f"({state.context_usage_percentage:.1f}%)",
+        f"  Tokens: {state.token_usage:,} / {state.context_window_size:,} " f"({state.context_usage_percentage:.1f}%)",
         "",
         "Cost:",
         f"  Total: ${state.total_cost_usd:.4f}",
@@ -228,21 +231,26 @@ def format_app_state_summary(state: AppState) -> str:
 # State updaters (helper functions)
 # ---------------------------------------------------------------------------
 
+
 def update_message_count(count: int) -> Callable[[AppState], AppState]:
     """Create an updater that sets message count."""
+
     def updater(state: AppState) -> AppState:
         state.message_count = count
         state.update_timestamp()
         return state
+
     return updater
 
 
 def increment_tool_calls() -> Callable[[AppState], AppState]:
     """Create an updater that increments tool call count."""
+
     def updater(state: AppState) -> AppState:
         state.tool_call_count += 1
         state.update_timestamp()
         return state
+
     return updater
 
 
@@ -251,56 +259,64 @@ def update_context_usage(
     window_size: int | None = None,
 ) -> Callable[[AppState], AppState]:
     """Create an updater that updates context usage."""
+
     def updater(state: AppState) -> AppState:
         state.token_usage = tokens
         if window_size is not None:
             state.context_window_size = window_size
         if state.context_window_size > 0:
-            state.context_usage_percentage = (
-                tokens / state.context_window_size * 100
-            )
+            state.context_usage_percentage = tokens / state.context_window_size * 100
         state.update_timestamp()
         return state
+
     return updater
 
 
 def add_cost(cost_usd: float) -> Callable[[AppState], AppState]:
     """Create an updater that adds cost."""
+
     def updater(state: AppState) -> AppState:
         state.total_cost_usd += cost_usd
         state.api_calls += 1
         state.update_timestamp()
         return state
+
     return updater
 
 
 def record_api_error() -> Callable[[AppState], AppState]:
     """Create an updater that records an API error."""
+
     def updater(state: AppState) -> AppState:
         state.api_errors += 1
         state.api_calls += 1
         state.update_timestamp()
         return state
+
     return updater
 
 
 def set_busy(tool_name: str | None = None) -> Callable[[AppState], AppState]:
     """Create an updater that sets busy state."""
+
     def updater(state: AppState) -> AppState:
         state.is_busy = True
         state.active_tool = tool_name
         state.status_message = f"Running {tool_name}..." if tool_name else "Working..."
         state.update_timestamp()
         return state
+
     return updater
 
 
 def set_idle() -> Callable[[AppState], AppState]:
     """Create an updater that sets idle state."""
+
     def updater(state: AppState) -> AppState:
         state.is_busy = False
         state.active_tool = None
         state.status_message = "Ready"
         state.update_timestamp()
         return state
+
     return updater

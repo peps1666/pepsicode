@@ -47,7 +47,11 @@ governance_audit_tool = ToolDefinition(
         "type": "object",
         "properties": {
             "path": {"type": "string", "description": "Path to package root (default: current directory)"},
-            "action": {"type": "string", "enum": ["full", "deps", "sinks"], "description": "Audit type (default: full)"},
+            "action": {
+                "type": "string",
+                "enum": ["full", "deps", "sinks"],
+                "description": "Audit type (default: full)",
+            },
         },
     },
     validator=_validate,

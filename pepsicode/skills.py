@@ -135,4 +135,3 @@ def remove_managed_skill(cwd: str | Path, name: str, scope: str = "user") -> dic
         return {"removed": False, "targetPath": str(target_path)}
     shutil.rmtree(target_path)
     return {"removed": True, "targetPath": str(target_path)}
-

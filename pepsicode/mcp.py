@@ -18,13 +18,29 @@ from pepsicode.tooling import ToolDefinition, ToolResult
 # =============================================================================
 
 # Shell metacharacters forbidden in MCP server arguments to prevent injection
-DANGEROUS_SHELL_CHARS = set('|&;`$(){}<>\n\r')
+DANGEROUS_SHELL_CHARS = set("|&;`$(){}<>\n\r")
 
 # Allowlist of permitted commands (common MCP server commands)
 ALLOWED_COMMANDS = {
-    'node', 'npm', 'npx', 'python', 'python3', 'pip', 'pip3',
-    'uv', 'deno', 'bun', 'cargo', 'go', 'java', 'javac',
-    'ruby', 'gem', 'dotnet', 'curl', 'wget',
+    "node",
+    "npm",
+    "npx",
+    "python",
+    "python3",
+    "pip",
+    "pip3",
+    "uv",
+    "deno",
+    "bun",
+    "cargo",
+    "go",
+    "java",
+    "javac",
+    "ruby",
+    "gem",
+    "dotnet",
+    "curl",
+    "wget",
 }
 
 
@@ -58,10 +74,12 @@ class McpClient(Protocol):
 def _interpolate_env(value: str) -> str:
     """Replace $VAR or ${VAR} with os.environ values."""
     import re
+
     def _replace(match: re.Match[str]) -> str:
         var_name = match.group(1) or match.group(2)
         return os.environ.get(var_name, match.group(0))
-    return re.sub(r'\$([A-Za-z_][A-Za-z0-9_]*)|\$\{([A-Za-z_][A-Za-z0-9_]*)\}', _replace, value)
+
+    return re.sub(r"\$([A-Za-z_][A-Za-z0-9_]*)|\$\{([A-Za-z_][A-Za-z0-9_]*)\}", _replace, value)
 
 
 def _create_client(server_name: str, config: dict[str, Any], cwd: str) -> McpClient:
@@ -101,51 +119,58 @@ def _validate_mcp_command(command: str) -> None:
 
     normalized = Path(command).resolve().as_posix()
 
-    if '..' in normalized or '~' in normalized:
+    if ".." in normalized or "~" in normalized:
         raise RuntimeError("Invalid MCP command: contains path traversal characters")
 
     base_command = Path(command).name.lower()
     # Strip the .exe suffix
-    if base_command.endswith('.exe'):
+    if base_command.endswith(".exe"):
         base_command = base_command[:-4]
 
     if Path(command).is_absolute():
         # Check whether the command lives in a common system directory
         home_posix = str(Path.home().as_posix())
         allowed_system_dirs = [
-            '/usr/bin', '/usr/local/bin', '/usr/local/sbin', '/usr/sbin', '/opt',
+            "/usr/bin",
+            "/usr/local/bin",
+            "/usr/local/sbin",
+            "/usr/sbin",
+            "/opt",
             # macOS Homebrew
-            '/opt/homebrew/bin', '/opt/homebrew/sbin',  # Apple Silicon
-            '/usr/local/Cellar',  # Intel
+            "/opt/homebrew/bin",
+            "/opt/homebrew/sbin",  # Apple Silicon
+            "/usr/local/Cellar",  # Intel
             # Linux extras
-            '/snap/bin',  # Ubuntu Snap
-            '/home/linuxbrew/.linuxbrew/bin',  # Homebrew on Linux
+            "/snap/bin",  # Ubuntu Snap
+            "/home/linuxbrew/.linuxbrew/bin",  # Homebrew on Linux
             # User-level tool directories (pip --user, pipx, cargo, nvm, etc.)
-            f'{home_posix}/.local/bin',
-            f'{home_posix}/.cargo/bin',
-            f'{home_posix}/.nvm',
+            f"{home_posix}/.local/bin",
+            f"{home_posix}/.cargo/bin",
+            f"{home_posix}/.nvm",
         ]
-        if os.name == 'nt':
-            allowed_system_dirs.extend([
-                'C:\\Program Files',
-                'C:\\Program Files (x86)',
-                'C:\\Windows\\System32',
-            ])
+        if os.name == "nt":
+            allowed_system_dirs.extend(
+                [
+                    "C:\\Program Files",
+                    "C:\\Program Files (x86)",
+                    "C:\\Windows\\System32",
+                ]
+            )
 
         is_in_allowed_dir = any(normalized.lower().startswith(d.lower()) for d in allowed_system_dirs)
 
         # Not in an allowed system directory and not in the allowlist
         if not is_in_allowed_dir and base_command not in ALLOWED_COMMANDS:
             raise RuntimeError(
-                f"MCP command \"{command}\" is not in the allowed list. "
+                f'MCP command "{command}" is not in the allowed list. '
                 f"Use a whitelisted command or place the executable in a standard system directory."
             )
 
         # use shell
-        dangerous_shells = ['cmd.exe', 'command.com', 'powershell.exe', 'pwsh.exe']
+        dangerous_shells = ["cmd.exe", "command.com", "powershell.exe", "pwsh.exe"]
         if any(normalized.lower().endswith(d) for d in dangerous_shells):
             raise RuntimeError(
-                f"MCP command \"{command}\" is a dangerous system shell. "
+                f'MCP command "{command}" is a dangerous system shell. '
                 f"Direct execution of shells is not allowed for security reasons."
             )
         return
@@ -233,7 +258,9 @@ def _format_prompt_result(result: Any) -> ToolResult:
             rendered = content
         elif isinstance(content, list):
             rendered = "\n".join(
-                str(part["text"]) if isinstance(part, dict) and "text" in part else json.dumps(part, indent=2, ensure_ascii=False)
+                str(part["text"])
+                if isinstance(part, dict) and "text" in part
+                else json.dumps(part, indent=2, ensure_ascii=False)
                 for part in content
             )
         else:
@@ -326,7 +353,9 @@ class StdioMcpClient:
                 **popen_kwargs,
             )
         except FileNotFoundError:
-            raise RuntimeError(f"Command not found: {command}. Install it first and ensure it is available in PATH.") from None
+            raise RuntimeError(
+                f"Command not found: {command}. Install it first and ensure it is available in PATH."
+            ) from None
 
         self.stderr_lines = []
         with self._lock:
@@ -503,16 +532,16 @@ class StdioMcpClient:
             pending = list(self._pending.values())
             self._pending.clear()
             for queue in pending:
-                queue.put({"error": {"message": f'MCP server "{self.server_name}" closed before completing the request.'}})
+                queue.put(
+                    {"error": {"message": f'MCP server "{self.server_name}" closed before completing the request.'}}
+                )
 
         if self.process is not None:
             try:
                 if os.name == "nt":
                     try:
                         subprocess.run(
-                            ["taskkill", "/T", "/F", "/PID", str(self.process.pid)],
-                            capture_output=True,
-                            timeout=5
+                            ["taskkill", "/T", "/F", "/PID", str(self.process.pid)], capture_output=True, timeout=5
                         )
                     except subprocess.TimeoutExpired:
                         # taskkill failed, use kill
@@ -573,6 +602,7 @@ class HttpMcpClient:
         # 从 token 存储注入 Bearer Token
         try:
             from pepsicode.config import read_mcp_tokens
+
             tokens = read_mcp_tokens()
             token = tokens.get(self.server_name)
             if token:
@@ -626,8 +656,7 @@ class HttpMcpClient:
             except Exception:
                 pass
             raise RuntimeError(
-                f"MCP {self.server_name}: HTTP {e.code} {e.reason}"
-                + (f"\n{error_body}" if error_body else "")
+                f"MCP {self.server_name}: HTTP {e.code} {e.reason}" + (f"\n{error_body}" if error_body else "")
             ) from e
         except urllib.error.URLError as e:
             raise RuntimeError(f"MCP {self.server_name}: connection failed: {e.reason}") from e
@@ -652,7 +681,7 @@ class HttpMcpClient:
         for line in raw.split("\n"):
             line = line.strip()
             if line.startswith("data:"):
-                data_str = line[len("data:"):].strip()
+                data_str = line[len("data:") :].strip()
                 if data_str:
                     try:
                         last_json = json.loads(data_str)
@@ -728,7 +757,17 @@ def create_mcp_backed_tools(*, cwd: str, mcp_servers: dict[str, dict[str, Any]])
         # --- Phase 1: connect to each server, discover tools/resources/prompts ---
         for server_name, config in mcp_servers.items():
             if config.get("enabled") is False:
-                servers.append(asdict(McpServerSummary(name=server_name, command=config.get("command", ""), status="disabled", toolCount=0, protocol=config.get("protocol"))))
+                servers.append(
+                    asdict(
+                        McpServerSummary(
+                            name=server_name,
+                            command=config.get("command", ""),
+                            status="disabled",
+                            toolCount=0,
+                            protocol=config.get("protocol"),
+                        )
+                    )
+                )
                 continue
 
             client = _create_client(server_name, config, cwd)
@@ -747,7 +786,10 @@ def create_mcp_backed_tools(*, cwd: str, mcp_servers: dict[str, dict[str, Any]])
 
                 # Index resources and prompts for later meta-tool creation
                 for resource in resources:
-                    resource_index[f"{server_name}:{resource.get('uri')}"] = {"serverName": server_name, "resource": resource}
+                    resource_index[f"{server_name}:{resource.get('uri')}"] = {
+                        "serverName": server_name,
+                        "resource": resource,
+                    }
                 for prompt in prompts:
                     prompt_index[f"{server_name}:{prompt.get('name')}"] = {"serverName": server_name, "prompt": prompt}
 
@@ -767,7 +809,10 @@ def create_mcp_backed_tools(*, cwd: str, mcp_servers: dict[str, dict[str, Any]])
                     tools.append(
                         ToolDefinition(
                             name=wrapped_name,
-                            description=str(descriptor.get("description") or f"Call MCP tool {descriptor_name} from server {server_name}."),
+                            description=str(
+                                descriptor.get("description")
+                                or f"Call MCP tool {descriptor_name} from server {server_name}."
+                            ),
                             input_schema=input_schema,
                             validator=_validator,
                             run=_run,
@@ -817,7 +862,9 @@ def create_mcp_backed_tools(*, cwd: str, mcp_servers: dict[str, dict[str, Any]])
                 name="list_mcp_resources",
                 description="List available MCP resources exposed by connected MCP servers.",
                 input_schema={"type": "object", "properties": {"server": {"type": "string"}}},
-                validator=lambda value: {"server": value.get("server")} if isinstance(value, dict) else {"server": None},
+                validator=lambda value: {"server": value.get("server")}
+                if isinstance(value, dict)
+                else {"server": None},
                 run=lambda input_data, _context: ToolResult(
                     ok=True,
                     output="\n".join(
@@ -842,7 +889,11 @@ def create_mcp_backed_tools(*, cwd: str, mcp_servers: dict[str, dict[str, Any]])
             ToolDefinition(
                 name="read_mcp_resource",
                 description="Read a specific MCP resource by server and URI.",
-                input_schema={"type": "object", "properties": {"server": {"type": "string"}, "uri": {"type": "string"}}, "required": ["server", "uri"]},
+                input_schema={
+                    "type": "object",
+                    "properties": {"server": {"type": "string"}, "uri": {"type": "string"}},
+                    "required": ["server", "uri"],
+                },
                 validator=lambda value: value,
                 run=_read_resource,
             )
@@ -854,7 +905,9 @@ def create_mcp_backed_tools(*, cwd: str, mcp_servers: dict[str, dict[str, Any]])
                 name="list_mcp_prompts",
                 description="List available MCP prompts exposed by connected MCP servers.",
                 input_schema={"type": "object", "properties": {"server": {"type": "string"}}},
-                validator=lambda value: {"server": value.get("server")} if isinstance(value, dict) else {"server": None},
+                validator=lambda value: {"server": value.get("server")}
+                if isinstance(value, dict)
+                else {"server": None},
                 run=lambda input_data, _context: ToolResult(
                     ok=True,
                     output="\n".join(
@@ -888,7 +941,15 @@ def create_mcp_backed_tools(*, cwd: str, mcp_servers: dict[str, dict[str, Any]])
             ToolDefinition(
                 name="get_mcp_prompt",
                 description="Fetch a rendered MCP prompt by server, prompt name, and optional arguments.",
-                input_schema={"type": "object", "properties": {"server": {"type": "string"}, "name": {"type": "string"}, "arguments": {"type": "object"}}, "required": ["server", "name"]},
+                input_schema={
+                    "type": "object",
+                    "properties": {
+                        "server": {"type": "string"},
+                        "name": {"type": "string"},
+                        "arguments": {"type": "object"},
+                    },
+                    "required": ["server", "name"],
+                },
                 validator=lambda value: value,
                 run=_get_prompt,
             )

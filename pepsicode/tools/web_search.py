@@ -49,12 +49,14 @@ def _run(input_data: dict, context) -> ToolResult:
         lines = [f"Search results for: {query}", "=" * 60, ""]
 
         for i, result in enumerate(results, 1):
-            lines.extend([
-                f"{i}. {result['title']}",
-                f"   URL: {result['url']}",
-                f"   {result['snippet']}",
-                "",
-            ])
+            lines.extend(
+                [
+                    f"{i}. {result['title']}",
+                    f"   URL: {result['url']}",
+                    f"   {result['snippet']}",
+                    "",
+                ]
+            )
 
         lines.append(f"Total results: {len(results)}")
 
@@ -98,11 +100,13 @@ def _parse_duckduckgo_results(html: str, max_results: int) -> list[dict[str, str
         snippet = snippet.replace("&amp;", "&").replace("&quot;", '"').replace("&#x27;", "'")
 
         if url and title:
-            results.append({
-                "title": title,
-                "url": url,
-                "snippet": snippet[:200],
-            })
+            results.append(
+                {
+                    "title": title,
+                    "url": url,
+                    "snippet": snippet[:200],
+                }
+            )
 
     return results
 

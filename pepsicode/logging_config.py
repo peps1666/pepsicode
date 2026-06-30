@@ -86,7 +86,11 @@ def log_api_call(model: str, tokens_in: int, tokens_out: int, cost: float, durat
     logger = get_logger("api")
     logger.info(
         "API call: model=%s, tokens_in=%d, tokens_out=%d, cost=$%.4f, duration=%dms",
-        model, tokens_in, tokens_out, cost, duration_ms,
+        model,
+        tokens_in,
+        tokens_out,
+        cost,
+        duration_ms,
     )
 
 

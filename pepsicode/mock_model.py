@@ -17,6 +17,7 @@ def _latest_assistant_call(messages):
     call = next((message for message in reversed(messages) if message["role"] == "assistant_tool_call"), None)
     return call["toolName"] if call else None
 
+
 # 一个简单的模拟模型适配器，用于测试和演示，基于用户输入的命令触发不同的工具调用，并返回模拟的结果
 class MockModelAdapter:
     def next(self, messages):
@@ -64,12 +65,14 @@ class MockModelAdapter:
         if user_text.startswith("/read "):
             return AgentStep(
                 type="tool_calls",
-                calls=[{"id": tool_id, "toolName": "read_file", "input": {"path": user_text[len('/read ') :].strip()}}],
+                calls=[{"id": tool_id, "toolName": "read_file", "input": {"path": user_text[len("/read ") :].strip()}}],
             )
 
         if user_text.startswith("/cmd "):
             payload = user_text[len("/cmd ") :].strip()
-            return AgentStep(type="tool_calls", calls=[{"id": tool_id, "toolName": "run_command", "input": {"command": payload}}])
+            return AgentStep(
+                type="tool_calls", calls=[{"id": tool_id, "toolName": "run_command", "input": {"command": payload}}]
+            )
 
         if user_text.startswith("/write "):
             payload = user_text[len("/write ") :]
@@ -78,7 +81,13 @@ class MockModelAdapter:
                 return AgentStep(type="assistant", content="Usage: /write <path>::<content>")
             return AgentStep(
                 type="tool_calls",
-                calls=[{"id": tool_id, "toolName": "write_file", "input": {"path": target_path.strip(), "content": content}}],
+                calls=[
+                    {
+                        "id": tool_id,
+                        "toolName": "write_file",
+                        "input": {"path": target_path.strip(), "content": content},
+                    }
+                ],
             )
 
         if user_text.startswith("/edit "):
@@ -89,21 +98,35 @@ class MockModelAdapter:
             target_path, search, replace = parts
             return AgentStep(
                 type="tool_calls",
-                calls=[{"id": tool_id, "toolName": "edit_file", "input": {"path": target_path.strip(), "search": search, "replace": replace}}],
+                calls=[
+                    {
+                        "id": tool_id,
+                        "toolName": "edit_file",
+                        "input": {"path": target_path.strip(), "search": search, "replace": replace},
+                    }
+                ],
             )
 
         if user_text.startswith("/patch "):
             payload = user_text[len("/patch ") :]
             parts = payload.split("::")
             if len(parts) < 3 or len(parts) % 2 == 0:
-                return AgentStep(type="assistant", content="Usage: /patch <path>::<search1>::<replace1>::<search2>::<replace2> ...")
+                return AgentStep(
+                    type="assistant", content="Usage: /patch <path>::<search1>::<replace1>::<search2>::<replace2> ..."
+                )
             target_path, *ops = parts
             replacements = []
             for index in range(0, len(ops), 2):
                 replacements.append({"search": ops[index], "replace": ops[index + 1]})
             return AgentStep(
                 type="tool_calls",
-                calls=[{"id": tool_id, "toolName": "patch_file", "input": {"path": target_path.strip(), "replacements": replacements}}],
+                calls=[
+                    {
+                        "id": tool_id,
+                        "toolName": "patch_file",
+                        "input": {"path": target_path.strip(), "replacements": replacements},
+                    }
+                ],
             )
 
         return AgentStep(

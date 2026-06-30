@@ -14,9 +14,11 @@ from pathlib import Path
 # Data structures
 # ---------------------------------------------------------------------------
 
+
 @dataclass
 class DependencyEdge:
     """A single import dependency between files."""
+
     source: str  # Source file path
     target: str  # Target file path
     is_config: bool = False  # Whether this is a config import
@@ -25,6 +27,7 @@ class DependencyEdge:
 @dataclass
 class AuditResult:
     """Result of a governance audit."""
+
     passed: bool
     violations: list[str] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
@@ -74,9 +77,10 @@ class AuditResult:
 # Import extraction
 # ---------------------------------------------------------------------------
 
+
 def extract_imports(file_path: Path) -> list[tuple[str, bool]]:
     """Extract imports from a Python file.
-    
+
     Returns:
         List of (imported_module, is_config) tuples
     """
@@ -101,8 +105,7 @@ def extract_imports(file_path: Path) -> list[tuple[str, bool]]:
         elif isinstance(node, ast.ImportFrom):
             if node.module:
                 # Check if this is a config import
-                is_config = "config" in node.module.lower() or \
-                           (node.level > 0 and "config" in node.module.lower())
+                is_config = "config" in node.module.lower() or (node.level > 0 and "config" in node.module.lower())
                 imports.append((node.module, is_config))
 
     return imports
@@ -110,12 +113,12 @@ def extract_imports(file_path: Path) -> list[tuple[str, bool]]:
 
 def resolve_import_to_file(import_module: str, source_file: Path, pkg_root: Path) -> Path | None:
     """Resolve an import module name to an actual file path.
-    
+
     Args:
         import_module: Module name from import statement
         source_file: File making the import
         pkg_root: Package root directory
-    
+
     Returns:
         Resolved file path or None
     """
@@ -141,9 +144,10 @@ def resolve_import_to_file(import_module: str, source_file: Path, pkg_root: Path
 # Package area detection
 # ---------------------------------------------------------------------------
 
+
 def detect_file_area(file_path: Path, pkg_root: Path) -> str | None:
     """Detect which package area a file belongs to.
-    
+
     Returns:
         Area name: 'port_entry', 'wrap_src', 'wrap_config', 'business_src',
                    'business_config', 'test_src', 'test_config', or None
@@ -196,9 +200,10 @@ CONFIG_IMPORT_LAST = True
 # Audit functions
 # ---------------------------------------------------------------------------
 
+
 def audit_dependency_directions(pkg_root: Path) -> AuditResult:
     """Audit 2: Check dependency direction compliance.
-    
+
     Checks:
     1. Import direction rules (source area -> allowed target areas)
     2. Config imports come last
@@ -257,17 +262,14 @@ def audit_dependency_directions(pkg_root: Path) -> AuditResult:
                 last_import_is_config = True
             elif last_import_is_config and CONFIG_IMPORT_LAST:
                 result.warnings.append(
-                    f"Config import should come last: "
-                    f"{source_file.relative_to(pkg_root)} imports {import_module}"
+                    f"Config import should come last: " f"{source_file.relative_to(pkg_root)} imports {import_module}"
                 )
 
     # Check for cycles (simple DFS)
     cycles = _find_cycles(result.dependency_graph)
     if cycles:
         for cycle in cycles:
-            result.violations.append(
-                f"Dependency cycle detected: {' → '.join(cycle)}"
-            )
+            result.violations.append(f"Dependency cycle detected: {' → '.join(cycle)}")
             result.passed = False
 
     return result
@@ -275,7 +277,7 @@ def audit_dependency_directions(pkg_root: Path) -> AuditResult:
 
 def audit_sink_rules(pkg_root: Path) -> AuditResult:
     """Audit: Check sink rule compliance.
-    
+
     Checks:
     1. business/src/ has exactly ONE sink
     2. wrap/src/ sinks are used by business/src/
@@ -338,14 +340,9 @@ def audit_sink_rules(pkg_root: Path) -> AuditResult:
     business_files = {str(f.relative_to(pkg_root)) for f in files_by_area.get("business_src", [])}
 
     for wrap_sink in wrap_sinks:
-        used_by_business = any(
-            wrap_sink in deps.get(bf, [])
-            for bf in business_files
-        )
+        used_by_business = any(wrap_sink in deps.get(bf, []) for bf in business_files)
         if not used_by_business:
-            result.warnings.append(
-                f"wrap/src/ sink not used by business/src/: {wrap_sink}"
-            )
+            result.warnings.append(f"wrap/src/ sink not used by business/src/: {wrap_sink}")
 
     return result
 
@@ -391,12 +388,13 @@ def _find_cycles(edges: list[DependencyEdge]) -> list[list[str]]:
 # Main audit function
 # ---------------------------------------------------------------------------
 
+
 def run_full_audit(pkg_root: Path) -> AuditResult:
     """Run complete governance audit (Audit 2 + Sink rules).
-    
+
     Args:
         pkg_root: Package root directory
-    
+
     Returns:
         Combined audit result
     """

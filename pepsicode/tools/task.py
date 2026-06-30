@@ -105,6 +105,7 @@ def create_task_tool(
             sub_model = model_factory(sub_registry)
         elif runtime is not None:
             from pepsicode.anthropic_adapter import AnthropicModelAdapter
+
             sub_model = AnthropicModelAdapter(runtime, sub_registry)
         else:
             return ToolResult(
@@ -133,9 +134,7 @@ def create_task_tool(
             "",
         )
         tool_calls = sum(1 for m in result_messages if m.get("role") == "assistant_tool_call")
-        summary = (
-            f"[Sub-agent {definition.name} completed | tool calls: {tool_calls}]\n\n{final}"
-        )
+        summary = f"[Sub-agent {definition.name} completed | tool calls: {tool_calls}]\n\n{final}"
         return ToolResult(ok=True, output=summary)
 
     return ToolDefinition(

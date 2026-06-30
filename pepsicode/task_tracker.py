@@ -17,8 +17,10 @@ from pepsicode.config import PEPSI_CODE_DIR
 # Types
 # ---------------------------------------------------------------------------
 
+
 class TaskStatus(str, Enum):
     """Task status enum."""
+
     PENDING = "pending"
     IN_PROGRESS = "in_progress"
     COMPLETED = "completed"
@@ -29,6 +31,7 @@ class TaskStatus(str, Enum):
 @dataclass
 class Task:
     """A single task item."""
+
     id: str
     description: str
     status: TaskStatus = TaskStatus.PENDING
@@ -63,6 +66,7 @@ class Task:
 @dataclass
 class TaskList:
     """A list of tasks for tracking multi-step progress."""
+
     title: str = ""
     tasks: list[Task] = field(default_factory=list)
     created_at: float = field(default_factory=time.time)
@@ -103,10 +107,7 @@ class TaskList:
     @property
     def is_complete(self) -> bool:
         """Check if all tasks are completed, cancelled, or failed."""
-        return all(
-            t.status in (TaskStatus.COMPLETED, TaskStatus.CANCELLED, TaskStatus.FAILED)
-            for t in self.tasks
-        )
+        return all(t.status in (TaskStatus.COMPLETED, TaskStatus.CANCELLED, TaskStatus.FAILED) for t in self.tasks)
 
     def add_task(self, description: str) -> Task:
         """Add a new task."""
@@ -162,6 +163,7 @@ class TaskList:
 # Task Manager
 # ---------------------------------------------------------------------------
 
+
 class TaskManager:
     """Manages task lists for the current session."""
 
@@ -207,10 +209,7 @@ class TaskManager:
         if tl.title:
             status_parts.append(f"📋 {tl.title}")
 
-        status_parts.append(
-            f"{tl.completed_count}/{tl.total} done "
-            f"({tl.progress_percentage:.0f}%)"
-        )
+        status_parts.append(f"{tl.completed_count}/{tl.total} done " f"({tl.progress_percentage:.0f}%)")
 
         if tl.in_progress_count > 0:
             current = tl.get_current_task()
@@ -258,7 +257,7 @@ class TaskManager:
 
     def auto_detect_tasks(self, user_input: str) -> list[str] | None:
         """Auto-detect task list from user input.
-        
+
         Looks for patterns like:
         - "Do X, then Y, then Z"
         - "First X, second Y, finally Z"
@@ -323,6 +322,7 @@ class TaskManager:
 # Integration helpers
 # ---------------------------------------------------------------------------
 
+
 def format_task_update(task: Task, status: TaskStatus) -> str:
     """Format a task status update for display."""
     icons = {
@@ -359,6 +359,7 @@ def format_task_progress_bar(task_list: TaskList, width: int = 30) -> str:
 # ---------------------------------------------------------------------------
 # Persistence
 # ---------------------------------------------------------------------------
+
 
 def save_task_list(task_list: TaskList, session_id: str) -> None:
     """Save task list to disk."""

@@ -30,6 +30,7 @@ def _try_relative(abs_path: Path, cwd: str, fallback: str) -> str:
 # Debug Output Parsers
 # ---------------------------------------------------------------------------
 
+
 def _parse_python_error(output: str, cwd: str) -> list[dict[str, Any]]:
     """Parse Python traceback and extract error locations."""
     errors = []
@@ -42,7 +43,7 @@ def _parse_python_error(output: str, cwd: str) -> list[dict[str, Any]]:
 
     # Pattern for the actual error
     error_pattern = re.compile(
-        r'(\w+Error|\w+Exception): (.+)',
+        r"(\w+Error|\w+Exception): (.+)",
         re.MULTILINE,
     )
 
@@ -78,23 +79,27 @@ def _parse_python_error(output: str, cwd: str) -> list[dict[str, Any]]:
             except Exception:
                 context_lines = ["Unable to read file"]
 
-        errors.append({
-            "file": _try_relative(abs_path, cwd, file_path),
-            "line": int(line_num),
-            "function": func_name,
-            "context": "\n".join(context_lines),
-        })
+        errors.append(
+            {
+                "file": _try_relative(abs_path, cwd, file_path),
+                "line": int(line_num),
+                "function": func_name,
+                "context": "\n".join(context_lines),
+            }
+        )
 
     # If no frames found, try to extract line from error message
     if not errors:
-        line_match = re.search(r'line (\d+)', error_message)
+        line_match = re.search(r"line (\d+)", error_message)
         if line_match:
-            errors.append({
-                "file": "unknown",
-                "line": int(line_match.group(1)),
-                "function": "unknown",
-                "context": "",
-            })
+            errors.append(
+                {
+                    "file": "unknown",
+                    "line": int(line_match.group(1)),
+                    "function": "unknown",
+                    "context": "",
+                }
+            )
 
     return {
         "type": error_type,
@@ -106,8 +111,8 @@ def _parse_python_error(output: str, cwd: str) -> list[dict[str, Any]]:
 def _parse_node_error(output: str, cwd: str) -> dict[str, Any]:
     """Parse Node.js error output."""
     # Pattern for Node.js stack traces
-    stack_pattern = re.compile(r'at .+ \((.+):(\d+):(\d+)\)', re.MULTILINE)
-    error_pattern = re.compile(r'(\w+Error|\w+Exception): (.+)', re.MULTILINE)
+    stack_pattern = re.compile(r"at .+ \((.+):(\d+):(\d+)\)", re.MULTILINE)
+    error_pattern = re.compile(r"(\w+Error|\w+Exception): (.+)", re.MULTILINE)
 
     error_match = error_pattern.search(output)
     if error_match:
@@ -120,11 +125,13 @@ def _parse_node_error(output: str, cwd: str) -> dict[str, Any]:
     frames = []
     for match in stack_pattern.finditer(output):
         file_path, line_num, col_num = match.groups()
-        frames.append({
-            "file": file_path,
-            "line": int(line_num),
-            "column": int(col_num),
-        })
+        frames.append(
+            {
+                "file": file_path,
+                "line": int(line_num),
+                "column": int(col_num),
+            }
+        )
 
     return {
         "type": error_type,
@@ -137,10 +144,10 @@ def _parse_generic_error(output: str) -> dict[str, Any]:
     """Parse generic error output."""
     # Try to find any error-like patterns
     error_patterns = [
-        r'(?:error|ERROR|Error|fatal|FATAL|warning|WARNING)[:\s]+(.+)',
-        r'failed to (.+)',
-        r'cannot (.+)',
-        r'invalid (.+)',
+        r"(?:error|ERROR|Error|fatal|FATAL|warning|WARNING)[:\s]+(.+)",
+        r"failed to (.+)",
+        r"cannot (.+)",
+        r"invalid (.+)",
     ]
 
     for pattern in error_patterns:
@@ -162,6 +169,7 @@ def _parse_generic_error(output: str) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 # Tool Implementation
 # ---------------------------------------------------------------------------
+
 
 def _validate(input_data: dict) -> dict:
     command = input_data.get("command")
@@ -308,7 +316,11 @@ run_with_debug_tool = ToolDefinition(
             "command": {"type": "string", "description": "Command to execute"},
             "cwd": {"type": "string", "description": "Working directory (default: current directory)"},
             "timeout": {"type": "number", "description": "Timeout in seconds (default: 30, max: 300)"},
-            "language": {"type": "string", "enum": ["auto", "python", "node", "generic"], "description": "Language for error parsing (default: auto)"},
+            "language": {
+                "type": "string",
+                "enum": ["auto", "python", "node", "generic"],
+                "description": "Language for error parsing (default: auto)",
+            },
         },
         "required": ["command"],
     },

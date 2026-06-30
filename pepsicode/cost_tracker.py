@@ -66,9 +66,11 @@ MODEL_PRICING = {
 # Data structures
 # ---------------------------------------------------------------------------
 
+
 @dataclass
 class ModelUsage:
     """Usage statistics for a specific model."""
+
     input_tokens: int = 0
     output_tokens: int = 0
     cache_read_tokens: int = 0
@@ -81,12 +83,7 @@ class ModelUsage:
     @property
     def total_tokens(self) -> int:
         """Total tokens used."""
-        return (
-            self.input_tokens
-            + self.output_tokens
-            + self.cache_read_tokens
-            + self.cache_write_tokens
-        )
+        return self.input_tokens + self.output_tokens + self.cache_read_tokens + self.cache_write_tokens
 
     @property
     def avg_duration_ms(self) -> float:
@@ -99,9 +96,10 @@ class ModelUsage:
 @dataclass
 class CostTracker:
     """Tracks API costs and usage across the session.
-    
+
     Inspired by Claude Code's cost-tracker.ts
     """
+
     # Global totals
     total_cost_usd: float = 0.0
     total_api_duration_ms: int = 0
@@ -126,7 +124,7 @@ class CostTracker:
         cache_write_tokens: int = 0,
     ) -> float:
         """Record API usage.
-        
+
         Args:
             model: Model name
             input_tokens: Input token count
@@ -134,7 +132,7 @@ class CostTracker:
             duration_ms: API call duration
             cache_read_tokens: Cache read token count
             cache_write_tokens: Cache write token count
-        
+
         Returns:
             Calculated cost in USD
         """
@@ -171,7 +169,7 @@ class CostTracker:
 
     def record_error(self, model: str) -> None:
         """Record an API error.
-        
+
         Args:
             model: Model name
         """
@@ -187,7 +185,7 @@ class CostTracker:
         lines_removed: int = 0,
     ) -> None:
         """Record code changes.
-        
+
         Args:
             lines_added: Lines added
             lines_removed: Lines removed
@@ -199,10 +197,10 @@ class CostTracker:
 
     def get_model_usage(self, model: str) -> ModelUsage:
         """Get usage for a specific model.
-        
+
         Args:
             model: Model name
-        
+
         Returns:
             ModelUsage instance
         """
@@ -226,10 +224,10 @@ class CostTracker:
 
     def format_cost_report(self, detailed: bool = False) -> str:
         """Format cost and usage report.
-        
+
         Args:
             detailed: Include per-model breakdown
-        
+
         Returns:
             Formatted report string
         """
@@ -251,41 +249,47 @@ class CostTracker:
         ]
 
         if detailed and self.model_usage:
-            lines.extend([
-                "",
-                "Per-Model Breakdown:",
-                "-" * 60,
-            ])
+            lines.extend(
+                [
+                    "",
+                    "Per-Model Breakdown:",
+                    "-" * 60,
+                ]
+            )
 
             for model, usage in self.model_usage.items():
-                lines.extend([
-                    "",
-                    f"  {model}:",
-                    f"    Cost: ${usage.cost_usd:.4f}",
-                    f"    Calls: {usage.call_count}",
-                    f"    Errors: {usage.error_count}",
-                    f"    Tokens: {usage.total_tokens:,}",
-                    f"      Input: {usage.input_tokens:,}",
-                    f"      Output: {usage.output_tokens:,}",
-                    f"      Cache read: {usage.cache_read_tokens:,}",
-                    f"      Cache write: {usage.cache_write_tokens:,}",
-                    f"    Avg duration: {usage.avg_duration_ms:.0f}ms",
-                ])
+                lines.extend(
+                    [
+                        "",
+                        f"  {model}:",
+                        f"    Cost: ${usage.cost_usd:.4f}",
+                        f"    Calls: {usage.call_count}",
+                        f"    Errors: {usage.error_count}",
+                        f"    Tokens: {usage.total_tokens:,}",
+                        f"      Input: {usage.input_tokens:,}",
+                        f"      Output: {usage.output_tokens:,}",
+                        f"      Cache read: {usage.cache_read_tokens:,}",
+                        f"      Cache write: {usage.cache_write_tokens:,}",
+                        f"    Avg duration: {usage.avg_duration_ms:.0f}ms",
+                    ]
+                )
 
         # Session duration
         session_duration = time.time() - self.session_start
-        lines.extend([
-            "",
-            "-" * 60,
-            f"Session duration: {session_duration / 60:.1f} minutes",
-            f"Cost per minute: ${self.total_cost_usd / max(1, session_duration / 60):.4f}",
-        ])
+        lines.extend(
+            [
+                "",
+                "-" * 60,
+                f"Session duration: {session_duration / 60:.1f} minutes",
+                f"Cost per minute: ${self.total_cost_usd / max(1, session_duration / 60):.4f}",
+            ]
+        )
 
         return "\n".join(lines)
 
     def format_short_summary(self) -> str:
         """Format a short summary for status bar.
-        
+
         Returns:
             Short summary string
         """

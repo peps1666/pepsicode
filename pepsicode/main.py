@@ -30,6 +30,7 @@ def _handle_local_command(user_input: str, tools) -> str | None:
     local_result = try_handle_local_command(user_input, tools=tools)
     return local_result
 
+
 # 渲染欢迎横幅，显示模型、当前工作目录、权限摘要和工具统计信息（如果在详细模式下）
 def _render_banner(runtime: dict | None, cwd: str, permission_summary: list[str], counts: dict[str, int]) -> str:
     model = runtime["model"] if runtime else "unconfigured"
@@ -45,6 +46,7 @@ def _render_banner(runtime: dict | None, cwd: str, permission_summary: list[str]
             f"Transcript: {counts['transcriptCount']}"
         )
     return "\n".join(lines)
+
 
 # 渲染快速入门指南，提供常用命令和示例提示，帮助用户快速上手
 def _render_quick_start() -> str:
@@ -65,13 +67,16 @@ def _render_quick_start() -> str:
    "Write a technical proposal"
 """
 
+
 # 将新条目追加到对话记录中，自动分配递增的 ID，并支持不同类型的条目（用户、助手、工具等）
 def _append_transcript(transcript: list[TranscriptEntry], **kwargs) -> None:
     transcript.append(TranscriptEntry(id=len(transcript) + 1, **kwargs))
 
+
 # 创建一个简单的基于 CLI 的权限提示，用于非 TTY 回退场景，允许用户通过输入选择权限决策
 def _make_cli_permission_prompt():
     """Create a simple CLI-based permission prompt for non-TTY fallback."""
+
     def _prompt(request: dict) -> dict:
         print(f"\n{request.get('summary', 'Permission Request')}")
         choices = request.get("choices", [])
@@ -85,7 +90,9 @@ def _make_cli_permission_prompt():
                     return {"decision": choice.get("decision", "allow_once")}
         answer = input("Allow (y/n): ").strip().lower()
         return {"decision": "allow_once" if answer in ("y", "yes") else "deny_once"}
+
     return _prompt
+
 
 # 将对话记录保存到指定路径，使用工具解析路径并写入格式化的文本内容，确保目录存在
 def _save_transcript_file(cwd: str, permissions, transcript: list[TranscriptEntry], output_path: str) -> str:
@@ -93,6 +100,7 @@ def _save_transcript_file(cwd: str, permissions, transcript: list[TranscriptEntr
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(format_transcript_text(transcript), encoding="utf-8")
     return str(target)
+
 
 def main() -> None:
     # 解析命令行参数，支持恢复会话、列出会话、安装、验证配置和设置日志级别等功能
@@ -140,17 +148,20 @@ def main() -> None:
 
     # Initialize logging
     from pepsicode.logging_config import setup_logging
+
     setup_logging(level=args.log_level)
 
     # Run config validation if requested
     if args.validate_config:
         from pepsicode.config import format_config_diagnostic
+
         print(format_config_diagnostic())
         return
 
     # Run installer if requested
     if args.install:
         from pepsicode.install import main as install_main
+
         install_main()
         return
 
@@ -184,8 +195,12 @@ def main() -> None:
             file=sys.stderr,
         )
 
-    prompt_handler = _make_cli_permission_prompt() if sys.stdin.isatty() else None # 在非 TTY 环境中使用 CLI 权限提示，否则在 TTY 环境中可以使用更丰富的交互式权限界面
-    tools = create_default_tool_registry(cwd, runtime=runtime) # 创建工具注册表，传入当前工作目录和运行时配置，工具注册表负责管理可用的技能和 MCP 服务器
+    prompt_handler = (
+        _make_cli_permission_prompt() if sys.stdin.isatty() else None
+    )  # 在非 TTY 环境中使用 CLI 权限提示，否则在 TTY 环境中可以使用更丰富的交互式权限界面
+    tools = create_default_tool_registry(
+        cwd, runtime=runtime
+    )  # 创建工具注册表，传入当前工作目录和运行时配置，工具注册表负责管理可用的技能和 MCP 服务器
     permissions = PermissionManager(cwd, prompt=prompt_handler)
     model = (
         MockModelAdapter()
@@ -196,6 +211,7 @@ def main() -> None:
     # Initialize ContextManager for context window management
     from pepsicode.context_manager import ContextManager, save_context_state
     from pepsicode.logging_config import get_logger
+
     logger = get_logger("main")
     context_mgr = None
     if runtime:
@@ -210,6 +226,7 @@ def main() -> None:
     # The factory prefers PostgreSQL and falls back to the file store, so the
     # chosen backend is detected automatically without changing call sites.
     from pepsicode.memory import create_memory_manager
+
     memory_mgr = create_memory_manager(cwd)
     logger.info("Memory manager initialized")
 
@@ -324,7 +341,9 @@ def main() -> None:
                     stats = context_mgr.get_stats()
                     logger.debug("After turn: %d tokens (%.0f%%)", stats.total_tokens, stats.usage_percentage)
                     save_context_state(context_mgr)
-                last_assistant = next((message for message in reversed(messages) if message["role"] == "assistant"), None)
+                last_assistant = next(
+                    (message for message in reversed(messages) if message["role"] == "assistant"), None
+                )
                 if last_assistant:
                     _append_transcript(transcript, kind="assistant", body=last_assistant["content"])
                     print(last_assistant["content"])
@@ -346,12 +365,14 @@ def main() -> None:
     finally:
         # Graceful shutdown: clean up all resources
         from pepsicode.logging_config import get_logger
+
         logger = get_logger("main")
         logger.info("Shutting down...")
 
         # Restore Windows console mode (prevents ^[[A after exit)
         try:
             from pepsicode.tui.screen import _restore_windows_console_mode
+
             _restore_windows_console_mode()
         except Exception:
             pass

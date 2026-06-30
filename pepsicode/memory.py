@@ -27,16 +27,19 @@ logger = logging.getLogger(__name__)
 # Types
 # ---------------------------------------------------------------------------
 
+
 class MemoryScope(str, Enum):
     """Memory scope levels."""
-    USER = "user"       # Cross-project, ~/.pepsi-code/memory/
-    PROJECT = "project" # Project-shared, .pepsi-code-memory/
-    LOCAL = "local"     # Project-local, .pepsi-code-memory-local/
+
+    USER = "user"  # Cross-project, ~/.pepsi-code/memory/
+    PROJECT = "project"  # Project-shared, .pepsi-code-memory/
+    LOCAL = "local"  # Project-local, .pepsi-code-memory-local/
 
 
 @dataclass
 class MemoryEntry:
     """A single memory entry (fact, pattern, decision, etc.)."""
+
     id: str
     scope: MemoryScope
     category: str  # e.g., "architecture", "convention", "decision", "pattern"
@@ -77,6 +80,7 @@ class MemoryEntry:
 @dataclass
 class MemoryFile:
     """Represents a MEMORY.md file content."""
+
     scope: MemoryScope
     entries: list[MemoryEntry] = field(default_factory=list)
     max_entries: int = 200  # Claude Code limit
@@ -118,9 +122,11 @@ class MemoryFile:
         query_lower = query.lower()
         results = []
         for entry in self.entries:
-            if (query_lower in entry.content.lower() or
-                query_lower in entry.category.lower() or
-                any(query_lower in tag.lower() for tag in entry.tags)):
+            if (
+                query_lower in entry.content.lower()
+                or query_lower in entry.category.lower()
+                or any(query_lower in tag.lower() for tag in entry.tags)
+            ):
                 results.append(entry)
         return results
 
@@ -179,9 +185,11 @@ from pepsicode.memory_store import MemoryStore  # noqa: E402
 # Memory Manager
 # ---------------------------------------------------------------------------
 
+
 @dataclass
 class MemoryPaths:
     """Paths for memory files at different scopes."""
+
     user_memory: Path
     project_memory: Path
     local_memory: Path
@@ -218,6 +226,7 @@ class MemoryManager:
         # Lazily build the default file store to avoid an import cycle:
         # memory_store imports names from this module at module load time.
         from pepsicode.memory_store import FileMemoryStore  # noqa: F401
+
         self.store: MemoryStore = store if store is not None else FileMemoryStore(workspace)
         # File store is always kept around for mirroring / fallback, even when
         # the primary backend is PostgreSQL.
@@ -307,7 +316,7 @@ class MemoryManager:
         max_tokens: int = 8000,
     ) -> str:
         """Get relevant memory context for system prompt injection.
-        
+
         Returns formatted MEMORY.md content from all scopes,
         respecting token limits.
         """
@@ -364,7 +373,7 @@ class MemoryManager:
             lines.append(f"{scope_name.title()} Memory:")
             lines.append(f"  Entries: {scope_stats['entries']}")
             lines.append(f"  Size: {scope_stats['size_bytes'] / 1024:.1f} KB")
-            if scope_stats['categories']:
+            if scope_stats["categories"]:
                 lines.append(f"  Categories: {', '.join(scope_stats['categories'][:5])}")
             lines.append("")
 
@@ -379,6 +388,7 @@ class MemoryManager:
 # ---------------------------------------------------------------------------
 # Factory: pick the best available backend (PostgreSQL preferred, file fallback)
 # ---------------------------------------------------------------------------
+
 
 def create_memory_manager(workspace: str) -> MemoryManager:
     """Create a MemoryManager backed by PostgreSQL when available.
@@ -398,8 +408,7 @@ def create_memory_manager(workspace: str) -> MemoryManager:
 
     try:
         store = PostgresMemoryStore(workspace)
-        logger.info("Memory backend: PostgreSQL (%s@%s:%s)",
-                    PG_DBNAME, PG_HOST, PG_PORT)
+        logger.info("Memory backend: PostgreSQL (%s@%s:%s)", PG_DBNAME, PG_HOST, PG_PORT)
         return MemoryManager(workspace=workspace, store=store)
     except Exception as error:  # noqa: BLE001 - fallback is the whole point
         logger.info("Memory backend: file (PostgreSQL unavailable: %s)", error)
@@ -409,6 +418,7 @@ def create_memory_manager(workspace: str) -> MemoryManager:
 # ---------------------------------------------------------------------------
 # System prompt integration
 # ---------------------------------------------------------------------------
+
 
 def inject_memory_into_prompt(
     system_prompt: str,
@@ -435,6 +445,7 @@ Use this context to inform your decisions and follow established patterns."""
 # ---------------------------------------------------------------------------
 # CLI commands
 # ---------------------------------------------------------------------------
+
 
 def format_memory_list(scope: MemoryScope | None = None, category: str | None = None) -> str:
     """Format memory entries for CLI display."""

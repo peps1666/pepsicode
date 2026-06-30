@@ -77,9 +77,11 @@ def _run(input_data: dict, context) -> ToolResult:
     completed = sum(1 for t in _tasks if t["status"] == "completed")
     total = len(_tasks)
 
-    lines.extend([
-        f"Total: {total} | Pending: {pending} | In Progress: {in_progress} | Completed: {completed}",
-    ])
+    lines.extend(
+        [
+            f"Total: {total} | Pending: {pending} | In Progress: {in_progress} | Completed: {completed}",
+        ]
+    )
 
     return ToolResult(ok=True, output="\n".join(lines))
 
@@ -97,7 +99,11 @@ todo_write_tool = ToolDefinition(
                     "type": "object",
                     "properties": {
                         "content": {"type": "string", "description": "Task description"},
-                        "status": {"type": "string", "enum": ["pending", "in_progress", "completed"], "description": "Task status"},
+                        "status": {
+                            "type": "string",
+                            "enum": ["pending", "in_progress", "completed"],
+                            "description": "Task status",
+                        },
                     },
                     "required": ["content"],
                 },

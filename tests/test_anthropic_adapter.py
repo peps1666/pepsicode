@@ -70,4 +70,3 @@ def test_anthropic_adapter_parses_final_text(monkeypatch) -> None:
     assert step.type == "assistant"
     assert step.content == "done"
     assert step.kind == "final"
-

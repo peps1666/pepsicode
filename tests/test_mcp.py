@@ -50,7 +50,9 @@ def test_create_mcp_backed_tools_supports_newline_json(tmp_path: Path) -> None:
     assert "hello resource" in resource_result.output
 
     prompt_tool = next(tool for tool in mcp["tools"] if tool.name == "get_mcp_prompt")
-    prompt_result = prompt_tool.run({"server": "fake", "name": "hello", "arguments": {"name": "cc"}}, ToolContext(cwd=str(tmp_path)))
+    prompt_result = prompt_tool.run(
+        {"server": "fake", "name": "hello", "arguments": {"name": "cc"}}, ToolContext(cwd=str(tmp_path))
+    )
     assert "hello cc" in prompt_result.output
 
     mcp["dispose"]()
@@ -250,9 +252,7 @@ def test_http_mcp_client_start_without_url_raises() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_http_mcp_client_injects_bearer_token(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
+def test_http_mcp_client_injects_bearer_token(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """Bearer Token 应从 token 存储注入到请求头。"""
     token_file = tmp_path / "mcp-tokens.json"
     token_file.write_text(json.dumps({"my-server": "tok_abc123"}))

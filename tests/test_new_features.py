@@ -41,6 +41,7 @@ from pepsicode.task_tracker import (
 # Context Manager Tests
 # ---------------------------------------------------------------------------
 
+
 def test_estimate_tokens_basic():
     """Test basic token estimation."""
     assert estimate_tokens("") == 0
@@ -146,6 +147,7 @@ def test_context_manager_persistence(tmp_path):
 # API Retry Tests
 # ---------------------------------------------------------------------------
 
+
 def test_calculate_backoff_base():
     """Test basic backoff calculation."""
     backoff = calculate_backoff(0, base=1.0, max_wait=60.0, jitter=0.0)
@@ -206,6 +208,7 @@ def test_retry_with_backoff_retryable_error():
 
 def test_retry_with_backoff_non_retryable():
     """Test non-retryable errors raise immediately."""
+
     def bad_request():
         raise HTTPError("Bad request", 400)
 
@@ -217,6 +220,7 @@ def test_retry_with_backoff_non_retryable():
 
 def test_retry_exhausted():
     """Test error when all retries fail."""
+
     def always_fail():
         raise HTTPError("Server error", 500)
 
@@ -241,6 +245,7 @@ def test_format_retry_state():
 # ---------------------------------------------------------------------------
 # Task Tracker Tests
 # ---------------------------------------------------------------------------
+
 
 def test_task_list_creation():
     """Test creating task list."""
@@ -335,6 +340,7 @@ def test_task_update_format():
 # Memory System Tests
 # ---------------------------------------------------------------------------
 
+
 def test_memory_entry_creation():
     """Test memory entry creation."""
     entry = MemoryEntry(
@@ -380,14 +386,20 @@ def test_memory_file_enforce_limits():
 def test_memory_file_search():
     """Test searching memory entries."""
     mf = MemoryFile(scope=MemoryScope.PROJECT)
-    mf.add_entry(MemoryEntry(
-        id="p-1", scope=MemoryScope.PROJECT, category="python",
-        content="Use pytest for testing", tags=["testing"]
-    ))
-    mf.add_entry(MemoryEntry(
-        id="p-2", scope=MemoryScope.PROJECT, category="python",
-        content="Use black for formatting", tags=["formatting"]
-    ))
+    mf.add_entry(
+        MemoryEntry(
+            id="p-1", scope=MemoryScope.PROJECT, category="python", content="Use pytest for testing", tags=["testing"]
+        )
+    )
+    mf.add_entry(
+        MemoryEntry(
+            id="p-2",
+            scope=MemoryScope.PROJECT,
+            category="python",
+            content="Use black for formatting",
+            tags=["formatting"],
+        )
+    )
 
     results = mf.search("pytest")
     assert len(results) == 1
@@ -397,10 +409,9 @@ def test_memory_file_search():
 def test_memory_file_format_markdown():
     """Test formatting as MEMORY.md."""
     mf = MemoryFile(scope=MemoryScope.USER)
-    mf.add_entry(MemoryEntry(
-        id="u-1", scope=MemoryScope.USER, category="convention",
-        content="Use type hints", tags=["python"]
-    ))
+    mf.add_entry(
+        MemoryEntry(id="u-1", scope=MemoryScope.USER, category="convention", content="Use type hints", tags=["python"])
+    )
 
     markdown = mf.format_as_markdown()
     assert "# User Memory" in markdown
@@ -413,12 +424,7 @@ def test_memory_manager_add_entry(tmp_path):
     (tmp_path / "workspace").mkdir()
 
     mm = MemoryManager(workspace)
-    mm.add_entry(
-        scope=MemoryScope.LOCAL,
-        category="convention",
-        content="Use fastapi for APIs",
-        tags=["python", "web"]
-    )
+    mm.add_entry(scope=MemoryScope.LOCAL, category="convention", content="Use fastapi for APIs", tags=["python", "web"])
 
     assert len(mm.memories[MemoryScope.LOCAL].entries) == 1
 

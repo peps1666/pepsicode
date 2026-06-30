@@ -40,6 +40,7 @@ def _tool(name, fn, concurrency_safe=False):
 # Parallel execution
 # --------------------------------------------------------------------------
 
+
 def test_concurrency_safe_tools_run_in_parallel():
     active = {"now": 0, "max": 0}
     lock = threading.Lock()
@@ -93,12 +94,15 @@ def test_results_preserve_call_order_when_parallel():
 # HISTORY_SNIP
 # --------------------------------------------------------------------------
 
+
 def test_snip_trims_old_large_tool_outputs():
     big = "\n".join(f"line {i}" for i in range(500))
     messages = [{"role": "system", "content": "sys"}]
     for i in range(6):
         messages.append({"role": "assistant_tool_call", "toolUseId": str(i), "toolName": "grep", "input": {}})
-        messages.append({"role": "tool_result", "toolUseId": str(i), "toolName": "grep", "content": big, "isError": False})
+        messages.append(
+            {"role": "tool_result", "toolUseId": str(i), "toolName": "grep", "content": big, "isError": False}
+        )
 
     out = _snip_tool_outputs([dict(m) for m in messages])
     tool_results = [m for m in out if m.get("role") == "tool_result"]
@@ -121,6 +125,7 @@ def test_snip_preserves_recent_and_is_idempotent():
 # --------------------------------------------------------------------------
 # Context overflow recovery
 # --------------------------------------------------------------------------
+
 
 def test_overflow_triggers_compaction_and_retry():
     # First call raises overflow; second returns a final answer.
@@ -149,6 +154,7 @@ def test_overflow_triggers_compaction_and_retry():
 def test_overflow_without_context_manager_fails_gracefully():
     class AlwaysOverflow(ModelAdapter):
         last_usage = None
+
         def next(self, messages):
             raise ContextOverflowError("too big")
 
@@ -165,6 +171,7 @@ def test_overflow_without_context_manager_fails_gracefully():
 # Real token usage + summarization
 # --------------------------------------------------------------------------
 
+
 def test_real_usage_overrides_estimate():
     cm = ContextManager(model="default", context_window=200000)
     cm.add_message({"role": "user", "content": "tiny"})
@@ -176,7 +183,12 @@ def test_real_usage_overrides_estimate():
 def test_heuristic_summary_extracts_paths_and_errors():
     dropped = [
         {"role": "assistant_tool_call", "toolName": "edit_file", "input": {"path": "src/auth.py"}},
-        {"role": "tool_result", "toolName": "run_command", "content": "Traceback: ValueError in tests/test_auth.py", "isError": True},
+        {
+            "role": "tool_result",
+            "toolName": "run_command",
+            "content": "Traceback: ValueError in tests/test_auth.py",
+            "isError": True,
+        },
     ]
     summary = _heuristic_summary(dropped)
     assert "src/auth.py" in summary
@@ -209,8 +221,10 @@ def test_compaction_uses_summarizer_callback():
 # Governance opt-in + dynamic environment
 # --------------------------------------------------------------------------
 
+
 def test_governance_block_off_by_default(tmp_path):
     from pepsicode.prompt import build_system_prompt
+
     prompt = build_system_prompt(str(tmp_path), [], {"skills": [], "mcpServers": []})
     assert "Iron Laws" not in prompt
     assert "## Environment" in prompt  # dynamic section always present
@@ -218,12 +232,14 @@ def test_governance_block_off_by_default(tmp_path):
 
 def test_governance_block_on_when_enabled(tmp_path):
     from pepsicode.prompt import build_system_prompt
+
     prompt = build_system_prompt(str(tmp_path), [], {"skills": [], "mcpServers": [], "governance": True})
     assert "Iron Laws" in prompt
 
 
 def test_environment_section_reports_python_and_cwd(tmp_path):
     from pepsicode.prompt import build_system_prompt
+
     prompt = build_system_prompt(str(tmp_path), [], {})
     assert "Python:" in prompt
     assert str(tmp_path) in prompt
@@ -232,6 +248,7 @@ def test_environment_section_reports_python_and_cwd(tmp_path):
 # --------------------------------------------------------------------------
 # Task tool (sub-agent delegation)
 # --------------------------------------------------------------------------
+
 
 def test_task_tool_runs_sub_agent_and_returns_summary():
     from pepsicode.tools.task import create_task_tool
@@ -249,6 +266,7 @@ def test_task_tool_runs_sub_agent_and_returns_summary():
 
 def test_task_tool_rejects_unknown_agent_type():
     from pepsicode.tools.task import create_task_tool
+
     tool = create_task_tool(".", None, model_factory=lambda r: None)
     try:
         tool.validator({"agent_type": "bogus", "task": "x"})
@@ -259,6 +277,7 @@ def test_task_tool_rejects_unknown_agent_type():
 
 def test_task_tool_requires_model():
     from pepsicode.tools.task import create_task_tool
+
     tool = create_task_tool(".", None)  # no runtime, no factory
     parsed = tool.validator({"agent_type": "explore", "task": "x"})
     result = tool.run(parsed, ToolContext(cwd=".", permissions=None))
@@ -268,6 +287,7 @@ def test_task_tool_requires_model():
 def test_task_tool_excludes_itself_from_sub_registry():
     from pepsicode.sub_agents import AgentDefinition
     from pepsicode.tools.task import _build_sub_registry
+
     reg = _build_sub_registry(AgentDefinition.general_agent())
     assert "task" not in [t.name for t in reg.list()]
 
@@ -275,6 +295,7 @@ def test_task_tool_excludes_itself_from_sub_registry():
 # --------------------------------------------------------------------------
 # Regression tests for adversarial-review findings
 # --------------------------------------------------------------------------
+
 
 def test_compaction_drops_orphaned_tool_results():
     # A tool_result whose assistant_tool_call was dropped must not survive,
@@ -285,8 +306,12 @@ def test_compaction_drops_orphaned_tool_results():
     for i in range(20):
         cm.add_message({"role": "assistant_tool_call", "toolUseId": f"a{i}", "toolName": "read", "input": {}})
         cm.add_message({"role": "assistant_tool_call", "toolUseId": f"b{i}", "toolName": "read", "input": {}})
-        cm.add_message({"role": "tool_result", "toolUseId": f"a{i}", "toolName": "read", "content": "x" * 80, "isError": False})
-        cm.add_message({"role": "tool_result", "toolUseId": f"b{i}", "toolName": "read", "content": "y" * 80, "isError": False})
+        cm.add_message(
+            {"role": "tool_result", "toolUseId": f"a{i}", "toolName": "read", "content": "x" * 80, "isError": False}
+        )
+        cm.add_message(
+            {"role": "tool_result", "toolUseId": f"b{i}", "toolName": "read", "content": "y" * 80, "isError": False}
+        )
 
     compacted = cm.compact_messages(force=True)
     call_ids = {m.get("toolUseId") for m in compacted if m.get("role") == "assistant_tool_call"}
@@ -323,6 +348,7 @@ def test_compaction_resets_stale_actual_tokens():
 
 def test_529_not_retried_in_send():
     from pepsicode.anthropic_adapter import _should_retry_status
+
     assert _should_retry_status(529) is False
     assert _should_retry_status(429) is True
     assert _should_retry_status(503) is True

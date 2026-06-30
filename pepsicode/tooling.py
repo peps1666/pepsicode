@@ -9,8 +9,10 @@ from typing import Any, Protocol
 # Tool metadata (inspired by Claude Code's Tool type)
 # ---------------------------------------------------------------------------
 
+
 class ToolCapability(str, Enum):
     """Tool capability flags."""
+
     READ_ONLY = "read_only"
     DESTRUCTIVE = "destructive"
     CONCURRENCY_SAFE = "concurrency_safe"
@@ -20,9 +22,10 @@ class ToolCapability(str, Enum):
 @dataclass
 class ToolMetadata:
     """Tool metadata for classification and discovery.
-    
+
     Inspired by Claude Code's Tool type definition.
     """
+
     name: str
     description: str
     capabilities: set[ToolCapability] = field(default_factory=set)
@@ -51,9 +54,10 @@ class ToolMetadata:
 # Tool Protocol (inspired by Claude Code's Tool interface)
 # ---------------------------------------------------------------------------
 
+
 class Tool(Protocol):
     """Tool protocol defining a complete tool lifecycle.
-    
+
     Inspired by Claude Code's Tool type which includes:
     - call: Execution logic
     - description: Dynamic description generation

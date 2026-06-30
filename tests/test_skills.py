@@ -22,4 +22,3 @@ def test_discover_skills_prefers_project_root(tmp_path: Path, monkeypatch) -> No
     loaded = load_skill(tmp_path, "demo")
     assert loaded is not None
     assert loaded.content.startswith("# Demo")
-

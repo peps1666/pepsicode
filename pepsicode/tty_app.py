@@ -91,6 +91,7 @@ from pepsicode.tui.screen import (
     show_cursor,
 )
 from pepsicode.tui.transcript import (
+    get_transcript_max_scroll_offset,
     render_transcript,
 )
 from pepsicode.tui.types import TranscriptEntry
@@ -108,6 +109,7 @@ _get_terminal_size = _cached_terminal_size
 # ---------------------------------------------------------------------------
 # Throttled renderer
 # ---------------------------------------------------------------------------
+
 
 class _ThrottledRenderer:
     """Coalesces rapid rerender() calls into at most one actual render per interval.
@@ -250,7 +252,7 @@ class ScreenState:
 
 def _get_session_stats(args: TtyAppArgs, state: ScreenState) -> dict[str, int]:
     """Get current session statistics.
-    
+
     Returns a dict with transcript, message, skill, and MCP server counts.
     """
     return {
@@ -263,7 +265,7 @@ def _get_session_stats(args: TtyAppArgs, state: ScreenState) -> dict[str, int]:
 
 def _push_transcript_entry(state: ScreenState, **kwargs: Any) -> int:
     """Create and append a new transcript entry.
-    
+
     Returns the unique entry ID for later updates.
     """
     entry_id = state.next_entry_id
@@ -299,6 +301,7 @@ def _restore_session_into_state(
     state.cursor_offset = 0
     state.status = f"Resumed session {session.session_id[:8]}"
     if state.app_state:
+
         def update_app_state(app_state: AppState) -> AppState:
             app_state.session_id = session.session_id
             app_state.workspace = session.workspace
@@ -339,7 +342,7 @@ def _resume_session_by_id(args: TtyAppArgs, state: ScreenState, session_id: str)
 
 def _mark_running_tools_as_error(state: ScreenState, message: str) -> None:
     """Mark all currently running tools as failed with the given error message.
-    
+
     This is used when a turn ends unexpectedly while tools are still running.
     """
     for entry in state.transcript:
@@ -361,7 +364,7 @@ def _update_tool_entry(
     body: str,
 ) -> None:
     """Update a tool entry's status and output body.
-    
+
     Automatically un-collapses the entry so the new content is visible.
     """
     for entry in state.transcript:
@@ -384,7 +387,7 @@ def _set_tool_entry_collapse_phase(state: ScreenState, entry_id: int, phase: int
 
 def _collapse_tool_entry(state: ScreenState, entry_id: int, summary: str) -> None:
     """Collapse a tool entry to show only a summary line.
-    
+
     Used for completed tools to reduce visual clutter in the transcript.
     """
     for entry in state.transcript:
@@ -402,7 +405,7 @@ def _get_running_tool_entries(state: ScreenState) -> list[TranscriptEntry]:
 
 def _finalize_dangling_running_tools(state: ScreenState) -> None:
     """Mark all running tools as errors when a turn ends unexpectedly.
-    
+
     This happens when the model stops responding but tools are still active,
     indicating a potential sync issue or background process.
     """
@@ -420,7 +423,7 @@ def _finalize_dangling_running_tools(state: ScreenState) -> None:
 
 def _summarize_collapsed_tool_body(output: str) -> str:
     line = next(
-        (l.strip() for l in output.split("\n") if l.strip()),
+        (line.strip() for line in output.split("\n") if line.strip()),
         "output collapsed",
     )
     return line[:140] + "..." if len(line) > 140 else line
@@ -530,22 +533,17 @@ def _extract_path_from_tool_input(tool_input: Any) -> str | None:
 
 
 _HEADER_LINES_ESTIMATE = 10  # banner panel: top/title/divider + 5 body lines + bottom
-_PROMPT_LINES_ESTIMATE = 7   # prompt panel: top border + title + divider + 3 body + bottom border
+_PROMPT_LINES_ESTIMATE = 7  # prompt panel: top border + title + divider + 3 body + bottom border
 _FOOTER_LINES = 2  # status line plus optional contextual help
 _GAPS = 4
 _TRANSCRIPT_FRAME_LINES = 4  # top/bottom border + title + empty
+
 
 def _get_transcript_body_lines(args: TtyAppArgs, state: ScreenState) -> int:
     _, rows = _get_terminal_size()
     rows = max(12, rows)
     # Use cached estimates instead of re-rendering header/prompt just to count lines
-    chrome_overhead = (
-        _HEADER_LINES_ESTIMATE
-        + _PROMPT_LINES_ESTIMATE
-        + _FOOTER_LINES
-        + _GAPS
-        + _TRANSCRIPT_FRAME_LINES
-    )
+    chrome_overhead = _HEADER_LINES_ESTIMATE + _PROMPT_LINES_ESTIMATE + _FOOTER_LINES + _GAPS + _TRANSCRIPT_FRAME_LINES
     return max(1, rows - chrome_overhead)
 
 
@@ -564,9 +562,7 @@ def _get_stream_max_scroll_offset(args: TtyAppArgs, state: ScreenState) -> int:
 
 
 def _get_max_transcript_scroll_offset(args: TtyAppArgs, state: ScreenState) -> int:
-    return get_transcript_max_scroll_offset(
-        state.transcript, _get_transcript_body_lines(args, state)
-    )
+    return get_transcript_max_scroll_offset(state.transcript, _get_transcript_body_lines(args, state))
 
 
 def _scroll_transcript_by(args: TtyAppArgs, state: ScreenState, delta: int) -> bool:
@@ -676,7 +672,7 @@ _banner_cache: dict[str, tuple[tuple, str]] = {"key": ((), "")}
 
 def _render_header_panel(args: TtyAppArgs, state: ScreenState) -> str:
     """Render the top banner panel with model info, cwd, and session stats.
-    
+
     The result is cached to avoid re-rendering when stats haven't changed.
     """
     stats = _get_session_stats(args, state)
@@ -713,7 +709,7 @@ def _render_footer_cached(
     background_tasks: list[dict[str, Any]],
 ) -> str:
     """Render the bottom status bar with caching to reduce flicker.
-    
+
     Shows current operation status, tool/skill availability, and background tasks.
     """
     cache_key = (
@@ -930,7 +926,9 @@ def _render_stream_input(state: ScreenState, model: str, cols: int, visible_comm
     return lines
 
 
-def _render_stream_transcript(entries: list[TranscriptEntry], scroll_offset: int, height: int, cols: int) -> tuple[list[str], int]:
+def _render_stream_transcript(
+    entries: list[TranscriptEntry], scroll_offset: int, height: int, cols: int
+) -> tuple[list[str], int]:
     """Claude-style: simple left rules, no backgrounds.
 
     Returns (visible_window_lines, total_rendered_lines).
@@ -1049,12 +1047,7 @@ def _render_stream_screen(args: TtyAppArgs, state: ScreenState) -> None:
     cwd_name = Path(args.cwd).name or args.cwd
     footer = f"  {SUBTLE}{cwd_name}{RESET}  {SUBTLE}{msg_count} events{RESET}  {SUBTLE}v0.1{RESET}"
 
-    frame = (
-        _truncate_frame_lines(transcript_lines, cols, transcript_height)
-        + [sep]
-        + input_lines
-        + [footer]
-    )
+    frame = _truncate_frame_lines(transcript_lines, cols, transcript_height) + [sep] + input_lines + [footer]
     frame = _truncate_frame_lines(frame, cols, rows)
 
     sys.stdout.write("[H" + "[K\n".join(frame) + "[K[J")
@@ -1114,9 +1107,7 @@ def _render_screen(args: TtyAppArgs, state: ScreenState) -> None:
     transcript_snapshot = list(state.transcript)
     body_lines = _get_transcript_body_lines(args, state)
     if transcript_snapshot:
-        transcript_body = render_transcript(
-            transcript_snapshot, state.transcript_scroll_offset, body_lines
-        )
+        transcript_body = render_transcript(transcript_snapshot, state.transcript_scroll_offset, body_lines)
     else:
         transcript_body = f"{render_status_line(None)}\n\nType /help for commands."
     buf.append(
@@ -1154,16 +1145,16 @@ def _render_screen(args: TtyAppArgs, state: ScreenState) -> None:
 # We translate these to the ANSI sequences that input_parser.py already
 # understands.
 _WIN_SCANCODE_TO_ANSI: dict[int, str] = {
-    72: "\x1b[A",    # Up
-    80: "\x1b[B",    # Down
-    77: "\x1b[C",    # Right
-    75: "\x1b[D",    # Left
-    71: "\x1b[H",    # Home
-    79: "\x1b[F",    # End
-    73: "\x1b[5~",   # Page Up
-    81: "\x1b[6~",   # Page Down
-    83: "\x1b[3~",   # Delete
-    82: "\x1b[2~",   # Insert
+    72: "\x1b[A",  # Up
+    80: "\x1b[B",  # Down
+    77: "\x1b[C",  # Right
+    75: "\x1b[D",  # Left
+    71: "\x1b[H",  # Home
+    79: "\x1b[F",  # End
+    73: "\x1b[5~",  # Page Up
+    81: "\x1b[6~",  # Page Down
+    83: "\x1b[3~",  # Delete
+    82: "\x1b[2~",  # Insert
     # Alt+Arrow (returned with \x00 prefix on some terminals)
     152: "\x1b[1;3A",  # Alt+Up
     160: "\x1b[1;3B",  # Alt+Down
@@ -1274,10 +1265,12 @@ class _RawModeContext:
         if sys.platform == "win32":
             # Ensure VT processing is active (idempotent)
             from pepsicode.tui.screen import _enable_windows_vt_processing
+
             _enable_windows_vt_processing()
             # Switch console to UTF-8 code page for proper Unicode handling
             try:
                 import ctypes
+
                 kernel32 = ctypes.windll.kernel32  # type: ignore[attr-defined]
                 self._old_cp = kernel32.GetConsoleOutputCP()
                 kernel32.SetConsoleOutputCP(65001)  # UTF-8
@@ -1291,10 +1284,7 @@ class _RawModeContext:
             new = termios.tcgetattr(fd)
             # Input flags: disable CR->NL translation and XON/XOFF flow control,
             # strip high bit, and break signal generation.
-            new[0] &= ~(
-                termios.BRKINT | termios.ICRNL | termios.INPCK
-                | termios.ISTRIP | termios.IXON
-            )
+            new[0] &= ~(termios.BRKINT | termios.ICRNL | termios.INPCK | termios.ISTRIP | termios.IXON)
             # Output flags: KEEP OPOST so that \n -> \r\n translation still
             # works.  tty.setraw() clears OPOST which causes "staircase"
             # output on Linux/macOS -- every newline only moves down without
@@ -1305,9 +1295,7 @@ class _RawModeContext:
             new[2] |= termios.CS8
             # Local flags: disable echo, canonical mode, extended processing,
             # and signal generation from keys (Ctrl-C, Ctrl-Z).
-            new[3] &= ~(
-                termios.ECHO | termios.ICANON | termios.IEXTEN | termios.ISIG
-            )
+            new[3] &= ~(termios.ECHO | termios.ICANON | termios.IEXTEN | termios.ISIG)
             # Special characters: read returns after 1 byte, no timeout.
             new[6][termios.VMIN] = 1
             new[6][termios.VTIME] = 0
@@ -1319,6 +1307,7 @@ class _RawModeContext:
             if self._old_cp is not None:
                 try:
                     import ctypes
+
                     ctypes.windll.kernel32.SetConsoleOutputCP(self._old_cp)  # type: ignore[attr-defined]
                 except Exception:
                     pass
@@ -1358,10 +1347,12 @@ def _execute_tool_shortcut(
             tool_input,
             context=ToolContext(cwd=args.cwd, permissions=args.permissions),
         )
-        state.recent_tools.append({
-            "name": tool_name,
-            "status": "success" if result.ok else "error",
-        })
+        state.recent_tools.append(
+            {
+                "name": tool_name,
+                "status": "success" if result.ok else "error",
+            }
+        )
         output = result.output if result.ok else f"ERROR: {result.output}"
         _update_tool_entry(state, entry_id, "success" if result.ok else "error", output)
         _collapse_tool_entry(state, entry_id, _summarize_collapsed_tool_body(output))
@@ -1388,11 +1379,7 @@ def _handle_input(
 ) -> bool:
     """Returns True if /exit was typed."""
     if state.is_busy:
-        state.status = (
-            f"Running {state.active_tool}..."
-            if state.active_tool
-            else "Current turn is still running..."
-        )
+        state.status = f"Running {state.active_tool}..." if state.active_tool else "Current turn is still running..."
         return False
 
     input_text = (submitted_raw_input if submitted_raw_input is not None else state.input).strip()
@@ -1417,9 +1404,7 @@ def _handle_input(
         _push_transcript_entry(
             state,
             kind="assistant",
-            body="\n".join(
-                f"{t.name}: {t.description}" for t in args.tools.list()
-            ),
+            body="\n".join(f"{t.name}: {t.description}" for t in args.tools.list()),
         )
         return False
 
@@ -1440,9 +1425,7 @@ def _handle_input(
     # Tool shortcuts
     shortcut = parse_local_tool_shortcut(input_text)
     if shortcut:
-        _execute_tool_shortcut(
-            args, state, shortcut["toolName"], shortcut["input"], rerender
-        )
+        _execute_tool_shortcut(args, state, shortcut["toolName"], shortcut["input"], rerender)
         return False
 
     # Unknown slash commands
@@ -1469,6 +1452,7 @@ def _handle_input(
     # Update app state
     if state.app_state:
         from pepsicode.state import set_busy
+
         state.app_state.set_state(set_busy())
 
     rerender()
@@ -1503,7 +1487,9 @@ def _handle_input(
             if state.streaming_entry_id is None:
                 # Create a new transcript entry for the streaming output.
                 state.streaming_entry_id = _push_transcript_entry(
-                    state, kind="assistant", body=state.streaming_text,
+                    state,
+                    kind="assistant",
+                    body=state.streaming_text,
                 )
             else:
                 # Update the existing entry in-place.
@@ -1623,16 +1609,20 @@ def _handle_input(
                 aggregated.last_output = output
                 done = aggregated.completed >= aggregated.total
                 if done:
-                    state.recent_tools.append({
-                        "name": f"{tool_name} x{aggregated.total}",
-                        "status": "error" if aggregated.errors > 0 else "success",
-                    })
+                    state.recent_tools.append(
+                        {
+                            "name": f"{tool_name} x{aggregated.total}",
+                            "status": "error" if aggregated.errors > 0 else "success",
+                        }
+                    )
                 body = (
-                    "\n".join([
-                        f"Aggregated {tool_name} for {aggregated.path}",
-                        f"Operations: {aggregated.total}, errors: {aggregated.errors}",
-                        f"Last result: {aggregated.last_output}",
-                    ])
+                    "\n".join(
+                        [
+                            f"Aggregated {tool_name} for {aggregated.path}",
+                            f"Operations: {aggregated.total}, errors: {aggregated.errors}",
+                            f"Last result: {aggregated.last_output}",
+                        ]
+                    )
                     if done
                     else f"Aggregated {tool_name} for {aggregated.path}\nCompleted: {aggregated.completed}/{aggregated.total}"
                 )
@@ -1647,10 +1637,12 @@ def _handle_input(
                     aggregated_edit_by_entry_id.pop(entry_id, None)
                     aggregated_edit_by_key.pop(f"{tool_name}:{aggregated.path}", None)
             else:
-                state.recent_tools.append({
-                    "name": tool_name,
-                    "status": "error" if is_error else "success",
-                })
+                state.recent_tools.append(
+                    {
+                        "name": tool_name,
+                        "status": "error" if is_error else "success",
+                    }
+                )
 
                 # Error recovery hints
                 display_output = output
@@ -1725,6 +1717,7 @@ def _handle_input(
             if args.context_manager:
                 try:
                     from pepsicode.context_manager import save_context_state
+
                     save_context_state(args.context_manager)
                 except Exception:
                     pass
@@ -1767,7 +1760,7 @@ def run_tty_app(
     list_sessions_only: bool = False,
 ) -> list[ChatMessage]:
     """Event-driven full-screen TTY application, ported from the TypeScript version.
-    
+
     Args:
         resume_session: Session ID to resume, or "latest" for most recent
         list_sessions_only: If True, print session list and exit
@@ -1776,6 +1769,7 @@ def run_tty_app(
     context_manager = None
     if runtime:
         from pepsicode.context_manager import ContextManager
+
         context_manager = ContextManager(model=runtime.get("model", "default"))
         if hasattr(model, "summarize"):
             context_manager.summarizer = model.summarize
@@ -1825,11 +1819,13 @@ def run_tty_app(
         session = create_new_session(workspace=str(Path(cwd).resolve()))
 
     # Initialize AppState store (Zustand-style)
-    app_state_store = create_app_store({
-        "session_id": session.session_id,
-        "workspace": cwd,
-        "model": runtime.get("model", "unknown") if runtime else "unknown",
-    })
+    app_state_store = create_app_store(
+        {
+            "session_id": session.session_id,
+            "workspace": cwd,
+            "model": runtime.get("model", "unknown") if runtime else "unknown",
+        }
+    )
 
     # Initialize CostTracker
     cost_tracker = CostTracker()
@@ -1899,6 +1895,7 @@ def run_tty_app(
     if sys.platform == "win32":
         try:
             import ctypes
+
             ctypes.windll.kernel32.SetConsoleOutputCP(65001)  # type: ignore[attr-defined]
         except Exception:
             pass
@@ -1910,10 +1907,7 @@ def run_tty_app(
     # immediately rather than waiting for the 0.5s cache TTL.
     # signal.signal() can only be called from the main thread.
     _prev_sigwinch = None
-    if (
-        sys.platform != "win32"
-        and threading.current_thread() is threading.main_thread()
-    ):
+    if sys.platform != "win32" and threading.current_thread() is threading.main_thread():
         import signal as _signal
 
         from pepsicode.tui.chrome import invalidate_terminal_size_cache
@@ -2003,11 +1997,7 @@ def run_tty_app(
                 for event in parsed.events:
                     try:
                         _handle_event(args, state, event, rerender, approval_event, approval_result)
-                        if state.input == "/exit" or (
-                            isinstance(event, KeyEvent)
-                            and event.name == "c"
-                            and event.ctrl
-                        ):
+                        if state.input == "/exit" or (isinstance(event, KeyEvent) and event.name == "c" and event.ctrl):
                             raise SystemExit(0)
                     except SystemExit:
                         should_exit = True
@@ -2075,12 +2065,12 @@ def _handle_event(
     approval_result: dict[str, Any],
 ) -> None:
     """Process a single parsed input event.
-    
+
     Routes the event to the appropriate handler based on current state:
     - Ctrl+C: Exit immediately
     - Pending approval: Handle permission dialog input
     - Normal mode: Handle input, navigation, and commands
-    
+
     Args:
         args: Application arguments (tools, model, permissions)
         state: Current screen state
@@ -2183,7 +2173,7 @@ def _handle_pending_approval_event(
     approval_result: dict[str, Any],
 ) -> None:
     """Handle input events while a permission approval is pending.
-    
+
     ``pending`` is captured by the caller to avoid TOCTOU races with the
     agent thread (which may set ``state.pending_approval = None`` after an
     approval event is signalled).
@@ -2287,7 +2277,6 @@ def _handle_pending_approval_wheel(
         rerender()
         return True
     return False
-
 
 
 def _confirm_pending_choice(
@@ -2461,14 +2450,14 @@ def _handle_normal_mode_navigation(
 ) -> bool:
     """Handle navigation and editing keys. Returns True if handled."""
     if event.name == "backspace" and state.cursor_offset > 0:
-        state.input = state.input[:state.cursor_offset - 1] + state.input[state.cursor_offset:]
+        state.input = state.input[: state.cursor_offset - 1] + state.input[state.cursor_offset :]
         state.cursor_offset -= 1
         state.selected_slash_index = 0
         rerender()
         return True
 
     if event.name == "delete" and state.cursor_offset < len(state.input):
-        state.input = state.input[:state.cursor_offset] + state.input[state.cursor_offset + 1:]
+        state.input = state.input[: state.cursor_offset] + state.input[state.cursor_offset + 1 :]
         state.selected_slash_index = 0
         rerender()
         return True
@@ -2592,7 +2581,7 @@ def _handle_normal_mode_text(
 
     # Regular text input (accept any non-empty text, including multi-byte CJK/emoji)
     if not event.ctrl and event.text:
-        state.input = state.input[:state.cursor_offset] + event.text + state.input[state.cursor_offset:]
+        state.input = state.input[: state.cursor_offset] + event.text + state.input[state.cursor_offset :]
         state.cursor_offset += len(event.text)
         state.selected_slash_index = 0
         state.history_index = len(state.history)
@@ -2623,13 +2612,13 @@ def _handle_normal_mode_wheel(
 
 def summarize_tool_input(tool_name: str, tool_input: Any) -> str:
     """Generate a human-readable summary of tool input.
-    
+
     Public wrapper around _summarize_tool_input for external callers.
-    
+
     Args:
         tool_name: Name of the tool being called
         tool_input: Input dictionary passed to the tool
-        
+
     Returns:
         Human-readable summary string for display in transcript
     """
@@ -2638,13 +2627,13 @@ def summarize_tool_input(tool_name: str, tool_input: Any) -> str:
 
 def summarize_tool_output(tool_name: str, output: str) -> str:
     """Summarize tool output for collapsed display.
-    
+
     Picks the first meaningful line and truncates to 140 characters.
-    
+
     Args:
         tool_name: Name of the tool (unused but kept for API consistency)
         output: Full tool output string
-        
+
     Returns:
         Truncated summary suitable for collapsed tool display
     """
@@ -2654,9 +2643,7 @@ def summarize_tool_output(tool_name: str, output: str) -> str:
 def _format_history(entries: list[str], limit: int = 20) -> str:
     """Format recent history entries with 1-based numbers."""
     start = max(0, len(entries) - limit)
-    return "\n".join(
-        f"{start + i + 1}. {entry}" for i, entry in enumerate(entries[start:])
-    )
+    return "\n".join(f"{start + i + 1}. {entry}" for i, entry in enumerate(entries[start:]))
 
 
 def _save_transcript(state_obj: Any, cwd: str, permissions: PermissionManager, output_path: str) -> str:

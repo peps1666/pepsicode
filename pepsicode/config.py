@@ -118,11 +118,7 @@ def save_mini_code_settings(updates: dict[str, Any]) -> None:
 def load_runtime_config(cwd: str | Path | None = None) -> dict[str, Any]:
     effective = load_effective_settings(cwd)
     env = {**dict(effective.get("env", {})), **os.environ}
-    model = (
-        os.environ.get("PEPSI_CODE_MODEL")
-        or effective.get("model")
-        or str(env.get("ANTHROPIC_MODEL", "")).strip()
-    )
+    model = os.environ.get("PEPSI_CODE_MODEL") or effective.get("model") or str(env.get("ANTHROPIC_MODEL", "")).strip()
     base_url = str(env.get("ANTHROPIC_BASE_URL", "")).strip() or "https://api.anthropic.com"
     auth_token = str(env.get("ANTHROPIC_AUTH_TOKEN", "")).strip() or None
     api_key = str(env.get("ANTHROPIC_API_KEY", "")).strip() or None
@@ -143,9 +139,7 @@ def load_runtime_config(cwd: str | Path | None = None) -> dict[str, Any]:
     if not model:
         raise RuntimeError("No model configured. Set ~/.pepsi-code/settings.json or ANTHROPIC_MODEL.")
     if not auth_token and not api_key:
-        raise RuntimeError(
-            "No auth configured. Set ANTHROPIC_AUTH_TOKEN or ANTHROPIC_API_KEY."
-        )
+        raise RuntimeError("No auth configured. Set ANTHROPIC_AUTH_TOKEN or ANTHROPIC_API_KEY.")
 
     fallback_model = (
         os.environ.get("PEPSI_CODE_FALLBACK_MODEL")
@@ -199,14 +193,12 @@ def read_mcp_tokens() -> dict[str, str]:
 def save_mcp_tokens(tokens: dict[str, str]) -> None:
     """保存 MCP 服务器的 Bearer Token 存储。"""
     PEPSI_CODE_MCP_TOKENS_PATH.parent.mkdir(parents=True, exist_ok=True)
-    PEPSI_CODE_MCP_TOKENS_PATH.write_text(
-        json.dumps(tokens, indent=2) + "\n", encoding="utf-8"
-    )
+    PEPSI_CODE_MCP_TOKENS_PATH.write_text(json.dumps(tokens, indent=2) + "\n", encoding="utf-8")
 
 
 def validate_config(cwd: str | Path | None = None) -> tuple[bool, list[str]]:
     """验证配置完整性，返回 (是否有效，错误列表)
-    
+
     检查项：
     1. 模型名称是否配置
     2. API key 是否配置
@@ -224,13 +216,9 @@ def validate_config(cwd: str | Path | None = None) -> tuple[bool, list[str]]:
         if model and not any(model.lower() == km.lower() for km in KNOWN_MODELS):
             suggestion = _suggest_model_name(model)
             if suggestion:
-                warnings.append(
-                    f"Unknown model '{model}'. Did you mean '{suggestion}'"
-                )
+                warnings.append(f"Unknown model '{model}'. Did you mean '{suggestion}'")
             else:
-                warnings.append(
-                    f"Unknown model '{model}'. Known models: {', '.join(KNOWN_MODELS[:3])}..."
-                )
+                warnings.append(f"Unknown model '{model}'. Known models: {', '.join(KNOWN_MODELS[:3])}...")
 
         # 检查 MCP 配置
         mcp_servers = config.get("mcpServers", {})
@@ -303,7 +291,11 @@ def format_config_diagnostic(cwd: str | Path | None = None) -> str:
         lines.append("-" * 40)
         lines.append(f"  Model: {config.get('model', 'not set')}")
         lines.append(f"  Base URL: {config.get('baseUrl', 'not set')}")
-        auth_method = "ANTHROPIC_AUTH_TOKEN" if config.get("authToken") else ("ANTHROPIC_API_KEY" if config.get("apiKey") else "not set")
+        auth_method = (
+            "ANTHROPIC_AUTH_TOKEN"
+            if config.get("authToken")
+            else ("ANTHROPIC_API_KEY" if config.get("apiKey") else "not set")
+        )
         lines.append(f"  Auth: {auth_method}")
         lines.append(f"  MCP Servers: {len(config.get('mcpServers', {}))}")
     except Exception:

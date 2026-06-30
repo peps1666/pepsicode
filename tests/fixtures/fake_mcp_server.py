@@ -78,4 +78,3 @@ for line in sys.stdin:
                 "result": {"content": [{"type": "text", "text": f"echo:{arguments.get('text', '')}"}]},
             }
         )
-

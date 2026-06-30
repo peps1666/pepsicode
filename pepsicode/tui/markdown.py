@@ -14,8 +14,8 @@ UNDERLINE = "\u001b[4m"
 BRIGHT_CYAN = "\u001b[96m"
 BRIGHT_YELLOW = "\u001b[93m"
 SUBTLE = "\u001b[38;5;243m"
-CODE_BG = "\u001b[48;5;236m"    # dark bg for code
-CODE_FG = "\u001b[38;5;215m"    # warm amber for inline code
+CODE_BG = "\u001b[48;5;236m"  # dark bg for code
+CODE_FG = "\u001b[38;5;215m"  # warm amber for inline code
 QUOTE_BAR = "\u001b[38;5;243m"  # subtle gray for blockquote
 HEADING_ACCENT = "\u001b[38;5;39m"  # amber for headings (Claude-style)
 
@@ -28,8 +28,8 @@ _RE_NUMBERED_LIST = re.compile(r"^(\s*)\d+\.\s+")
 # Combined inline pattern: match code, bold, or italic in a single pass
 # Order matters: code first (most specific), then bold, then italic
 _RE_INLINE_COMBINED = re.compile(
-    r"`([^`]+)`"              # group 1: inline code
-    r"|\*\*([^*]+)\*\*"      # group 2: bold
+    r"`([^`]+)`"  # group 1: inline code
+    r"|\*\*([^*]+)\*\*"  # group 2: bold
     r"|(?<!\*)\*([^*]+)\*(?!\*)"  # group 3: italic
 )
 
@@ -43,6 +43,7 @@ def _inline_replace(m: re.Match) -> str:
     if m.group(3) is not None:
         return f"{ITALIC}{m.group(3)}{RESET}"
     return m.group(0)
+
 
 def render_markdownish(input_text: str) -> str:
     lines = input_text.split("\n")
@@ -103,15 +104,15 @@ def render_markdownish(input_text: str) -> str:
         m = _RE_LIST_ITEM.match(line)
         if m:
             indent = m.group(1)
-            rest = line[m.end():]
+            rest = line[m.end() :]
             formatted = f"{indent}{HEADING_ACCENT}•{RESET} {rest}"
         else:
             # Numbered list items with colored number
             m2 = _RE_NUMBERED_LIST.match(line)
             if m2:
                 indent = m2.group(1)
-                rest = line[m2.end():]
-                num = line[len(indent):m2.end()].strip()
+                rest = line[m2.end() :]
+                num = line[len(indent) : m2.end()].strip()
                 formatted = f"{indent}{HEADING_ACCENT}{num}{RESET} {rest}"
 
         # Inline formatting — single-pass for code + bold + italic

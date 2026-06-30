@@ -22,4 +22,3 @@ def save_history_entries(entries: list[str]) -> None:
         json.dumps({"entries": entries[-200:]}, indent=2) + "\n",
         encoding="utf-8",
     )
-

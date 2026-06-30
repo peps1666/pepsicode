@@ -18,9 +18,11 @@ from typing import Any
 # Context collector
 # ---------------------------------------------------------------------------
 
+
 @dataclass
 class ContextCache:
     """Cache entry with TTL."""
+
     value: Any
     created_at: float = field(default_factory=time.time)
     ttl_seconds: float = 300.0  # 5 minutes default
@@ -31,11 +33,11 @@ class ContextCache:
 
 class AsyncContextCollector:
     """Collects and caches context information.
-    
+
     Inspired by Claude Code's memoized async context providers:
     - getSystemContext() - git status, system info
     - getUserContext() - CLAUDE.md, user preferences
-    
+
     Parallelizes expensive I/O and provides cache invalidation.
     """
 
@@ -47,7 +49,7 @@ class AsyncContextCollector:
 
     async def get_full_context(self) -> dict[str, str]:
         """Get complete context (parallelized).
-        
+
         Returns:
             Dictionary with context sections (git, user, system, etc.)
         """
@@ -117,7 +119,7 @@ class AsyncContextCollector:
 
     def invalidate(self, pattern: str | None = None) -> None:
         """Invalidate cache entries.
-        
+
         Args:
             pattern: If provided, only invalidate matching keys
         """
@@ -172,6 +174,7 @@ class AsyncContextCollector:
         """Get current git branch."""
         try:
             import subprocess
+
             result = subprocess.run(
                 ["git", "rev-parse", "--abbrev-ref", "HEAD"],
                 cwd=str(self.cwd),
@@ -189,6 +192,7 @@ class AsyncContextCollector:
         """Get git status output."""
         try:
             import subprocess
+
             result = subprocess.run(
                 ["git", "status", "--short"],
                 cwd=str(self.cwd),
@@ -206,6 +210,7 @@ class AsyncContextCollector:
         """Get recent git log."""
         try:
             import subprocess
+
             result = subprocess.run(
                 ["git", "log", "--oneline", "-5"],
                 cwd=str(self.cwd),
@@ -232,6 +237,7 @@ class AsyncContextCollector:
     def _get_current_date(self) -> str:
         """Get current date string."""
         from datetime import datetime
+
         return f"Today's date is {datetime.now().isoformat()}."
 
     # -----------------------------------------------------------------------
@@ -246,21 +252,25 @@ class AsyncContextCollector:
         lines = ["## Current Context", ""]
 
         if "git_status" in context:
-            lines.extend([
-                "### Git Status",
-                "```",
-                context["git_status"],
-                "```",
-                "",
-            ])
+            lines.extend(
+                [
+                    "### Git Status",
+                    "```",
+                    context["git_status"],
+                    "```",
+                    "",
+                ]
+            )
 
         if "claude_md" in context:
-            lines.extend([
-                "### Project Instructions (CLAUDE.md)",
-                "",
-                context["claude_md"],
-                "",
-            ])
+            lines.extend(
+                [
+                    "### Project Instructions (CLAUDE.md)",
+                    "",
+                    context["claude_md"],
+                    "",
+                ]
+            )
 
         if "current_date" in context:
             lines.append(context["current_date"])

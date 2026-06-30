@@ -24,25 +24,29 @@ from typing import Any
 # Permission modes
 # ---------------------------------------------------------------------------
 
+
 class PermissionMode(str, Enum):
     """Permission modes (inspired by Claude Code)."""
-    DEFAULT = "default"           # Ask for everything
-    AUTO = "auto"                 # Auto-approve safe ops
-    BYPASS = "bypass"             # Skip all permissions (dangerous!)
-    PLAN = "plan"                 # Read-only, no execution
+
+    DEFAULT = "default"  # Ask for everything
+    AUTO = "auto"  # Auto-approve safe ops
+    BYPASS = "bypass"  # Skip all permissions (dangerous!)
+    PLAN = "plan"  # Read-only, no execution
 
 
 # ---------------------------------------------------------------------------
 # Risk classification
 # ---------------------------------------------------------------------------
 
+
 class RiskLevel(str, Enum):
     """Operation risk levels."""
-    SAFE = "safe"                 # Auto-approve
-    LOW = "low"                   # Auto-approve with logging
-    MEDIUM = "medium"             # Prompt with explanation
-    HIGH = "high"                 # Block or require strong justification
-    DANGEROUS = "dangerous"       # Always block
+
+    SAFE = "safe"  # Auto-approve
+    LOW = "low"  # Auto-approve with logging
+    MEDIUM = "medium"  # Prompt with explanation
+    HIGH = "high"  # Block or require strong justification
+    DANGEROUS = "dangerous"  # Always block
 
 
 # ---------------------------------------------------------------------------
@@ -97,27 +101,28 @@ HIGH_RISK_COMMANDS = {
 # Dangerous patterns (always block)
 DANGEROUS_PATTERNS = [
     # Unix
-    r"rm\s+-rf\s+/",           # Delete root
-    r"chmod\s+777",            # World-writable
-    r"curl.*\|\s*sh",          # Pipe curl to shell
+    r"rm\s+-rf\s+/",  # Delete root
+    r"chmod\s+777",  # World-writable
+    r"curl.*\|\s*sh",  # Pipe curl to shell
     r"wget.*\|\s*sh",
-    r"mkfs",                   # Format filesystem
-    r"dd\s+if=",               # Disk dump
+    r"mkfs",  # Format filesystem
+    r"dd\s+if=",  # Disk dump
     # Windows
-    r"del\s+/[sfq].*[\\]",     # Recursive/force delete with path
-    r"rmdir\s+/s\s+/q",        # Silent recursive dir removal
+    r"del\s+/[sfq].*[\\]",  # Recursive/force delete with path
+    r"rmdir\s+/s\s+/q",  # Silent recursive dir removal
     r"rd\s+/s\s+/q",
-    r"format\s+[a-zA-Z]:",     # Format drive
-    r"powershell.*\biex\b",    # PowerShell invoke-expression from remote
+    r"format\s+[a-zA-Z]:",  # Format drive
+    r"powershell.*\biex\b",  # PowerShell invoke-expression from remote
     r"powershell.*Invoke-Expression",
-    r"iwr.*\|\s*iex",          # Download and execute (PowerShell)
-    r"reg\s+delete\s+HKLM",   # Delete machine-wide registry keys
+    r"iwr.*\|\s*iex",  # Download and execute (PowerShell)
+    r"reg\s+delete\s+HKLM",  # Delete machine-wide registry keys
 ]
 
 
 @dataclass
 class RiskAssessment:
     """Risk assessment result."""
+
     level: RiskLevel
     tool_name: str
     action: str  # "approve", "prompt", "block"
@@ -129,9 +134,10 @@ class RiskAssessment:
 # Auto mode checker
 # ---------------------------------------------------------------------------
 
+
 class AutoModeChecker:
     """Checks if operations can be auto-approved.
-    
+
     Inspired by Claude Code's auto mode with input/output layer checks.
     """
 
@@ -148,11 +154,11 @@ class AutoModeChecker:
         tool_input: dict[str, Any],
     ) -> RiskAssessment:
         """Assess risk of a tool operation.
-        
+
         Args:
             tool_name: Name of tool being called
             tool_input: Tool input dictionary
-        
+
         Returns:
             RiskAssessment with action recommendation
         """
@@ -302,7 +308,7 @@ class AutoModeChecker:
     @staticmethod
     def detect_prompt_injection(user_input: str) -> tuple[bool, str]:
         """Detect potential prompt injection in user input.
-        
+
         Returns:
             (is_injection, reason)
         """
@@ -324,7 +330,7 @@ class AutoModeChecker:
     @staticmethod
     def classify_output_safety(output: str) -> tuple[bool, str]:
         """Classify if AI output contains unsafe operations.
-        
+
         Returns:
             (is_unsafe, reason)
         """
@@ -354,9 +360,11 @@ class AutoModeChecker:
 # Mode management
 # ---------------------------------------------------------------------------
 
+
 @dataclass
 class ModeState:
     """Current permission mode state."""
+
     mode: PermissionMode = PermissionMode.DEFAULT
     mode_changed_at: float = 0.0
     mode_changed_by: str = "user"
@@ -423,6 +431,7 @@ def get_mode_state() -> ModeState:
 def set_permission_mode(mode: PermissionMode) -> str:
     """Set global permission mode."""
     import time
+
     _checker.set_mode(mode)
     _mode_state.mode = mode
     _mode_state.mode_changed_at = time.time()

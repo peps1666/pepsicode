@@ -46,6 +46,7 @@ PG_PORT = os.environ.get("PEPSI_MEMORY_PG_PORT", "5432")
 # MemoryStore protocol
 # ---------------------------------------------------------------------------
 
+
 class MemoryStore(Protocol):
     """Storage backend contract for the memory system.
 
@@ -66,6 +67,7 @@ class MemoryStore(Protocol):
 # ---------------------------------------------------------------------------
 # File backend (the original implementation, extracted verbatim)
 # ---------------------------------------------------------------------------
+
 
 class FileMemoryStore:
     """On-disk store: MEMORY.md + memory.json per scope directory."""
@@ -101,10 +103,7 @@ class FileMemoryStore:
         if memory_json.exists():
             try:
                 data = json.loads(memory_json.read_text(encoding="utf-8"))
-                return [
-                    MemoryEntry.from_dict(entry_data)
-                    for entry_data in data.get("entries", [])
-                ]
+                return [MemoryEntry.from_dict(entry_data) for entry_data in data.get("entries", [])]
             except (json.JSONDecodeError, KeyError):
                 pass  # fall through to Markdown parsing
 
@@ -141,13 +140,15 @@ class FileMemoryStore:
                     entry_content = re.sub(r"`[^`]+`", "", entry_content).strip()
 
                 entry_counter += 1
-                entries.append(MemoryEntry(
-                    id=f"{scope.value}-{entry_counter}",
-                    scope=scope,
-                    category=current_category,
-                    content=entry_content,
-                    tags=tags,
-                ))
+                entries.append(
+                    MemoryEntry(
+                        id=f"{scope.value}-{entry_counter}",
+                        scope=scope,
+                        category=current_category,
+                        content=entry_content,
+                        tags=tags,
+                    )
+                )
         return entries
 
     # -- save --------------------------------------------------------------
@@ -177,6 +178,7 @@ class FileMemoryStore:
 # ---------------------------------------------------------------------------
 # PostgreSQL backend
 # ---------------------------------------------------------------------------
+
 
 class PostgresMemoryStore:
     """PostgreSQL-backed store.  Single table, one row per memory entry.
@@ -252,16 +254,18 @@ class PostgresMemoryStore:
                     tags = json.loads(tags)
                 except (json.JSONDecodeError, TypeError):
                     tags = []
-            entries.append(MemoryEntry(
-                id=row[0],
-                scope=scope,
-                category=row[1] or "general",
-                content=row[2],
-                created_at=row[3] or time.time(),
-                updated_at=row[4] or time.time(),
-                tags=tags if isinstance(tags, list) else [],
-                usage_count=row[6] or 0,
-            ))
+            entries.append(
+                MemoryEntry(
+                    id=row[0],
+                    scope=scope,
+                    category=row[1] or "general",
+                    content=row[2],
+                    created_at=row[3] or time.time(),
+                    updated_at=row[4] or time.time(),
+                    tags=tags if isinstance(tags, list) else [],
+                    usage_count=row[6] or 0,
+                )
+            )
         return entries
 
     # -- save --------------------------------------------------------------

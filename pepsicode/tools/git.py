@@ -168,21 +168,25 @@ def _run_review(cwd: str, max_lines: int) -> ToolResult:
     ]
 
     if diff_stat:
-        lines.extend([
-            "",
-            "Latest Commit Changes:",
-            "",
-            diff_stat,
-        ])
+        lines.extend(
+            [
+                "",
+                "Latest Commit Changes:",
+                "",
+                diff_stat,
+            ]
+        )
 
     # Check for uncommitted changes
     rc, status, _ = _run_git(["status", "--short"], cwd)
     if status:
-        lines.extend([
-            "",
-            "⚠️  Uncommitted Changes:",
-            status,
-        ])
+        lines.extend(
+            [
+                "",
+                "⚠️  Uncommitted Changes:",
+                status,
+            ]
+        )
     else:
         lines.append("")
         lines.append("✓ Working tree clean")

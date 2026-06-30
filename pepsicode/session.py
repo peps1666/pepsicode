@@ -27,21 +27,24 @@ AUTOSAVE_INTERVAL_SECONDS = 30  # Minimum seconds between autosaves
 # Data structures
 # ---------------------------------------------------------------------------
 
+
 @dataclass
 class SessionMetadata:
     """Lightweight metadata for session listing."""
+
     session_id: str
     created_at: float  # Unix timestamp
     updated_at: float  # Unix timestamp
     first_message: str = ""  # Truncated first user message
-    last_message: str = ""   # Truncated last message
+    last_message: str = ""  # Truncated last message
     message_count: int = 0
-    workspace: str = ""      # Working directory when session started
+    workspace: str = ""  # Working directory when session started
 
 
 @dataclass
 class SessionData:
     """Complete session state that can be persisted and restored."""
+
     session_id: str
     created_at: float
     updated_at: float
@@ -89,6 +92,7 @@ class SessionData:
 # Session file operations
 # ---------------------------------------------------------------------------
 
+
 def _session_file(session_id: str) -> Path:
     """Return path to a session JSON file."""
     return SESSIONS_DIR / f"{session_id}.json"
@@ -108,17 +112,9 @@ def resolve_session_id(session_id: str) -> str | None:
     if _session_file(candidate).exists():
         return candidate
 
-    matches = [
-        sid
-        for sid in _load_session_index()
-        if sid.startswith(candidate)
-    ]
+    matches = [sid for sid in _load_session_index() if sid.startswith(candidate)]
     if not matches:
-        matches = [
-            path.stem
-            for path in SESSIONS_DIR.glob(f"{candidate}*.json")
-            if path.is_file()
-        ]
+        matches = [path.stem for path in SESSIONS_DIR.glob(f"{candidate}*.json") if path.is_file()]
     return matches[0] if len(matches) == 1 else None
 
 
@@ -130,10 +126,7 @@ def _load_session_index() -> dict[str, SessionMetadata]:
     try:
         raw = index_path.read_text(encoding="utf-8")
         data = json.loads(raw)
-        return {
-            sid: SessionMetadata(**meta)
-            for sid, meta in data.items()
-        }
+        return {sid: SessionMetadata(**meta) for sid, meta in data.items()}
     except (json.JSONDecodeError, TypeError, KeyError):
         return {}
 
@@ -233,11 +226,7 @@ def load_session(session_id: str) -> SessionData | None:
 def list_sessions() -> list[SessionMetadata]:
     """List all available sessions, newest first."""
     index = _load_session_index()
-    sessions = [
-        meta
-        for sid, meta in index.items()
-        if _session_file(sid).exists()
-    ]
+    sessions = [meta for sid, meta in index.items() if _session_file(sid).exists()]
     sessions.sort(key=lambda s: s.updated_at, reverse=True)
     return sessions
 
@@ -276,6 +265,7 @@ def cleanup_old_sessions(max_sessions: int = 50) -> int:
 # Session creation helpers
 # ---------------------------------------------------------------------------
 
+
 def create_new_session(workspace: str) -> SessionData:
     """Create a new empty session."""
     now = time.time()
@@ -300,6 +290,7 @@ def get_latest_session(workspace: str | None = None) -> SessionData | None:
 # ---------------------------------------------------------------------------
 # Autosave manager
 # ---------------------------------------------------------------------------
+
 
 class AutosaveManager:
     """Manages automatic session saving with rate limiting."""
@@ -341,6 +332,7 @@ class AutosaveManager:
 # Session formatting for display
 # ---------------------------------------------------------------------------
 
+
 def format_session_list(sessions: list[SessionMetadata]) -> str:
     """Format sessions as a human-readable list."""
     if not sessions:
@@ -356,9 +348,7 @@ def format_session_list(sessions: list[SessionMetadata]) -> str:
         first_msg = meta.first_message or "(empty)"
         count = meta.message_count
 
-        lines.append(
-            f"  {i}. [{meta.session_id[:8]}] {created} - {workspace}"
-        )
+        lines.append(f"  {i}. [{meta.session_id[:8]}] {created} - {workspace}")
         lines.append(f"     Messages: {count} | First: {first_msg}")
         lines.append("")
 

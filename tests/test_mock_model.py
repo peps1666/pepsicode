@@ -16,7 +16,13 @@ def test_mock_model_reacts_to_tool_result() -> None:
         [
             {"role": "user", "content": "/read README.md"},
             {"role": "assistant_tool_call", "toolUseId": "1", "toolName": "read_file", "input": {"path": "README.md"}},
-            {"role": "tool_result", "toolUseId": "1", "toolName": "read_file", "content": "FILE: README.md", "isError": False},
+            {
+                "role": "tool_result",
+                "toolUseId": "1",
+                "toolName": "read_file",
+                "content": "FILE: README.md",
+                "isError": False,
+            },
         ]
     )
 

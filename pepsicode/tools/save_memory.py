@@ -38,6 +38,7 @@ def _run(input_data: dict, context) -> ToolResult:
     # Reuse create_memory_manager so the same backend selection (PostgreSQL
     # preferred, file fallback) applies as in the main session.
     from pepsicode.memory import create_memory_manager
+
     memory_mgr = create_memory_manager(context.cwd)
 
     entry = memory_mgr.add_entry(

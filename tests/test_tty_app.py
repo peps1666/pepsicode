@@ -46,7 +46,9 @@ def test_save_transcript_writes_plain_text(tmp_path) -> None:
     )
 
     assert path.endswith("logs\\session.txt") or path.endswith("logs/session.txt")
-    assert (tmp_path / "logs" / "session.txt").read_text(encoding="utf-8") == "you\n  hello\n\n---\n\nassistant\n  world"
+    assert (tmp_path / "logs" / "session.txt").read_text(
+        encoding="utf-8"
+    ) == "you\n  hello\n\n---\n\nassistant\n  world"
 
 
 def test_format_transcript_text_uses_clean_separator() -> None:
@@ -74,7 +76,9 @@ def test_mark_unfinished_tools_marks_running_entries_as_errors() -> None:
         "State",
         (),
         {
-            "transcript": [TranscriptEntry(id=1, kind="tool", body="running", toolName="run_command", status="running")],
+            "transcript": [
+                TranscriptEntry(id=1, kind="tool", body="running", toolName="run_command", status="running")
+            ],
             "recent_tools": [],
             "pending_tool_runs": {"run_command": [{"entry": "placeholder"}]},
             "active_tool": "run_command",
@@ -125,7 +129,15 @@ def test_stream_transcript_renders_conversation_timeline() -> None:
     entries = [
         TranscriptEntry(id=1, kind="user", body="fix tests"),
         TranscriptEntry(id=2, kind="assistant", body="Sure, I will check them."),
-        TranscriptEntry(id=3, kind="tool", body="pytest passed", toolName="pytest", status="success", collapsed=True, collapsedSummary="pytest passed"),
+        TranscriptEntry(
+            id=3,
+            kind="tool",
+            body="pytest passed",
+            toolName="pytest",
+            status="success",
+            collapsed=True,
+            collapsedSummary="pytest passed",
+        ),
     ]
 
     rendered_lines, total = _render_stream_transcript(entries, scroll_offset=0, height=20, cols=100)

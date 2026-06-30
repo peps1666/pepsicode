@@ -27,38 +27,42 @@ from typing import Any
 # Hook events
 # ---------------------------------------------------------------------------
 
+
 class HookEvent(str, Enum):
     """Lifecycle hook events."""
+
     # Tool lifecycle
-    PRE_TOOL_USE = "pre_tool_use"       # Before tool execution
-    POST_TOOL_USE = "post_tool_use"     # After tool execution
+    PRE_TOOL_USE = "pre_tool_use"  # Before tool execution
+    POST_TOOL_USE = "post_tool_use"  # After tool execution
 
     # Agent lifecycle
-    AGENT_START = "agent_start"         # Agent turn started
-    AGENT_STOP = "agent_stop"           # Agent turn stopped
-    SUBAGENT_START = "subagent_start"   # Sub-agent spawned
-    SUBAGENT_STOP = "subagent_stop"     # Sub-agent completed
+    AGENT_START = "agent_start"  # Agent turn started
+    AGENT_STOP = "agent_stop"  # Agent turn stopped
+    SUBAGENT_START = "subagent_start"  # Sub-agent spawned
+    SUBAGENT_STOP = "subagent_stop"  # Sub-agent completed
 
     # Session events
-    SESSION_SAVE = "session_save"       # Session autosaved
-    SESSION_RESUME = "session_resume"   # Session restored
+    SESSION_SAVE = "session_save"  # Session autosaved
+    SESSION_RESUME = "session_resume"  # Session restored
 
     # User interactions
-    USER_INPUT = "user_input"           # User submitted input
+    USER_INPUT = "user_input"  # User submitted input
     ASSISTANT_OUTPUT = "assistant_output"  # Assistant responded
 
     # System
-    STARTUP = "startup"                 # Application started
-    SHUTDOWN = "shutdown"               # Application shutting down
+    STARTUP = "startup"  # Application started
+    SHUTDOWN = "shutdown"  # Application shutting down
 
 
 # ---------------------------------------------------------------------------
 # Hook context
 # ---------------------------------------------------------------------------
 
+
 @dataclass
 class HookContext:
     """Context passed to hook handlers."""
+
     event: HookEvent
     timestamp: float = field(default_factory=time.time)
     data: dict[str, Any] = field(default_factory=dict)
@@ -104,6 +108,7 @@ AsyncHookHandler = Callable[[HookContext], Any]
 @dataclass
 class HookRegistration:
     """Registered hook with metadata."""
+
     event: HookEvent
     handler: HookHandler | AsyncHookHandler
     is_async: bool = False
@@ -119,16 +124,15 @@ class HookRegistration:
 # Hook manager
 # ---------------------------------------------------------------------------
 
+
 class HookManager:
     """Manages hook registrations and executions.
-    
+
     Inspired by Claude Code's hooks system and plugin event listeners.
     """
 
     def __init__(self):
-        self._hooks: dict[HookEvent, list[HookRegistration]] = {
-            event: [] for event in HookEvent
-        }
+        self._hooks: dict[HookEvent, list[HookRegistration]] = {event: [] for event in HookEvent}
         self._enabled = True
 
     def register(
@@ -138,12 +142,12 @@ class HookManager:
         description: str = "",
     ) -> Callable[[], None]:
         """Register a hook for an event.
-        
+
         Args:
             event: Event to hook into
             handler: Handler function (sync or async)
             description: Human-readable description
-        
+
         Returns:
             Unregister function
         """
@@ -166,11 +170,11 @@ class HookManager:
 
     async def fire(self, event: HookEvent, **kwargs: Any) -> list[Any]:
         """Fire an event, calling all registered hooks.
-        
+
         Args:
             event: Event to fire
             **kwargs: Data to pass to hooks
-        
+
         Returns:
             List of hook results
         """
@@ -274,13 +278,15 @@ class HookManager:
             lines.append("")
 
         stats = self.get_hook_stats()
-        lines.extend([
-            "-" * 50,
-            f"Total hooks: {stats['total_hooks']}",
-            f"Enabled: {stats['enabled_hooks']}",
-            f"Total calls: {stats['total_calls']}",
-            f"Total duration: {stats['total_duration_ms']}ms",
-        ])
+        lines.extend(
+            [
+                "-" * 50,
+                f"Total hooks: {stats['total_hooks']}",
+                f"Enabled: {stats['enabled_hooks']}",
+                f"Total calls: {stats['total_calls']}",
+                f"Total duration: {stats['total_duration_ms']}ms",
+            ]
+        )
 
         return "\n".join(lines)
 
@@ -289,15 +295,17 @@ class HookManager:
 # Built-in hooks
 # ---------------------------------------------------------------------------
 
+
 def create_logging_hook(log_file: Path | None = None) -> HookHandler:
     """Create a logging hook that records all events.
-    
+
     Args:
         log_file: Optional file to log to
-    
+
     Returns:
         Hook handler function
     """
+
     def handler(ctx: HookContext) -> None:
         timestamp = time.strftime("%H:%M:%S", time.localtime(ctx.timestamp))
         message = f"[{timestamp}] {ctx.event.value}"
@@ -317,13 +325,14 @@ def create_logging_hook(log_file: Path | None = None) -> HookHandler:
 
 def create_script_hook(script_path: Path) -> AsyncHookHandler:
     """Create a hook that executes an external script.
-    
+
     Args:
         script_path: Path to script to execute
-    
+
     Returns:
         Async hook handler function
     """
+
     async def handler(ctx: HookContext) -> str:
         try:
             # On Windows, CreateProcess can't directly execute script files

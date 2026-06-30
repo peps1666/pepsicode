@@ -11,6 +11,7 @@ from pepsicode.tooling import ToolDefinition, ToolResult
 # Code Review Checks
 # ---------------------------------------------------------------------------
 
+
 def _check_unused_imports(tree: ast.AST, content: str) -> list[dict[str, Any]]:
     """Check for unused imports."""
     issues = []
@@ -41,12 +42,14 @@ def _check_unused_imports(tree: ast.AST, content: str) -> list[dict[str, Any]]:
                 break
 
         if not used:
-            issues.append({
-                "type": "unused_import",
-                "severity": "warning",
-                "message": f"Import '{name}' is imported but never used",
-                "line": getattr(info["node"], "lineno", 0),
-            })
+            issues.append(
+                {
+                    "type": "unused_import",
+                    "severity": "warning",
+                    "message": f"Import '{name}' is imported but never used",
+                    "line": getattr(info["node"], "lineno", 0),
+                }
+            )
 
     return issues
 
@@ -71,12 +74,14 @@ def _check_hardcoded_values(tree: ast.AST) -> list[dict[str, Any]]:
             if node.value in (0, 1, -1, 0.0, 1.0, -1.0):
                 continue
             # Check if it's used multiple times (likely a constant)
-            issues.append({
-                "type": "magic_number",
-                "severity": "info",
-                "message": f"Consider extracting magic number '{node.value}' to a named constant",
-                "line": getattr(node, "lineno", 0),
-            })
+            issues.append(
+                {
+                    "type": "magic_number",
+                    "severity": "info",
+                    "message": f"Consider extracting magic number '{node.value}' to a named constant",
+                    "line": getattr(node, "lineno", 0),
+                }
+            )
 
     return issues[:10]  # Limit to 10 issues
 
@@ -91,12 +96,14 @@ def _check_empty_docstrings(tree: ast.AST) -> list[dict[str, Any]]:
             if not docstring:
                 name = getattr(node, "name", "unknown")
                 type_label = "Function" if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) else "Class"
-                issues.append({
-                    "type": "missing_docstring",
-                    "severity": "info",
-                    "message": f"{type_label} '{name}' has no docstring",
-                    "line": getattr(node, "lineno", 0),
-                })
+                issues.append(
+                    {
+                        "type": "missing_docstring",
+                        "severity": "info",
+                        "message": f"{type_label} '{name}' has no docstring",
+                        "line": getattr(node, "lineno", 0),
+                    }
+                )
 
     return issues[:10]  # Limit to 10 issues
 
@@ -111,12 +118,14 @@ def _check_long_functions(tree: ast.AST) -> list[dict[str, Any]]:
             if hasattr(node, "end_lineno") and hasattr(node, "lineno"):
                 length = node.end_lineno - node.lineno
                 if length > 50:
-                    issues.append({
-                        "type": "long_function",
-                        "severity": "warning",
-                        "message": f"Function '{node.name}' is {length} lines long (consider splitting)",
-                        "line": node.lineno,
-                    })
+                    issues.append(
+                        {
+                            "type": "long_function",
+                            "severity": "warning",
+                            "message": f"Function '{node.name}' is {length} lines long (consider splitting)",
+                            "line": node.lineno,
+                        }
+                    )
 
     return issues
 
@@ -124,6 +133,7 @@ def _check_long_functions(tree: ast.AST) -> list[dict[str, Any]]:
 # ---------------------------------------------------------------------------
 # Tool Implementation
 # ---------------------------------------------------------------------------
+
 
 def _validate(input_data: dict) -> dict:
     path = input_data.get("path", ".")
@@ -166,26 +176,25 @@ def _run(input_data: dict, context) -> ToolResult:
 
         # Run checks based on type
         if checks_type in ("all", "imports"):
-            all_issues.extend([
-                {**issue, "file": str(py_file.relative_to(context.cwd))}
-                for issue in _check_unused_imports(tree, content)
-            ])
+            all_issues.extend(
+                [
+                    {**issue, "file": str(py_file.relative_to(context.cwd))}
+                    for issue in _check_unused_imports(tree, content)
+                ]
+            )
 
         if checks_type in ("all", "style"):
-            all_issues.extend([
-                {**issue, "file": str(py_file.relative_to(context.cwd))}
-                for issue in _check_hardcoded_values(tree)
-            ])
-            all_issues.extend([
-                {**issue, "file": str(py_file.relative_to(context.cwd))}
-                for issue in _check_empty_docstrings(tree)
-            ])
+            all_issues.extend(
+                [{**issue, "file": str(py_file.relative_to(context.cwd))} for issue in _check_hardcoded_values(tree)]
+            )
+            all_issues.extend(
+                [{**issue, "file": str(py_file.relative_to(context.cwd))} for issue in _check_empty_docstrings(tree)]
+            )
 
         if checks_type in ("all", "complexity"):
-            all_issues.extend([
-                {**issue, "file": str(py_file.relative_to(context.cwd))}
-                for issue in _check_long_functions(tree)
-            ])
+            all_issues.extend(
+                [{**issue, "file": str(py_file.relative_to(context.cwd))} for issue in _check_long_functions(tree)]
+            )
 
     # Sort by severity
     severity_order = {"error": 0, "warning": 1, "info": 2}
@@ -240,7 +249,11 @@ code_review_tool = ToolDefinition(
         "type": "object",
         "properties": {
             "path": {"type": "string", "description": "File or directory path to review (default: current directory)"},
-            "checks": {"type": "string", "enum": ["all", "imports", "style", "complexity"], "description": "Types of checks to run (default: all)"},
+            "checks": {
+                "type": "string",
+                "enum": ["all", "imports", "style", "complexity"],
+                "description": "Types of checks to run (default: all)",
+            },
         },
     },
     validator=_validate,

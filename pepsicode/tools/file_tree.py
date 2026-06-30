@@ -10,9 +10,10 @@ from pepsicode.tooling import ToolDefinition, ToolResult
 # File Tree Helpers
 # ---------------------------------------------------------------------------
 
+
 def _format_size(size_bytes: int) -> str:
     """Format file size in human-readable format."""
-    for unit in ['B', 'KB', 'MB', 'GB']:
+    for unit in ["B", "KB", "MB", "GB"]:
         if size_bytes < 1024:
             return f"{size_bytes:.1f}{unit}"
         size_bytes /= 1024
@@ -42,34 +43,34 @@ def _get_file_icon(file_path: Path) -> str:
     """Get icon based on file extension."""
     ext = file_path.suffix.lower()
     icons = {
-        '.py': '\U0001f40d',
-        '.js': '\U0001f4dc',
-        '.ts': '\U0001f4dc',
-        '.jsx': '⚛️',
-        '.tsx': '⚛️',
-        '.html': '\U0001f310',
-        '.css': '\U0001f3a8',
-        '.md': '\U0001f4cb',
-        '.json': '\U0001f4e6',
-        '.yaml': '⚙️',
-        '.yml': '⚙️',
-        '.toml': '⚙️',
-        '.txt': '\U0001f4c4',
-        '.log': '\U0001f4dd',
-        '.sh': '[sh]',
-        '.bat': '[bat]',
-        '.gitignore': '\U0001f512',
-        '.env': '\U0001f512',
-        '.lock': '\U0001f512',
-        '.png': '[img]',
-        '.jpg': '[img]',
-        '.jpeg': '[img]',
-        '.svg': '\U0001f5bc️',
-        '.ipynb': '\U0001f4d3',
+        ".py": "\U0001f40d",
+        ".js": "\U0001f4dc",
+        ".ts": "\U0001f4dc",
+        ".jsx": "⚛️",
+        ".tsx": "⚛️",
+        ".html": "\U0001f310",
+        ".css": "\U0001f3a8",
+        ".md": "\U0001f4cb",
+        ".json": "\U0001f4e6",
+        ".yaml": "⚙️",
+        ".yml": "⚙️",
+        ".toml": "⚙️",
+        ".txt": "\U0001f4c4",
+        ".log": "\U0001f4dd",
+        ".sh": "[sh]",
+        ".bat": "[bat]",
+        ".gitignore": "\U0001f512",
+        ".env": "\U0001f512",
+        ".lock": "\U0001f512",
+        ".png": "[img]",
+        ".jpg": "[img]",
+        ".jpeg": "[img]",
+        ".svg": "\U0001f5bc️",
+        ".ipynb": "\U0001f4d3",
     }
-    if file_path.name == 'README':
-        return '\U0001f4d6'
-    return icons.get(ext, '\U0001f4c4')
+    if file_path.name == "README":
+        return "\U0001f4d6"
+    return icons.get(ext, "\U0001f4c4")
 
 
 def _get_file_status_color(file_path: Path) -> str:
@@ -96,7 +97,7 @@ def _build_tree(
 ) -> list[str]:
     """Build file tree with proper formatting."""
     if ignore_dirs is None:
-        ignore_dirs = {'.git', '__pycache__', 'venv', 'env', '.tox', 'node_modules', '.mypy_cache', '.pytest_cache'}
+        ignore_dirs = {".git", "__pycache__", "venv", "env", ".tox", "node_modules", ".mypy_cache", ".pytest_cache"}
 
     lines = []
 
@@ -107,14 +108,14 @@ def _build_tree(
 
     # Filter hidden files
     if not show_hidden:
-        entries = [e for e in entries if not e.name.startswith('.')]
+        entries = [e for e in entries if not e.name.startswith(".")]
 
     # Filter ignored directories
     if path.is_dir():
         entries = [e for e in entries if not (e.is_dir() and e.name in ignore_dirs)]
 
     for i, entry in enumerate(entries):
-        is_last_entry = (i == len(entries) - 1)
+        is_last_entry = i == len(entries) - 1
 
         # Choose connector
         connector = "├── " if is_last_entry else "└── "
@@ -125,15 +126,17 @@ def _build_tree(
             lines.append(f"{prefix}{connector}{icon} {entry.name}")
 
             if current_depth < max_depth:
-                lines.extend(_build_tree(
-                    entry,
-                    prefix + extension,
-                    is_last_entry,
-                    max_depth,
-                    current_depth + 1,
-                    show_hidden,
-                    ignore_dirs,
-                ))
+                lines.extend(
+                    _build_tree(
+                        entry,
+                        prefix + extension,
+                        is_last_entry,
+                        max_depth,
+                        current_depth + 1,
+                        show_hidden,
+                        ignore_dirs,
+                    )
+                )
             else:
                 lines.append(f"{prefix}{extension}    ...")
         else:
@@ -150,6 +153,7 @@ def _build_tree(
 # ---------------------------------------------------------------------------
 # Tool Implementation
 # ---------------------------------------------------------------------------
+
 
 def _validate(input_data: dict) -> dict:
     path = input_data.get("path", ".")
@@ -190,10 +194,8 @@ def _run(input_data: dict, context) -> ToolResult:
     # Apply pattern filter if provided
     if pattern:
         import fnmatch
-        tree_lines = [
-            line for line in tree_lines
-            if fnmatch.fnmatch(line, f"*{pattern}*")
-        ]
+
+        tree_lines = [line for line in tree_lines if fnmatch.fnmatch(line, f"*{pattern}*")]
         if not tree_lines:
             return ToolResult(
                 ok=True,
@@ -202,8 +204,8 @@ def _run(input_data: dict, context) -> ToolResult:
 
     # Count stats
     try:
-        total_files = sum(1 for _ in target.rglob("*") if _.is_file() and not _.name.startswith('.'))
-        total_dirs = sum(1 for _ in target.rglob("*") if _.is_dir() and not _.name.startswith('.'))
+        total_files = sum(1 for _ in target.rglob("*") if _.is_file() and not _.name.startswith("."))
+        total_dirs = sum(1 for _ in target.rglob("*") if _.is_dir() and not _.name.startswith("."))
     except Exception:
         total_files = 0
         total_dirs = 0
@@ -224,23 +226,27 @@ def _run(input_data: dict, context) -> ToolResult:
         for line in tree_lines:
             lines.append(line)
 
-    lines.extend([
-        "",
-        "-" * 60,
-        "\U0001f4ca Stats:",
-        f"  Files: {total_files}",
-        f"  Directories: {total_dirs}",
-        f"  Max depth shown: {max_depth}",
-    ])
+    lines.extend(
+        [
+            "",
+            "-" * 60,
+            "\U0001f4ca Stats:",
+            f"  Files: {total_files}",
+            f"  Directories: {total_dirs}",
+            f"  Max depth shown: {max_depth}",
+        ]
+    )
 
     # Legend
-    lines.extend([
-        "",
-        "\U0001f3a8 Legend:",
-        "  \U0001f7e2 Modified < 1h ago",
-        "  \U0001f7e1 Modified < 24h ago",
-        "  ⚫ Modified > 24h ago",
-    ])
+    lines.extend(
+        [
+            "",
+            "\U0001f3a8 Legend:",
+            "  \U0001f7e2 Modified < 1h ago",
+            "  \U0001f7e1 Modified < 24h ago",
+            "  ⚫ Modified > 24h ago",
+        ]
+    )
 
     return ToolResult(ok=True, output="\n".join(lines))
 

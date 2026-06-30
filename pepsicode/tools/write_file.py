@@ -23,8 +23,11 @@ def _run(input_data: dict, context):
 write_file_tool = ToolDefinition(
     name="write_file",
     description="Write a UTF-8 text file relative to the workspace root.",
-    input_schema={"type": "object", "properties": {"path": {"type": "string"}, "content": {"type": "string"}}, "required": ["path", "content"]},
+    input_schema={
+        "type": "object",
+        "properties": {"path": {"type": "string"}, "content": {"type": "string"}},
+        "required": ["path", "content"],
+    },
     validator=_validate,
     run=_run,
 )
-

@@ -36,6 +36,7 @@ RETRYABLE_STATUS = {429, 500, 502, 503, 504}
 # Exceptions
 # ---------------------------------------------------------------------------
 
+
 class APIRetryExhaustedError(Exception):
     """Raised when all retry attempts are exhausted."""
 
@@ -49,6 +50,7 @@ class APIRetryExhaustedError(Exception):
 # Backoff calculation
 # ---------------------------------------------------------------------------
 
+
 def calculate_backoff(
     attempt: int,
     retry_after: float | None = None,
@@ -57,14 +59,14 @@ def calculate_backoff(
     jitter: float = JITTER_FACTOR,
 ) -> float:
     """Calculate backoff duration with exponential backoff and jitter.
-    
+
     Args:
         attempt: Current retry attempt number (0-based)
         retry_after: Retry-After header value in seconds (if provided)
         base: Base backoff duration
         max_wait: Maximum backoff cap
         jitter: Jitter factor for randomization
-    
+
     Returns:
         Seconds to wait before next retry
     """
@@ -73,7 +75,7 @@ def calculate_backoff(
         return min(retry_after, max_wait)
 
     # Exponential backoff: base * 2^attempt
-    backoff = base * (2 ** attempt)
+    backoff = base * (2**attempt)
 
     # Add jitter: backoff * (1 ± jitter)
     jitter_range = backoff * jitter
@@ -87,9 +89,11 @@ def calculate_backoff(
 # Retry decorator
 # ---------------------------------------------------------------------------
 
+
 @dataclass
 class RetryState:
     """Tracks retry state for monitoring."""
+
     attempts: int = 0
     max_attempts: int = MAX_RETRIES
     total_wait_time: float = 0.0
@@ -108,7 +112,7 @@ def retry_with_backoff(
     **kwargs: Any,
 ) -> Any:
     """Execute function with automatic retry and exponential backoff.
-    
+
     Args:
         func: Function to execute
         *args: Positional arguments for func
@@ -118,10 +122,10 @@ def retry_with_backoff(
         retryable_errors: Set of HTTP status codes to retry on
         on_retry: Optional callback invoked on each retry
         **kwargs: Keyword arguments for func
-    
+
     Returns:
         Result from successful function call
-    
+
     Raises:
         APIRetryExhaustedError: When all retry attempts are exhausted
     """
@@ -182,6 +186,7 @@ def retry_with_backoff(
 # HTTP Error wrapper
 # ---------------------------------------------------------------------------
 
+
 class HTTPError(Exception):
     """HTTP error with status code and optional Retry-After header."""
 
@@ -200,7 +205,7 @@ class HTTPError(Exception):
 
 def raise_for_status(response: Any, error_class: type[HTTPError] = HTTPError) -> None:
     """Check HTTP response status and raise error if needed.
-    
+
     This is a generic wrapper that works with various HTTP libraries.
     Adapts to urllib, requests, httpx, etc.
     """
@@ -244,6 +249,7 @@ def raise_for_status(response: Any, error_class: type[HTTPError] = HTTPError) ->
 # Async-compatible wrapper (for future use)
 # ---------------------------------------------------------------------------
 
+
 async def retry_with_backoff_async(
     func: Callable,
     *args: Any,
@@ -255,7 +261,7 @@ async def retry_with_backoff_async(
     **kwargs: Any,
 ) -> Any:
     """Async version of retry_with_backoff.
-    
+
     Uses asyncio.sleep instead of time.sleep for non-blocking waits.
     """
     import asyncio
@@ -313,6 +319,7 @@ async def retry_with_backoff_async(
 # Utility functions
 # ---------------------------------------------------------------------------
 
+
 def is_retryable_error(error: Exception, retryable_codes: set[int] = RETRYABLE_STATUS) -> bool:
     """Check if an error is retryable."""
     if isinstance(error, HTTPError):
@@ -325,7 +332,4 @@ def format_retry_state(state: RetryState) -> str:
     if state.succeeded:
         return f"✓ Succeeded on attempt {state.attempts}"
     else:
-        return (
-            f"✗ Failed after {state.attempts} attempts, "
-            f"waited {state.total_wait_time:.1f}s total"
-        )
+        return f"✗ Failed after {state.attempts} attempts, " f"waited {state.total_wait_time:.1f}s total"
