@@ -1,13 +1,20 @@
 from __future__ import annotations
 
-from functools import lru_cache
-
 from .chrome import (
+    ACCENT,
+    BOLD,
+    BRIGHT_RED,
+    BRIGHT_YELLOW,
+    DIM,
+    GREEN,
+    ICON_DIVIDER,
+    ICON_DOT,
+    ICON_ERROR,
+    ICON_SUCCESS,
+    ITALIC,
+    RESET,
+    SUBTLE,
     _cached_terminal_size,
-    RESET, DIM, GREEN, YELLOW, RED, BOLD,
-    BRIGHT_GREEN, BRIGHT_YELLOW, BRIGHT_RED,
-    ACCENT, SUBTLE, ITALIC,
-    ICON_SUCCESS, ICON_ERROR, ICON_DIVIDER, ICON_DOT,
 )
 from .markdown import render_markdownish
 from .types import TranscriptEntry

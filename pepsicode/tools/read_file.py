@@ -1,8 +1,6 @@
 from __future__ import annotations
 
-import os
 import time
-from functools import lru_cache
 from pathlib import Path
 
 from pepsicode.tooling import ToolDefinition, ToolResult
@@ -18,6 +16,7 @@ _FILE_CACHE_TTL = 2.0  # cache entries are valid for 2 seconds
 # read_file is concurrency-safe and may run in parallel worker threads, so the
 # shared cache must be guarded against concurrent mutation.
 import threading
+
 _file_cache_lock = threading.Lock()
 
 
@@ -74,7 +73,7 @@ def _run(input_data: dict, context) -> ToolResult:
             ok=False,
             output=f"File {input_data['path']} appears to be binary. Cannot read as text.",
         )
-    
+
     offset = input_data["offset"]
     limit = input_data["limit"]
     end = min(len(content), offset + limit)

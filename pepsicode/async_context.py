@@ -14,7 +14,6 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-
 # ---------------------------------------------------------------------------
 # Context collector
 # ---------------------------------------------------------------------------
@@ -25,7 +24,7 @@ class ContextCache:
     value: Any
     created_at: float = field(default_factory=time.time)
     ttl_seconds: float = 300.0  # 5 minutes default
-    
+
     def is_expired(self) -> bool:
         return (time.time() - self.created_at) > self.ttl_seconds
 
@@ -39,13 +38,13 @@ class AsyncContextCollector:
     
     Parallelizes expensive I/O and provides cache invalidation.
     """
-    
+
     def __init__(self, cwd: str, cache_ttl: float = 300.0):
         self.cwd = Path(cwd)
         self.cache_ttl = cache_ttl
         self._cache: dict[str, ContextCache] = {}
         self._git_root: Path | None = None
-    
+
     async def get_full_context(self) -> dict[str, str]:
         """Get complete context (parallelized).
         
@@ -58,64 +57,64 @@ class AsyncContextCollector:
             self.get_user_context(),
             return_exceptions=True,
         )
-        
+
         # Merge results
         context = {}
         if isinstance(system_ctx, dict):
             context.update(system_ctx)
         if isinstance(user_ctx, dict):
             context.update(user_ctx)
-        
+
         return context
-    
+
     async def get_system_context(self) -> dict[str, str]:
         """Get system context (git status, etc.) with caching."""
         cache_key = "system_context"
-        
+
         # Check cache
         if cache_key in self._cache and not self._cache[cache_key].is_expired():
             return self._cache[cache_key].value
-        
+
         # Collect (parallelized)
         git_status = await self._get_git_status()
-        
+
         result = {}
         if git_status:
             result["git_status"] = git_status
-        
+
         # Cache result
         self._cache[cache_key] = ContextCache(
             value=result,
             ttl_seconds=self.cache_ttl,
         )
-        
+
         return result
-    
+
     async def get_user_context(self) -> dict[str, str]:
         """Get user context (CLAUDE.md, preferences) with caching."""
         cache_key = f"user_context:{self.cwd}"
-        
+
         # Check cache
         if cache_key in self._cache and not self._cache[cache_key].is_expired():
             return self._cache[cache_key].value
-        
+
         # Collect (parallelized)
         claude_md = await self._load_claude_md()
-        
+
         result = {
             "current_date": self._get_current_date(),
         }
         if claude_md:
             result["claude_md"] = claude_md
-        
+
         # Cache result
         self._cache[cache_key] = ContextCache(
             value=result,
             ttl_seconds=self.cache_ttl,
         )
-        
+
         return result
-    
+
     def invalidate(self, pattern: str | None = None) -> None:
         """Invalidate cache entries.
         
@@ -128,29 +127,29 @@ class AsyncContextCollector:
                 del self._cache[key]
         else:
             self._cache.clear()
-    
+
     def invalidate_git_cache(self) -> None:
         """Invalidate only git-related cache."""
         self.invalidate("system_context")
-    
+
     # -----------------------------------------------------------------------
     # Internal collectors
     # -----------------------------------------------------------------------
-    
+
     async def _get_git_status(self) -> str | None:
         """Get git status (parallelized sub-operations)."""
         if not await self._is_git_repo():
             return None
-        
+
         # Parallel collection
         branch, status, log = await asyncio.gather(
             self._get_branch(),
             self._get_status(),
             self._get_log(),
         )
-        
+
         return f"Branch: {branch}\nStatus:\n{status}\nRecent commits:\n{log}"
-    
+
     async def _is_git_repo(self) -> bool:
         """Check if cwd is a git repo."""
         try:
@@ -158,17 +157,17 @@ class AsyncContextCollector:
             if git_dir.exists():
                 self._git_root = self.cwd
                 return True
-            
+
             # Search parent directories
             for parent in self.cwd.parents:
                 if (parent / ".git").exists():
                     self._git_root = parent
                     return True
-            
+
             return False
         except Exception:
             return False
-    
+
     async def _get_branch(self) -> str:
         """Get current git branch."""
         try:
@@ -185,7 +184,7 @@ class AsyncContextCollector:
         except Exception:
             pass
         return "unknown"
-    
+
     async def _get_status(self) -> str:
         """Get git status output."""
         try:
@@ -202,7 +201,7 @@ class AsyncContextCollector:
         except Exception:
             pass
         return "unknown"
-    
+
     async def _get_log(self) -> str:
         """Get recent git log."""
         try:
@@ -219,7 +218,7 @@ class AsyncContextCollector:
         except Exception:
             pass
         return "unknown"
-    
+
     async def _load_claude_md(self) -> str | None:
         """Load CLAUDE.md file if exists."""
         claude_md_path = self.cwd / "CLAUDE.md"
@@ -229,23 +228,23 @@ class AsyncContextCollector:
             except Exception:
                 pass
         return None
-    
+
     def _get_current_date(self) -> str:
         """Get current date string."""
         from datetime import datetime
         return f"Today's date is {datetime.now().isoformat()}."
-    
+
     # -----------------------------------------------------------------------
     # Formatting
     # -----------------------------------------------------------------------
-    
+
     def format_context_for_prompt(self, context: dict[str, str]) -> str:
         """Format context dictionary into prompt section."""
         if not context:
             return ""
-        
+
         lines = ["## Current Context", ""]
-        
+
         if "git_status" in context:
             lines.extend([
                 "### Git Status",
@@ -254,7 +253,7 @@ class AsyncContextCollector:
                 "```",
                 "",
             ])
-        
+
         if "claude_md" in context:
             lines.extend([
                 "### Project Instructions (CLAUDE.md)",
@@ -262,10 +261,10 @@ class AsyncContextCollector:
                 context["claude_md"],
                 "",
             ])
-        
+
         if "current_date" in context:
             lines.append(context["current_date"])
-        
+
         return "\n".join(lines)
 
 

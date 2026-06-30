@@ -3,8 +3,7 @@ from __future__ import annotations
 import os
 import shlex
 import subprocess
-import sys
-from typing import Sequence
+from collections.abc import Sequence
 
 from pepsicode.background_tasks import register_background_shell_task
 from pepsicode.tooling import ToolDefinition, ToolResult
@@ -220,13 +219,13 @@ def _run(input_data: dict, context) -> ToolResult:
             stdin=subprocess.DEVNULL,
             **popen_kwargs,
         )
-        
+
         if child.pid is None:
             return ToolResult(
                 ok=False,
                 output="Failed to get PID for background command. Process may have exited immediately.",
             )
-        
+
         background_task = register_background_shell_task(
             command=_strip_trailing_background_operator(input_data["command"]),
             pid=child.pid,
@@ -252,7 +251,7 @@ def _run(input_data: dict, context) -> ToolResult:
         )
         output = "\n".join(part for part in [completed.stdout.strip(), completed.stderr.strip()] if part).strip()
         return ToolResult(ok=completed.returncode == 0, output=output)
-    except subprocess.TimeoutExpired as e:
+    except subprocess.TimeoutExpired:
         return ToolResult(
             ok=False,
             output=f"Command timed out after {COMMAND_TIMEOUT} seconds. Command: {normalized_command} {' '.join(normalized_args)}",

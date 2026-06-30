@@ -5,9 +5,9 @@ from typing import Any
 from pepsicode.config import (
     get_mcp_config_path,
     load_scoped_mcp_servers,
-    save_scoped_mcp_servers,
     read_mcp_tokens,
     save_mcp_tokens,
+    save_scoped_mcp_servers,
 )
 from pepsicode.skills import discover_skills, install_skill, remove_managed_skill
 

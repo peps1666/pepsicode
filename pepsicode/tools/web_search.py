@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-import json
-import urllib.request
 import urllib.parse
+import urllib.request
+
 from pepsicode.tooling import ToolDefinition, ToolResult
 
 MAX_RESULTS = 10

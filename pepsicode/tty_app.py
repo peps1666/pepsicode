@@ -18,12 +18,12 @@ import sys
 import threading
 import time
 from collections import defaultdict
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from functools import lru_cache
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
-from pepsicode.agent_loop import run_agent_turn, run_agent_turn_stream
+from pepsicode.agent_loop import run_agent_turn_stream
 from pepsicode.background_tasks import list_background_tasks
 from pepsicode.cli_commands import (
     SLASH_COMMANDS,
@@ -48,9 +48,21 @@ from pepsicode.session import (
     load_session,
     save_session,
 )
-from pepsicode.state import AppState, Store, create_app_store, format_app_state_summary
+from pepsicode.state import AppState, Store, create_app_store
 from pepsicode.tooling import ToolContext, ToolRegistry
 from pepsicode.tui.chrome import (
+    ACCENT,
+    BOLD,
+    BRIGHT_GREEN,
+    BRIGHT_WHITE,
+    DIM,
+    HIGHLIGHT_BG,
+    ICON_ARROW,
+    ICON_DIVIDER,
+    ICON_DOT,
+    RESET,
+    SUBTLE,
+    YELLOW,
     _cached_terminal_size,
     get_permission_prompt_max_scroll_offset,
     render_banner,
@@ -62,20 +74,6 @@ from pepsicode.tui.chrome import (
     render_tool_panel,
     truncate_plain,
     wrap_text,
-    ACCENT,
-    BRIGHT_GREEN,
-    BRIGHT_WHITE,
-    BOLD,
-    DIM,
-    GREEN,
-    HIGHLIGHT_BG,
-    ICON_PROMPT,
-    ICON_DOT,
-    ICON_DIVIDER,
-    ICON_ARROW,
-    YELLOW,
-    SUBTLE,
-    RESET,
 )
 from pepsicode.tui.input import render_input_prompt
 from pepsicode.tui.input_parser import (
@@ -87,15 +85,12 @@ from pepsicode.tui.input_parser import (
 )
 from pepsicode.tui.markdown import render_markdownish
 from pepsicode.tui.screen import (
-    clear_screen,
     enter_alternate_screen,
     exit_alternate_screen,
     hide_cursor,
     show_cursor,
 )
 from pepsicode.tui.transcript import (
-    _render_transcript_lines,
-    get_transcript_window_size,
     render_transcript,
 )
 from pepsicode.tui.types import TranscriptEntry
@@ -472,7 +467,7 @@ def _get_contextual_help(state: ScreenState, args: TtyAppArgs) -> str | None:
     # Permission approval pending
     if state.pending_approval:
         return "🔒 Permission required. Use arrow keys and Enter to choose"
-    
+
     return None
 
 
@@ -753,7 +748,7 @@ def _truncate_frame_lines(lines: list[str], cols: int, rows: int) -> list[str]:
 
 
 def _visible_width(text: str) -> int:
-    from pepsicode.tui.chrome import strip_ansi, string_display_width
+    from pepsicode.tui.chrome import string_display_width, strip_ansi
 
     return string_display_width(strip_ansi(text))
 
@@ -1140,11 +1135,11 @@ def _render_screen(args: TtyAppArgs, state: ScreenState) -> None:
 
     # Footer (cached)
     buf.append(_render_footer_cached(state.status, True, has_skills, background_tasks))
-    
+
     # Contextual help line
     if contextual_help:
         buf.append(f"\n{SUBTLE}{contextual_help}{RESET}")
-    
+
     sys.stdout.write("".join(buf) + "[J")
     sys.stdout.flush()
 
@@ -1470,12 +1465,12 @@ def _handle_input(
     state.user_scrolled_away = False
     state.status = "Thinking..."
     state.is_busy = True
-    
+
     # Update app state
     if state.app_state:
         from pepsicode.state import set_busy
         state.app_state.set_state(set_busy())
-    
+
     rerender()
 
     pending_tool_entries: dict[str, list[int]] = defaultdict(list)
@@ -1616,7 +1611,7 @@ def _handle_input(
             elapsed_secs = time.monotonic() - state.tool_start_time
             if elapsed_secs > 1:
                 elapsed = f" ({elapsed_secs:.1f}s)"
-        
+
         pending = pending_tool_entries.get(tool_name, [])
         entry_id = pending.pop(0) if pending else None
         if entry_id is not None:
@@ -1656,7 +1651,7 @@ def _handle_input(
                     "name": tool_name,
                     "status": "error" if is_error else "success",
                 })
-                
+
                 # Error recovery hints
                 display_output = output
                 if is_error:
@@ -1668,12 +1663,12 @@ def _handle_input(
                         suggestions.append("💡 Permission denied. Check file access rights")
                     elif "syntax" in output_lower or "error" in output_lower:
                         suggestions.append("💡 Error occurred. Review the output and fix issues")
-                    
+
                     if suggestions:
                         display_output = f"ERROR: {output}\n\n" + "\n".join(suggestions)
                     else:
                         display_output = f"ERROR: {output}"
-                
+
                 _update_tool_entry(
                     state,
                     entry_id,
@@ -1697,12 +1692,12 @@ def _handle_input(
         rerender()
 
     args.permissions.begin_turn()
-    
+
     # Run agent turn in background thread to keep UI responsive
     agent_error = None
     agent_result: dict = {"messages": None}
     agent_thread_lock = threading.Lock()
-    
+
     def _run_agent_background():
         nonlocal agent_error, agent_result
         try:
@@ -1742,7 +1737,7 @@ def _handle_input(
             state.streaming_entry_id = None
             state.streaming_text = ""
             rerender()
-    
+
     agent_thread = threading.Thread(target=_run_agent_background, daemon=True)
     agent_thread.start()
     state.agent_thread = agent_thread
@@ -1750,7 +1745,7 @@ def _handle_input(
     # so the lock must already be available to avoid AttributeError.
     state.agent_lock = agent_thread_lock
     state.agent_result = agent_result
-    
+
     # Return immediately - agent runs in background
     return False
 
@@ -1797,12 +1792,12 @@ def run_tty_app(
 
     # Session initialization
     session: SessionData | None = None
-    
+
     if list_sessions_only:
         sessions = list_sessions()
         print(format_session_list(sessions))
         return messages
-    
+
     if resume_session:
         if resume_session == "latest":
             session = get_latest_session(workspace=str(Path(cwd).resolve()))
@@ -1825,17 +1820,17 @@ def run_tty_app(
                 print(f"Previous session found: {session.session_id[:8]}")
             print("Use --resume to continue, or starting fresh session.")
             session = None
-    
+
     if not session:
         session = create_new_session(workspace=str(Path(cwd).resolve()))
-    
+
     # Initialize AppState store (Zustand-style)
     app_state_store = create_app_store({
         "session_id": session.session_id,
         "workspace": cwd,
         "model": runtime.get("model", "unknown") if runtime else "unknown",
     })
-    
+
     # Initialize CostTracker
     cost_tracker = CostTracker()
 
@@ -1853,12 +1848,12 @@ def run_tty_app(
         # Restore messages
         args.messages.clear()
         args.messages.extend(session.messages)
-        
+
         # Restore transcript entries
         for entry_data in session.transcript_entries:
             entry = TranscriptEntry(**entry_data)
             state.transcript.append(entry)
-        
+
         print(f"Restored {len(session.messages)} messages, {len(state.transcript)} transcript entries.")
 
     # Wire up permission prompt handler
@@ -1946,7 +1941,7 @@ def run_tty_app(
 
                 # Animation frame for thinking indicator
                 state._animation_frame += 1
-                
+
                 # Check if background agent thread completed
                 agent_result_data = state.agent_result
                 lock = getattr(state, "agent_lock", None)
@@ -2033,7 +2028,7 @@ def run_tty_app(
 
         show_cursor()
         exit_alternate_screen()
-        
+
         # Final session save
         if state.session:
             # Update session with current state
@@ -2055,13 +2050,13 @@ def run_tty_app(
             state.session.permissions_summary = args.permissions.get_summary()
             state.session.skills = args.tools.get_skills()
             state.session.mcp_servers = args.tools.get_mcp_servers()
-            
+
             # Force save
             if state.autosave:
                 state.autosave.force_save()
             else:
                 save_session(state.session)
-            
+
             if os.environ.get("PEPSI_CODE_VERBOSE", "") == "1":
                 print(
                     f"\nSession saved: {state.session.session_id[:8]} "
@@ -2196,15 +2191,15 @@ def _handle_pending_approval_event(
     if pending.feedback_mode:
         _handle_feedback_mode_event(state, event, rerender, approval_event, approval_result)
         return
-    
+
     if isinstance(event, KeyEvent):
         if _handle_pending_approval_key(state, event, rerender, approval_event, approval_result):
             return
-    
+
     if isinstance(event, TextEvent) and not event.ctrl:
         if _handle_pending_approval_text(state, event, rerender, approval_event, approval_result):
             return
-    
+
     if isinstance(event, WheelEvent):
         if _handle_pending_approval_wheel(state, event, rerender):
             return
@@ -2219,41 +2214,41 @@ def _handle_pending_approval_key(
 ) -> bool:
     """Handle key events during pending approval. Returns True if handled."""
     pending = state.pending_approval
-    
+
     if event.name == "escape":
         approval_result.clear()
         approval_result["decision"] = "deny_once"
         approval_event.set()
         rerender()
         return True
-    
+
     if event.name == "return":
         _confirm_pending_choice(state, rerender, approval_event, approval_result)
         return True
-    
+
     if event.name == "up" and _move_pending_approval_selection(state, -1):
         rerender()
         return True
-    
+
     if event.name == "down" and _move_pending_approval_selection(state, 1):
         rerender()
         return True
-    
+
     if event.name == "pageup" and _scroll_pending_approval_by(state, -5):
         rerender()
         return True
-    
+
     if event.name == "pagedown" and _scroll_pending_approval_by(state, 5):
         rerender()
         return True
-    
+
     # Digit keys for choices
     choices = pending.request.get("choices", [])
     for choice in choices:
         if event.text == choice.get("key"):
             _select_pending_choice(state, choice, rerender, approval_event, approval_result)
             return True
-    
+
     return False
 
 
@@ -2266,18 +2261,18 @@ def _handle_pending_approval_text(
 ) -> bool:
     """Handle text events during pending approval. Returns True if handled."""
     pending = state.pending_approval
-    
+
     if event.text == "v" and _toggle_pending_approval_expand(state):
         rerender()
         return True
-    
+
     # Check digit keys for choices
     choices = pending.request.get("choices", [])
     for choice in choices:
         if event.text == choice.get("key"):
             _select_pending_choice(state, choice, rerender, approval_event, approval_result)
             return True
-    
+
     return False
 
 
@@ -2304,7 +2299,7 @@ def _confirm_pending_choice(
     """Confirm the selected permission choice."""
     pending = state.pending_approval
     choices = pending.request.get("choices", [])
-    
+
     if choices and 0 <= pending.selected_choice_index < len(choices):
         choice = choices[pending.selected_choice_index]
         _select_pending_choice(state, choice, rerender, approval_event, approval_result)
@@ -2325,13 +2320,13 @@ def _select_pending_choice(
     """Select a permission choice and resolve."""
     pending = state.pending_approval
     decision = choice.get("decision", "allow_once")
-    
+
     if decision == "deny_with_feedback":
         pending.feedback_mode = True
         pending.feedback_input = ""
         rerender()
         return
-    
+
     approval_result.clear()
     approval_result["decision"] = decision
     approval_event.set()
@@ -2351,7 +2346,7 @@ def _handle_normal_mode_event(
 ) -> None:
     """Handle input events in normal mode (no pending approval)."""
     visible_commands = _get_visible_commands(state.input)
-    
+
     if isinstance(event, KeyEvent):
         if _handle_normal_mode_key(args, state, event, visible_commands, rerender):
             return
@@ -2375,35 +2370,35 @@ def _handle_normal_mode_key(
     if event.name == "return":
         _handle_normal_mode_return(args, state, visible_commands, rerender)
         return True
-    
+
     # Tab -> autocomplete slash command
     if event.name == "tab" and visible_commands:
         _handle_normal_mode_tab(state, visible_commands, rerender)
         return True
-    
+
     # Navigation and editing keys
     if _handle_normal_mode_navigation(state, event, rerender):
         return True
-    
+
     # Ctrl shortcuts (P, N handled in text handler)
     # PageUp/PageDown -> scroll transcript
     if event.name == "pageup" and _scroll_transcript_by(args, state, 8):
         rerender()
         return True
-    
+
     if event.name == "pagedown" and _scroll_transcript_by(args, state, -8):
         rerender()
         return True
-    
+
     # Up/Down arrows (history or command selection)
     if event.name == "up":
         _handle_up_arrow(args, state, visible_commands, rerender)
         return True
-    
+
     if event.name == "down":
         _handle_down_arrow(args, state, visible_commands, rerender)
         return True
-    
+
     return False
 
 
@@ -2434,7 +2429,7 @@ def _handle_normal_mode_return(
         state.selected_slash_index = 0
         rerender()
         return
-    
+
     submitted = state.input
     state.input = ""
     state.cursor_offset = 0
@@ -2471,40 +2466,40 @@ def _handle_normal_mode_navigation(
         state.selected_slash_index = 0
         rerender()
         return True
-    
+
     if event.name == "delete" and state.cursor_offset < len(state.input):
         state.input = state.input[:state.cursor_offset] + state.input[state.cursor_offset + 1:]
         state.selected_slash_index = 0
         rerender()
         return True
-    
+
     if event.name == "home":
         state.cursor_offset = 0
         rerender()
         return True
-    
+
     if event.name == "end":
         state.cursor_offset = len(state.input)
         rerender()
         return True
-    
+
     if event.name == "left":
         state.cursor_offset = max(0, state.cursor_offset - 1)
         rerender()
         return True
-    
+
     if event.name == "right":
         state.cursor_offset = min(len(state.input), state.cursor_offset + 1)
         rerender()
         return True
-    
+
     if event.name == "escape":
         state.input = ""
         state.cursor_offset = 0
         state.selected_slash_index = 0
         rerender()
         return True
-    
+
     return False
 
 
@@ -2564,7 +2559,7 @@ def _handle_normal_mode_text(
             state.selected_slash_index = 0
             rerender()
             return True
-        
+
         if event.text == "a":  # Ctrl-A -> home / jump to top
             if not state.input:
                 if _jump_transcript_to_edge(args, state, "top"):
@@ -2573,7 +2568,7 @@ def _handle_normal_mode_text(
             state.cursor_offset = 0
             rerender()
             return True
-        
+
         if event.text == "e":  # Ctrl-E -> end / jump to bottom
             if not state.input:
                 if _jump_transcript_to_edge(args, state, "bottom"):
@@ -2582,19 +2577,19 @@ def _handle_normal_mode_text(
             state.cursor_offset = len(state.input)
             rerender()
             return True
-        
+
         if event.text == "p":  # Ctrl-P -> history up
             if _history_up(state):
                 rerender()
             return True
-        
+
         if event.text == "n":  # Ctrl-N -> history down
             if _history_down(state):
                 rerender()
             return True
-        
+
         return False
-    
+
     # Regular text input (accept any non-empty text, including multi-byte CJK/emoji)
     if not event.ctrl and event.text:
         state.input = state.input[:state.cursor_offset] + event.text + state.input[state.cursor_offset:]
@@ -2603,7 +2598,7 @@ def _handle_normal_mode_text(
         state.history_index = len(state.history)
         rerender()
         return True
-    
+
     return False
 
 

@@ -1,7 +1,8 @@
 from __future__ import annotations
+
 import re
 from dataclasses import dataclass
-from typing import Union, Literal
+from typing import Literal, Union
 
 # Pre-compiled regexes for escape sequence parsing
 _SGR_MOUSE_RE = re.compile(r'^\x1b\[<(\d+);(\d+);(\d+)([Mm])')
@@ -59,7 +60,7 @@ def maybe_need_more_for_escape_sequence(chunk: str) -> bool:
         return False
     if len(chunk) == 1:
         return True
-    
+
     # CSI
     if chunk[1] == '[':
         # SGR Mouse: ESC[<button;x;yM/m
@@ -79,11 +80,11 @@ def maybe_need_more_for_escape_sequence(chunk: str) -> bool:
                 return False
         # All chars so far are parameter bytes, still waiting for terminator
         return True
-        
+
     # SS3
     if chunk[1] == 'O':
         return len(chunk) < 3
-        
+
     # ESC + char (Alt+char)
     # We already checked len(chunk) == 1. For Alt+char, 2 chars is complete.
     return False
@@ -91,7 +92,7 @@ def maybe_need_more_for_escape_sequence(chunk: str) -> bool:
 def parse_escape_sequence(chunk: str) -> tuple[ParsedInputEvent | None, int]:
     if not chunk or chunk[0] != '\x1b':
         return None, 0
-        
+
     if len(chunk) == 1:
         return KeyEvent(name='escape', ctrl=False, meta=False), 1
 
@@ -121,14 +122,14 @@ def parse_escape_sequence(chunk: str) -> tuple[ParsedInputEvent | None, int]:
         mod_str = csi_cursor_match.group(1)
         key_char = csi_cursor_match.group(2)
         mod = int(mod_str) if mod_str else 1
-        
+
         # Modifier logic: 2=Shift, 3=Alt, 4=Shift+Alt, 5=Ctrl, 6=Shift+Ctrl, 7=Alt+Ctrl, 8=Shift+Alt+Ctrl
-        # 1=None. 
+        # 1=None.
         # (mod - 1) & 4 -> Ctrl
         # (mod - 1) & 2 -> Alt/Meta
         ctrl = bool((mod - 1) & 4)
         meta = bool((mod - 1) & 2)
-        
+
         name_map: dict[str, str] = {
             'A': 'up', 'B': 'down', 'C': 'right', 'D': 'left', 'H': 'home', 'F': 'end'
         }
@@ -164,7 +165,7 @@ def parse_escape_sequence(chunk: str) -> tuple[ParsedInputEvent | None, int]:
     if esc_char_match:
         char = esc_char_match.group(1)
         return TextEvent(text=char, ctrl=False, meta=True), 2
-        
+
     # Default to bare escape if nothing else matches and we are not waiting for more
     return KeyEvent(name='escape', ctrl=False, meta=False), 1
 

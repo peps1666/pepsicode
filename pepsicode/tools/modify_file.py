@@ -1,6 +1,5 @@
-from pepsicode.tools.write_file import _run, _validate
 from pepsicode.tooling import ToolDefinition
-
+from pepsicode.tools.write_file import _run, _validate
 
 modify_file_tool = ToolDefinition(
     name="modify_file",

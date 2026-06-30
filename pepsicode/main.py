@@ -1,13 +1,13 @@
 from __future__ import annotations
 
 import argparse
-import sys
 import os
+import sys
 from pathlib import Path
 
 from pepsicode.agent_loop import run_agent_turn
 from pepsicode.anthropic_adapter import AnthropicModelAdapter
-from pepsicode.cli_commands import find_matching_slash_commands, try_handle_local_command
+from pepsicode.cli_commands import try_handle_local_command
 from pepsicode.config import load_runtime_config
 from pepsicode.history import load_history_entries, save_history_entries
 from pepsicode.local_tool_shortcuts import parse_local_tool_shortcut
@@ -15,12 +15,13 @@ from pepsicode.manage_cli import maybe_handle_management_command
 from pepsicode.mock_model import MockModelAdapter
 from pepsicode.permissions import PermissionManager
 from pepsicode.prompt import build_system_prompt
-from pepsicode.tools import create_default_tool_registry
 from pepsicode.tooling import ToolContext
+from pepsicode.tools import create_default_tool_registry
+from pepsicode.tty_app import run_tty_app
 from pepsicode.tui.transcript import format_transcript_text
 from pepsicode.tui.types import TranscriptEntry
-from pepsicode.tty_app import run_tty_app
 from pepsicode.workspace import resolve_tool_path
+
 
 # 当地命令处理器：处理以 "/" 开头的命令，如 "/tools" 列出可用工具，或其他自定义命令
 def _handle_local_command(user_input: str, tools) -> str | None:
@@ -146,16 +147,16 @@ def main() -> None:
         from pepsicode.config import format_config_diagnostic
         print(format_config_diagnostic())
         return
-    
+
     # Run installer if requested
     if args.install:
         from pepsicode.install import main as install_main
         install_main()
         return
-    
+
     cwd = str(Path.cwd())
     argv = sys.argv[1:]
-    
+
     # 过滤掉以 "--" 开头的参数，传递剩余参数给管理命令处理器，如果匹配到管理命令则执行并退出
     management_argv = [a for a in argv if not a.startswith("--")]
     if maybe_handle_management_command(cwd, management_argv):
@@ -191,7 +192,7 @@ def main() -> None:
         if runtime is None or os.environ.get("PEPSI_CODE_MODEL_MODE") == "mock"
         else AnthropicModelAdapter(runtime, tools)
     )
-    
+
     # Initialize ContextManager for context window management
     from pepsicode.context_manager import ContextManager, save_context_state
     from pepsicode.logging_config import get_logger
@@ -204,14 +205,14 @@ def main() -> None:
         if hasattr(model, "summarize"):
             context_mgr.summarizer = model.summarize
         logger.info("Context manager initialized for model: %s", runtime.get("model", "unknown"))
-    
+
     # Initialize MemoryManager for cross-session knowledge retention.
     # The factory prefers PostgreSQL and falls back to the file store, so the
     # chosen backend is detected automatically without changing call sites.
     from pepsicode.memory import create_memory_manager
     memory_mgr = create_memory_manager(cwd)
     logger.info("Memory manager initialized")
-    
+
     messages = [
         {
             "role": "system",
@@ -242,7 +243,7 @@ def main() -> None:
             },
         )
     )
-    
+
     if os.environ.get("PEPSI_CODE_SHOW_GUIDE", "") == "1":
         print(_render_quick_start())
     elif not sys.stdin.isatty():
@@ -251,7 +252,7 @@ def main() -> None:
     else:
         print("")
 
-    try: 
+    try:
         if not sys.stdin.isatty():
             for raw_input in sys.stdin:
                 user_input = raw_input.strip()
@@ -317,7 +318,7 @@ def main() -> None:
                     context_manager=context_mgr,
                 )
                 permissions.end_turn()
-                
+
                 # Log context usage after turn
                 if context_mgr:
                     stats = context_mgr.get_stats()
@@ -347,7 +348,7 @@ def main() -> None:
         from pepsicode.logging_config import get_logger
         logger = get_logger("main")
         logger.info("Shutting down...")
-        
+
         # Restore Windows console mode (prevents ^[[A after exit)
         try:
             from pepsicode.tui.screen import _restore_windows_console_mode
@@ -361,7 +362,7 @@ def main() -> None:
             logger.info("Tools disposed successfully")
         except Exception as e:
             logger.warning("Error disposing tools: %s", e)
-        
+
         logger.info("Shutdown complete")
 
 

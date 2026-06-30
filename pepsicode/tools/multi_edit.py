@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+
 from pepsicode.tooling import ToolDefinition, ToolResult
 
 
@@ -70,7 +70,7 @@ def _run(input_data: dict, context) -> ToolResult:
             results.append({
                 "file": change["file"],
                 "status": "warning",
-                "message": f"Pattern not found",
+                "message": "Pattern not found",
                 "old_preview": old_text[:50],
             })
             continue
@@ -115,7 +115,7 @@ def _run(input_data: dict, context) -> ToolResult:
         lines.append("🔍 DRY RUN - No files were modified")
         lines.append("")
 
-    lines.append(f"Summary:")
+    lines.append("Summary:")
     lines.append(f"  Files processed: {len(changes)}")
     lines.append(f"  Successful: {success_count}")
     lines.append(f"  Errors: {error_count}")

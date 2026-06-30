@@ -8,9 +8,9 @@ from __future__ import annotations
 
 import random
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any, Callable
-
+from typing import Any
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -38,7 +38,7 @@ RETRYABLE_STATUS = {429, 500, 502, 503, 504}
 
 class APIRetryExhaustedError(Exception):
     """Raised when all retry attempts are exhausted."""
-    
+
     def __init__(self, message: str, attempts: int, last_error: Exception | None = None):
         super().__init__(message)
         self.attempts = attempts
@@ -71,14 +71,14 @@ def calculate_backoff(
     if retry_after is not None and retry_after > 0:
         # Respect Retry-After header
         return min(retry_after, max_wait)
-    
+
     # Exponential backoff: base * 2^attempt
     backoff = base * (2 ** attempt)
-    
+
     # Add jitter: backoff * (1 ± jitter)
     jitter_range = backoff * jitter
     backoff = backoff + random.uniform(-jitter_range, jitter_range)
-    
+
     # Ensure positive and capped
     return max(0.1, min(backoff, max_wait))
 
@@ -126,25 +126,25 @@ def retry_with_backoff(
         APIRetryExhaustedError: When all retry attempts are exhausted
     """
     state = RetryState(max_attempts=max_retries)
-    
+
     for attempt in range(max_retries + 1):
         try:
             result = func(*args, **kwargs)
             state.succeeded = True
             state.attempts = attempt + 1
             return result
-        
+
         except HTTPError as e:
             status_code = getattr(e, "status_code", None)
-            
+
             # Check if error is retryable
             if status_code not in retryable_errors:
                 # Non-retryable error, raise immediately
                 raise
-            
+
             state.attempts = attempt + 1
             state.last_error = str(e)
-            
+
             # Check if we have more retries
             if attempt >= max_retries:
                 raise APIRetryExhaustedError(
@@ -152,10 +152,10 @@ def retry_with_backoff(
                     attempts=attempt + 1,
                     last_error=e,
                 )
-            
+
             # Extract Retry-After header if available
             retry_after = getattr(e, "retry_after", None)
-            
+
             # Calculate backoff
             wait_time = calculate_backoff(
                 attempt,
@@ -163,17 +163,17 @@ def retry_with_backoff(
                 base=base_backoff,
                 max_wait=max_backoff,
             )
-            
+
             state.total_wait_time += wait_time
-            
+
             # Notify retry callback
             if on_retry:
                 on_retry(state)
-            
+
             # Wait before retry
             time.sleep(wait_time)
-        
-        except Exception as e:
+
+        except Exception:
             # Non-HTTP error, don't retry
             raise
 
@@ -184,7 +184,7 @@ def retry_with_backoff(
 
 class HTTPError(Exception):
     """HTTP error with status code and optional Retry-After header."""
-    
+
     def __init__(
         self,
         message: str,
@@ -205,10 +205,10 @@ def raise_for_status(response: Any, error_class: type[HTTPError] = HTTPError) ->
     Adapts to urllib, requests, httpx, etc.
     """
     status_code = getattr(response, "status", None) or getattr(response, "status_code", None)
-    
+
     if status_code is None:
         return
-    
+
     # Extract Retry-After header
     retry_after = None
     if hasattr(response, "getheader"):
@@ -217,13 +217,13 @@ def raise_for_status(response: Any, error_class: type[HTTPError] = HTTPError) ->
         retry_after_str = response.headers.get("Retry-After")
     else:
         retry_after_str = None
-    
+
     if retry_after_str:
         try:
             retry_after = float(retry_after_str)
         except (ValueError, TypeError):
             pass
-    
+
     # Check if error status
     if status_code >= 400:
         # Try to get error message from response body
@@ -236,7 +236,7 @@ def raise_for_status(response: Any, error_class: type[HTTPError] = HTTPError) ->
                 pass
         elif hasattr(response, "text"):
             error_message = f"{status_code}: {response.text[:200]}"
-        
+
         raise error_class(error_message, status_code, retry_after, response)
 
 
@@ -259,9 +259,9 @@ async def retry_with_backoff_async(
     Uses asyncio.sleep instead of time.sleep for non-blocking waits.
     """
     import asyncio
-    
+
     state = RetryState(max_attempts=max_retries)
-    
+
     for attempt in range(max_retries + 1):
         try:
             # For async functions, await; for sync, just call
@@ -269,27 +269,27 @@ async def retry_with_backoff_async(
                 result = await func(*args, **kwargs)
             else:
                 result = func(*args, **kwargs)
-            
+
             state.succeeded = True
             state.attempts = attempt + 1
             return result
-        
+
         except HTTPError as e:
             status_code = getattr(e, "status_code", None)
-            
+
             if status_code not in retryable_errors:
                 raise
-            
+
             state.attempts = attempt + 1
             state.last_error = str(e)
-            
+
             if attempt >= max_retries:
                 raise APIRetryExhaustedError(
                     f"API call failed after {max_retries + 1} attempts: {e}",
                     attempts=attempt + 1,
                     last_error=e,
                 )
-            
+
             retry_after = getattr(e, "retry_after", None)
             wait_time = calculate_backoff(
                 attempt,
@@ -297,15 +297,15 @@ async def retry_with_backoff_async(
                 base=base_backoff,
                 max_wait=max_backoff,
             )
-            
+
             state.total_wait_time += wait_time
-            
+
             if on_retry:
                 on_retry(state)
-            
+
             await asyncio.sleep(wait_time)
-        
-        except Exception as e:
+
+        except Exception:
             raise
 
 

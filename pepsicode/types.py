@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+from collections.abc import Generator
 from dataclasses import dataclass, field
-from typing import Any, Generator, Literal, Protocol, TypedDict
+from typing import Any, Literal, Protocol, TypedDict
 
 
 class ProviderThinkingBlock(TypedDict):

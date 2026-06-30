@@ -5,7 +5,7 @@ from pepsicode.skills import discover_skills
 from pepsicode.tooling import ToolRegistry
 from pepsicode.tools.api_tester import api_tester_tool
 from pepsicode.tools.ask_user import ask_user_tool
-from pepsicode.tools.code_nav import find_symbols_tool, find_references_tool, get_ast_info_tool
+from pepsicode.tools.code_nav import find_references_tool, find_symbols_tool, get_ast_info_tool
 from pepsicode.tools.code_review import code_review_tool
 from pepsicode.tools.db_explorer import db_explorer_tool
 from pepsicode.tools.diff_viewer import diff_viewer_tool

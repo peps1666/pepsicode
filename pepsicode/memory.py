@@ -45,7 +45,7 @@ class MemoryEntry:
     updated_at: float = field(default_factory=time.time)
     tags: list[str] = field(default_factory=list)
     usage_count: int = 0  # How often this was referenced
-    
+
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for serialization."""
         return {
@@ -58,9 +58,9 @@ class MemoryEntry:
             "tags": self.tags,
             "usage_count": self.usage_count,
         }
-    
+
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> "MemoryEntry":
+    def from_dict(cls, data: dict[str, Any]) -> MemoryEntry:
         """Create from dictionary."""
         return cls(
             id=data["id"],
@@ -81,17 +81,17 @@ class MemoryFile:
     entries: list[MemoryEntry] = field(default_factory=list)
     max_entries: int = 200  # Claude Code limit
     max_size_bytes: int = 25 * 1024  # 25KB limit
-    
+
     @property
     def size_bytes(self) -> int:
         """Estimate size in bytes."""
         return sum(len(e.content) for e in self.entries)
-    
+
     def add_entry(self, entry: MemoryEntry) -> None:
         """Add entry, respecting limits."""
         self.entries.append(entry)
         self._enforce_limits()
-    
+
     def update_entry(self, entry_id: str, content: str) -> bool:
         """Update existing entry."""
         for entry in self.entries:
@@ -100,7 +100,7 @@ class MemoryFile:
                 entry.updated_at = time.time()
                 return True
         return False
-    
+
     def delete_entry(self, entry_id: str) -> bool:
         """Delete entry."""
         for i, entry in enumerate(self.entries):
@@ -108,11 +108,11 @@ class MemoryFile:
                 self.entries.pop(i)
                 return True
         return False
-    
+
     def get_entries_by_category(self, category: str) -> list[MemoryEntry]:
         """Get entries filtered by category."""
         return [e for e in self.entries if e.category == category]
-    
+
     def search(self, query: str) -> list[MemoryEntry]:
         """Search entries by keyword."""
         query_lower = query.lower()
@@ -123,21 +123,21 @@ class MemoryFile:
                 any(query_lower in tag.lower() for tag in entry.tags)):
                 results.append(entry)
         return results
-    
+
     def _enforce_limits(self) -> None:
         """Remove oldest entries if exceeding limits."""
         # Check entry count
         while len(self.entries) > self.max_entries:
             self.entries.pop(0)  # Remove oldest
-        
+
         # Check size
         while self.size_bytes > self.max_size_bytes and self.entries:
             self.entries.pop(0)
-    
+
     def format_as_markdown(self, include_header: bool = True) -> str:
         """Format as MEMORY.md content."""
         lines = []
-        
+
         if include_header:
             scope_names = {
                 MemoryScope.USER: "User Memory",
@@ -148,14 +148,14 @@ class MemoryFile:
             lines.append("")
             lines.append(f"*Last updated: {time.strftime('%Y-%m-%d %H:%M')}*")
             lines.append("")
-        
+
         # Group by category
         categories: dict[str, list[MemoryEntry]] = {}
         for entry in self.entries:
             if entry.category not in categories:
                 categories[entry.category] = []
             categories[entry.category].append(entry)
-        
+
         for category, entries in categories.items():
             lines.append(f"## {category.title()}")
             lines.append("")
@@ -163,7 +163,7 @@ class MemoryFile:
                 tags_str = f" `{' '.join(entry.tags)}`" if entry.tags else ""
                 lines.append(f"- {entry.content}{tags_str}")
             lines.append("")
-        
+
         return "\n".join(lines)
 
 
@@ -175,7 +175,6 @@ class MemoryFile:
 # checkers and runtime get_type_hints().
 from pepsicode.memory_store import MemoryStore  # noqa: E402
 
-
 # ---------------------------------------------------------------------------
 # Memory Manager
 # ---------------------------------------------------------------------------
@@ -186,12 +185,12 @@ class MemoryPaths:
     user_memory: Path
     project_memory: Path
     local_memory: Path
-    
+
     @classmethod
-    def for_workspace(cls, workspace: str) -> "MemoryPaths":
+    def for_workspace(cls, workspace: str) -> MemoryPaths:
         """Create memory paths for a workspace."""
         workspace_path = Path(workspace)
-        
+
         return cls(
             user_memory=PEPSI_CODE_DIR / "memory",
             project_memory=workspace_path / ".pepsi-code-memory",
@@ -208,7 +207,7 @@ class MemoryManager:
     on-disk fallback if the database becomes unavailable.
     """
 
-    def __init__(self, workspace: str, store: "MemoryStore | None" = None):
+    def __init__(self, workspace: str, store: MemoryStore | None = None):
         self.workspace = workspace
         self.paths = MemoryPaths.for_workspace(workspace)
         self.memories: dict[MemoryScope, MemoryFile] = {
@@ -253,7 +252,7 @@ class MemoryManager:
                 self._file_store.save_scope(scope, entries)
             except Exception:  # noqa: BLE001 - mirror is best-effort
                 pass
-    
+
     def add_entry(
         self,
         scope: MemoryScope,
@@ -270,38 +269,38 @@ class MemoryManager:
             content=content,
             tags=tags or [],
         )
-        
+
         self.memories[scope].add_entry(entry)
         self._save_scope(scope)
         return entry
-    
+
     def update_entry(self, scope: MemoryScope, entry_id: str, content: str) -> bool:
         """Update an existing entry."""
         if self.memories[scope].update_entry(entry_id, content):
             self._save_scope(scope)
             return True
         return False
-    
+
     def delete_entry(self, scope: MemoryScope, entry_id: str) -> bool:
         """Delete an entry."""
         if self.memories[scope].delete_entry(entry_id):
             self._save_scope(scope)
             return True
         return False
-    
+
     def search(self, query: str, scope: MemoryScope | None = None) -> list[MemoryEntry]:
         """Search across memory scopes."""
         results = []
-        
+
         scopes_to_search = [scope] if scope else list(MemoryScope)
-        
+
         for s in scopes_to_search:
             results.extend(self.memories[s].search(query))
-        
+
         # Sort by usage count (most used first)
         results.sort(key=lambda e: e.usage_count, reverse=True)
         return results
-    
+
     def get_relevant_context(
         self,
         max_entries: int = 20,
@@ -313,19 +312,19 @@ class MemoryManager:
         respecting token limits.
         """
         from pepsicode.context_manager import estimate_tokens
-        
+
         parts = []
         total_tokens = 0
-        
+
         # Priority order: LOCAL > PROJECT > USER
         for scope in [MemoryScope.LOCAL, MemoryScope.PROJECT, MemoryScope.USER]:
             memory = self.memories[scope]
             if not memory.entries:
                 continue
-            
+
             formatted = memory.format_as_markdown(include_header=True)
             tokens = estimate_tokens(formatted)
-            
+
             if total_tokens + tokens <= max_tokens:
                 parts.append(formatted)
                 total_tokens += tokens
@@ -335,14 +334,14 @@ class MemoryManager:
                 partial_entries = memory.entries[-max_entries:]
                 partial_memory = MemoryFile(scope=scope, entries=partial_entries)
                 formatted = partial_memory.format_as_markdown(include_header=True)
-                
+
                 if estimate_tokens(formatted) <= remaining_tokens:
                     parts.append(formatted)
                 break
-        
+
         if not parts:
             return ""
-        
+
         return "\n\n".join(parts)
 
     def get_stats(self) -> dict[str, Any]:
@@ -355,12 +354,12 @@ class MemoryManager:
             }
             for scope, memory in self.memories.items()
         }
-    
+
     def format_stats(self) -> str:
         """Format memory stats for display."""
         stats = self.get_stats()
         lines = ["Memory System Status", "=" * 40, ""]
-        
+
         for scope_name, scope_stats in stats.items():
             lines.append(f"{scope_name.title()} Memory:")
             lines.append(f"  Entries: {scope_stats['entries']}")
@@ -368,9 +367,9 @@ class MemoryManager:
             if scope_stats['categories']:
                 lines.append(f"  Categories: {', '.join(scope_stats['categories'][:5])}")
             lines.append("")
-        
+
         return "\n".join(lines)
-    
+
     def clear_scope(self, scope: MemoryScope) -> None:
         """Clear all entries in a scope."""
         self.memories[scope] = MemoryFile(scope=scope)
@@ -390,11 +389,11 @@ def create_memory_manager(workspace: str) -> MemoryManager:
     database.
     """
     from pepsicode.memory_store import (
-        FileMemoryStore,
-        PostgresMemoryStore,
         PG_DBNAME,
         PG_HOST,
         PG_PORT,
+        FileMemoryStore,
+        PostgresMemoryStore,
     )
 
     try:
@@ -418,10 +417,10 @@ def inject_memory_into_prompt(
 ) -> str:
     """Inject memory context into system prompt."""
     memory_context = memory_manager.get_relevant_context(max_tokens=max_tokens)
-    
+
     if not memory_context:
         return system_prompt
-    
+
     return f"""{system_prompt}
 
 ## Project Memory & Context

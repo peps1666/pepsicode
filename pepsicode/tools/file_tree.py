@@ -1,12 +1,10 @@
 from __future__ import annotations
 
-import os
 import time
 from datetime import datetime
 from pathlib import Path
-from typing import Any
-from pepsicode.tooling import ToolDefinition, ToolResult
 
+from pepsicode.tooling import ToolDefinition, ToolResult
 
 # ---------------------------------------------------------------------------
 # File Tree Helpers
@@ -229,7 +227,7 @@ def _run(input_data: dict, context) -> ToolResult:
     lines.extend([
         "",
         "-" * 60,
-        f"\U0001f4ca Stats:",
+        "\U0001f4ca Stats:",
         f"  Files: {total_files}",
         f"  Directories: {total_dirs}",
         f"  Max depth shown: {max_depth}",

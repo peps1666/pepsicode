@@ -1,10 +1,9 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Callable, Protocol
-from abc import abstractmethod
-
+from typing import Any, Protocol
 
 # ---------------------------------------------------------------------------
 # Tool metadata (inspired by Claude Code's Tool type)
@@ -31,17 +30,17 @@ class ToolMetadata:
     is_enabled: bool = True
     max_result_size_chars: int = 10_000
     tags: list[str] = field(default_factory=list)
-    
+
     @property
     def is_read_only(self) -> bool:
         """Check if tool is read-only."""
         return ToolCapability.READ_ONLY in self.capabilities
-    
+
     @property
     def is_destructive(self) -> bool:
         """Check if tool can modify/delete data."""
         return ToolCapability.DESTRUCTIVE in self.capabilities
-    
+
     @property
     def is_concurrency_safe(self) -> bool:
         """Check if tool is safe for concurrent execution."""
@@ -62,13 +61,13 @@ class Tool(Protocol):
     - check_permissions: Permission checking
     - Metadata: is_read_only, is_destructive, etc.
     """
-    
+
     @property
     def name(self) -> str: ...
-    
+
     @property
     def description_template(self) -> str: ...
-    
+
     def get_description(self, args: dict[str, Any], options: dict[str, Any] | None = None) -> str: ...
     def validate_input(self, args: dict[str, Any]) -> tuple[bool, str]: ...
     def check_permissions(self, args: dict[str, Any], context: ToolContext) -> tuple[bool, str]: ...

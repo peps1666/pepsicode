@@ -9,11 +9,9 @@ from __future__ import annotations
 import json
 import time
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import Any
 
 from pepsicode.config import PEPSI_CODE_DIR
-
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -49,6 +47,7 @@ SYSTEM_PROMPT_RESERVED = 1
 # ---------------------------------------------------------------------------
 
 import re
+
 _CJK_PATTERN = re.compile(r'[\u4E00-\u9FFF\u3040-\u309F\u30A0-\u30FF\uAC00-\uD7AF]')
 
 
@@ -64,20 +63,20 @@ def estimate_tokens(text: str) -> int:
     """
     if not text:
         return 0
-    
+
     # CJK char width estimation
     cjk_count = len(_CJK_PATTERN.findall(text))
-    
+
     # CJK chars: ~1.5 chars/token; English: ~4 chars/token
     ascii_chars = len(text) - cjk_count
-    
+
     return max(1, int(cjk_count / 1.5 + ascii_chars / 4.0))
 
 
 def estimate_message_tokens(message: dict[str, Any]) -> int:
     """Estimate tokens for a single message."""
     tokens = 0
-    
+
     # Role overhead
     role = message.get("role", "")
     if role == "system":
@@ -97,17 +96,17 @@ def estimate_message_tokens(message: dict[str, Any]) -> int:
         for block in message.get("blocks", []):
             if isinstance(block, dict):
                 tokens += estimate_tokens(block.get("thinking", ""))
-    
+
     # Content tokens
     content = message.get("content", "")
     if isinstance(content, str):
         tokens += estimate_tokens(content)
-    
+
     # Tool call input/output
     if "input" in message:
         input_str = json.dumps(message["input"]) if isinstance(message["input"], dict) else str(message["input"])
         tokens += estimate_tokens(input_str)
-    
+
     return tokens
 
 
@@ -243,40 +242,40 @@ class ContextManager:
                 pass
         return _heuristic_summary(dropped)
 
-    
+
     def update_model(self, model: str) -> None:
         """Update model and adjust context window."""
         self.model = model
         self.context_window = DEFAULT_CONTEXT_WINDOWS.get(
             model, DEFAULT_CONTEXT_WINDOWS["default"]
         )
-    
+
     def add_message(self, message: dict[str, Any]) -> None:
         """Add a message and update tracking."""
         self.messages.append(message)
-    
+
     def get_stats(self) -> ContextStats:
         """Calculate current context statistics."""
         if not self.messages:
             return ContextStats(
                 context_window=self.context_window,
             )
-        
+
         # Count tokens
         system_tokens = 0
         conversation_tokens = 0
         tool_calls = 0
-        
+
         for msg in self.messages:
             msg_tokens = estimate_message_tokens(msg)
             if msg.get("role") == "system":
                 system_tokens += msg_tokens
             else:
                 conversation_tokens += msg_tokens
-            
+
             if msg.get("role") == "assistant_tool_call":
                 tool_calls += 1
-        
+
         total_tokens = system_tokens + conversation_tokens
         # Prefer the provider's real input-token count when we have one - it
         # reflects exactly what the model saw last call, including tool schemas
@@ -284,10 +283,10 @@ class ContextManager:
         if self.actual_input_tokens > 0:
             total_tokens = max(total_tokens, self.actual_input_tokens)
         usage_pct = (total_tokens / self.context_window * 100) if self.context_window > 0 else 0
-        
+
         is_near_limit = usage_pct >= 80  # Warning at 80%
         should_compact = usage_pct >= (AUTOCOMPACT_THRESHOLD * 100)
-        
+
         return ContextStats(
             total_tokens=total_tokens,
             context_window=self.context_window,
@@ -299,12 +298,12 @@ class ContextManager:
             is_near_limit=is_near_limit,
             should_compact=should_compact,
         )
-    
+
     def should_auto_compact(self) -> bool:
         """Check if auto-compaction should trigger."""
         stats = self.get_stats()
         return stats.should_compact
-    
+
     def compact_messages(self, force: bool = False) -> list[dict[str, Any]]:
         """Compact messages to fit within context window.
 
@@ -320,10 +319,10 @@ class ContextManager:
         stats = self.get_stats()
         if not force and not stats.should_compact:
             return self.messages
-        
+
         # Calculate target: reduce to ~70% of context window
         target_tokens = int(self.context_window * 0.70)
-        
+
         # Always keep system prompt.  Exclude prior compaction markers from the
         # real-system set so empty/no-op markers cannot accumulate; genuine
         # markers (which carry summaries) are re-added below only when work is
@@ -439,30 +438,30 @@ class ContextManager:
         # it so stats fall back to a fresh estimate until the next real usage.
         self.actual_input_tokens = 0
         return compacted
-    
+
     def get_context_summary(self) -> str:
         """Get a human-readable context usage summary."""
         stats = self.get_stats()
-        
+
         if stats.messages_count == 0:
             return "Context: empty"
-        
+
         status = "OK"
         if stats.is_near_limit:
             status = "WARN"
         if stats.should_compact:
             status = "FULL"
-        
+
         return (
             f"Context: {status} {stats.usage_percentage:.0f}% "
             f"({stats.total_tokens:,}/{stats.context_window:,} tokens, "
             f"{stats.messages_count} msgs, {stats.tool_calls_count} tools)"
         )
-    
+
     def format_context_details(self) -> str:
         """Get detailed context information for /context command."""
         stats = self.get_stats()
-        
+
         lines = [
             "Context Window Usage",
             "=" * 50,
@@ -475,12 +474,12 @@ class ContextManager:
             f"Tool calls: {stats.tool_calls_count}",
             "",
         ]
-        
+
         if stats.should_compact:
             lines.append("WARNING: Context is near capacity!")
             lines.append("Auto-compaction will trigger soon.")
             lines.append("")
-        
+
         if self.compaction_history:
             lines.append("Compaction History:")
             for comp in self.compaction_history[-3:]:  # Last 3
@@ -489,7 +488,7 @@ class ContextManager:
                     f"  {ts}: {comp['messages_removed']} messages removed, "
                     f"{comp['before_tokens']:,} -> {comp['after_tokens']:,} tokens"
                 )
-        
+
         return "\n".join(lines)
 
 
@@ -501,14 +500,14 @@ def save_context_state(manager: ContextManager) -> None:
     """Save context manager state to disk."""
     state_path = PEPSI_CODE_DIR / "context_state.json"
     PEPSI_CODE_DIR.mkdir(parents=True, exist_ok=True)
-    
+
     state = {
         "model": manager.model,
         "context_window": manager.context_window,
         "messages": manager.messages,
         "compaction_history": manager.compaction_history[-10:],  # Keep last 10
     }
-    
+
     state_path.write_text(json.dumps(state, indent=2, ensure_ascii=False), encoding="utf-8")
 
 
@@ -517,7 +516,7 @@ def load_context_state() -> ContextManager | None:
     state_path = PEPSI_CODE_DIR / "context_state.json"
     if not state_path.exists():
         return None
-    
+
     try:
         state = json.loads(state_path.read_text(encoding="utf-8"))
         return ContextManager(

@@ -23,7 +23,7 @@ def _run(input_data: dict, context) -> ToolResult:
     results: list[str] = []
     skipped = 0
     file_count = 0
-    
+
     # Skip common large directories
     SKIP_DIRS = {'.git', 'node_modules', '__pycache__', '.venv', 'venv', '.tox', 'dist', 'build'}
     MAX_FILES = 5000
@@ -40,15 +40,15 @@ def _run(input_data: dict, context) -> ToolResult:
         if any(part in SKIP_DIRS for part in file_path.parts):
             skipped += 1
             continue
-            
+
         # Limit number of files scanned
         if file_count >= MAX_FILES:
             output = "\n".join(results) if results else "No matches found."
             output += f"\n\n[!] Results truncated at {MAX_FILES} files. Try a more specific path."
             return ToolResult(ok=True, output=output)
-        
+
         file_count += 1
-        
+
         if not file_path.is_file():
             continue
         try:
@@ -62,7 +62,7 @@ def _run(input_data: dict, context) -> ToolResult:
         for index, line in enumerate(lines, start=1):
             if regex.search(line):
                 results.append(f"{file_path.relative_to(Path(context.cwd)).as_posix()}:{index}:{line}")
-    
+
     output = "\n".join(results) if results else "No matches found."
     if skipped > 0:
         output += f"\n({skipped} file(s) skipped)"

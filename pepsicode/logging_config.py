@@ -9,9 +9,7 @@ Provides structured logging with:
 from __future__ import annotations
 
 import logging
-import os
 import sys
-from pathlib import Path
 
 from pepsicode.config import PEPSI_CODE_DIR
 
@@ -41,33 +39,33 @@ def setup_logging(
     # Ensure the log directory exists
     if log_to_file:
         PEPSI_CODE_DIR.mkdir(parents=True, exist_ok=True)
-    
+
     root_logger = logging.getLogger("pepsicode")
     root_logger.setLevel(getattr(logging, level.upper(), logging.WARNING))
-    
+
     # configure handlers
     root_logger.handlers.clear()
-    
+
     # File handler
     if log_to_file:
         file_handler = logging.FileHandler(LOG_FILE, encoding="utf-8")
         file_handler.setLevel(logging.DEBUG)
         file_handler.setFormatter(logging.Formatter(FILE_FORMAT))
         root_logger.addHandler(file_handler)
-    
+
     # configure handler
     if log_to_console:
         console_handler = logging.StreamHandler(sys.stderr)
         console_handler.setLevel(getattr(logging, level.upper(), logging.WARNING))
         console_handler.setFormatter(logging.Formatter(CONSOLE_FORMAT))
         root_logger.addHandler(console_handler)
-    
+
     # Reduce noise from third-party libraries
     for noisy_lib in ["urllib3", "httpx", "openai"]:
         logging.getLogger(noisy_lib).setLevel(logging.WARNING)
-    
+
     root_logger.info("Logging initialized (level=%s, file=%s, console=%s)", level, log_to_file, log_to_console)
-    
+
     return root_logger
 
 

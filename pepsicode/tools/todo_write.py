@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-import json
 import time
+
 from pepsicode.tooling import ToolDefinition, ToolResult
 
 # In-memory task storage (resets per session)

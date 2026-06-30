@@ -107,7 +107,7 @@ def _install_launcher_script() -> str | None:
 
     try:
         target_bin_dir.mkdir(parents=True, exist_ok=True)
-        
+
         # Atomic write
         fd, tmp_path = tempfile.mkstemp(dir=str(target_bin_dir), suffix=".tmp")
         try:
@@ -148,29 +148,29 @@ def main() -> None:
     print(f"Configuration will be written to {PEPSI_CODE_SETTINGS_PATH}")
     print("Configuration is stored in a separate directory and will not affect other local tool configs.")
     print()
-    
+
     # Load existing settings
     try:
         settings = load_effective_settings()
     except Exception:
         settings = {}
-    
+
     current_env = settings.get("env", {})
-    
+
     # Collect configuration
     print("Please enter configuration details:")
     print()
-    
+
     model = _require_input(
         "Model name",
         settings.get("model") or current_env.get("ANTHROPIC_MODEL", ""),
     )
-    
+
     base_url = _require_input(
         "ANTHROPIC_BASE_URL",
         current_env.get("ANTHROPIC_BASE_URL", "https://api.anthropic.com"),
     )
-    
+
     saved_auth_token = current_env.get("ANTHROPIC_AUTH_TOKEN", "")
     token_status = _mask_secret(saved_auth_token)
     token_input = _read_input(
@@ -178,13 +178,13 @@ def main() -> None:
         None,
     )
     auth_token = token_input or saved_auth_token
-    
+
     if not auth_token and not saved_auth_token:
         print("\nError: ANTHROPIC_AUTH_TOKEN cannot be empty.")
         sys.exit(1)
-    
+
     auth_token = auth_token or saved_auth_token
-    
+
     # Save configuration
     print("\nSaving configuration...")
     try:
@@ -200,7 +200,7 @@ def main() -> None:
     except OSError as e:
         print(f"\nError: failed to save configuration: {e}")
         sys.exit(1)
-    
+
     # Install launcher script
     print("\nInstalling launcher...")
     launcher_result = _install_launcher_script()

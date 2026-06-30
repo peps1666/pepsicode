@@ -4,11 +4,11 @@ import json
 import os
 import subprocess
 import threading
+import urllib.error
+import urllib.request
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from queue import Empty, Queue
-import urllib.request
-import urllib.error
 from typing import Any, Protocol, runtime_checkable
 
 from pepsicode.tooling import ToolDefinition, ToolResult
@@ -98,12 +98,12 @@ def _sanitize_tool_segment(value: str) -> str:
 def _validate_mcp_command(command: str) -> None:
     """Validate that an MCP command is safe to execute."""
     from pathlib import Path
-    
+
     normalized = Path(command).resolve().as_posix()
-    
+
     if '..' in normalized or '~' in normalized:
-        raise RuntimeError(f"Invalid MCP command: contains path traversal characters")
-    
+        raise RuntimeError("Invalid MCP command: contains path traversal characters")
+
     base_command = Path(command).name.lower()
     # Strip the .exe suffix
     if base_command.endswith('.exe'):
@@ -131,16 +131,16 @@ def _validate_mcp_command(command: str) -> None:
                 'C:\\Program Files (x86)',
                 'C:\\Windows\\System32',
             ])
-        
+
         is_in_allowed_dir = any(normalized.lower().startswith(d.lower()) for d in allowed_system_dirs)
-        
+
         # Not in an allowed system directory and not in the allowlist
         if not is_in_allowed_dir and base_command not in ALLOWED_COMMANDS:
             raise RuntimeError(
                 f"MCP command \"{command}\" is not in the allowed list. "
                 f"Use a whitelisted command or place the executable in a standard system directory."
             )
-        
+
         # use shell
         dangerous_shells = ['cmd.exe', 'command.com', 'powershell.exe', 'pwsh.exe']
         if any(normalized.lower().endswith(d) for d in dangerous_shells):
@@ -149,7 +149,7 @@ def _validate_mcp_command(command: str) -> None:
                 f"Direct execution of shells is not allowed for security reasons."
             )
         return
-    
+
     if base_command not in ALLOWED_COMMANDS:
         raise RuntimeError(
             f"MCP command \"{command}\" is not in the allowed list. "
@@ -436,16 +436,16 @@ class StdioMcpClient:
     def send(self, message: dict[str, Any]) -> None:
         if self.process is None or self.process.stdin is None:
             raise RuntimeError(f'MCP server "{self.server_name}" is not running.')
-        
+
         payload_bytes = json.dumps(message, ensure_ascii=False).encode("utf-8")
-        
+
         if self.protocol == "newline-json":
             self.process.stdin.write(payload_bytes + b"\n")
             self.process.stdin.flush()
             self._ensure_stdout_thread()
             return
-        
-        header = f"Content-Length: {len(payload_bytes)}\r\n\r\n".encode("utf-8")
+
+        header = f"Content-Length: {len(payload_bytes)}\r\n\r\n".encode()
         self.process.stdin.write(header + payload_bytes)
         self.process.stdin.flush()
         self._ensure_stdout_thread()
@@ -504,7 +504,7 @@ class StdioMcpClient:
             self._pending.clear()
             for queue in pending:
                 queue.put({"error": {"message": f'MCP server "{self.server_name}" closed before completing the request.'}})
-        
+
         if self.process is not None:
             try:
                 if os.name == "nt":
@@ -544,7 +544,7 @@ class StdioMcpClient:
                 pass
             finally:
                 self.process = None
-        
+
         self.protocol = None
         self._stdout_thread = None
         self._stderr_thread = None

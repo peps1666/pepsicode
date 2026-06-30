@@ -1,18 +1,19 @@
 from __future__ import annotations
 
 from pathlib import Path
+
 from pepsicode.tooling import ToolDefinition, ToolResult
 from pepsicode.tools.governance_audit import (
-    run_full_audit,
     audit_dependency_directions,
     audit_sink_rules,
+    run_full_audit,
 )
 
 
 def _validate(input_data: dict) -> dict:
     action = input_data.get("action", "full")
     if action not in ("full", "deps", "sinks"):
-        raise ValueError(f"action must be one of: full, deps, sinks")
+        raise ValueError("action must be one of: full, deps, sinks")
     path = input_data.get("path", ".")
     return {"action": action, "path": path}
 
@@ -21,9 +22,9 @@ def _run(input_data: dict, context) -> ToolResult:
     pkg_root = Path(context.cwd) / input_data["path"]
     if not pkg_root.exists():
         return ToolResult(ok=False, output=f"Path not found: {pkg_root}")
-    
+
     action = input_data["action"]
-    
+
     if action == "full":
         result = run_full_audit(pkg_root)
     elif action == "deps":
@@ -32,7 +33,7 @@ def _run(input_data: dict, context) -> ToolResult:
         result = audit_sink_rules(pkg_root)
     else:
         return ToolResult(ok=False, output=f"Unknown action: {action}")
-    
+
     return ToolResult(
         ok=result.passed,
         output=result.summary(),

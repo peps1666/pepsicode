@@ -1,11 +1,10 @@
 from __future__ import annotations
 
 import difflib
-import os
 from pathlib import Path
 from typing import Any
-from pepsicode.tooling import ToolDefinition, ToolResult
 
+from pepsicode.tooling import ToolDefinition, ToolResult
 
 # ---------------------------------------------------------------------------
 # Diff Viewer Helpers
@@ -29,7 +28,7 @@ def _generate_diff(old_content: str, new_content: str, old_name: str, new_name: 
     """Generate unified diff between two content strings."""
     old_lines = old_content.splitlines(keepends=True)
     new_lines = new_content.splitlines(keepends=True)
-    
+
     diff = difflib.unified_diff(
         old_lines,
         new_lines,
@@ -37,7 +36,7 @@ def _generate_diff(old_content: str, new_content: str, old_name: str, new_name: 
         tofile=new_name,
         n=context_lines,
     )
-    
+
     return ''.join(diff)
 
 
@@ -45,14 +44,14 @@ def _generate_inline_diff(old_content: str, new_content: str, context_lines: int
     """Generate inline diff showing what changed."""
     old_lines = old_content.splitlines()
     new_lines = new_content.splitlines()
-    
+
     matcher = difflib.SequenceMatcher(None, old_lines, new_lines)
-    
+
     changes = []
     for tag, i1, i2, j1, j2 in matcher.get_opcodes():
         if tag == 'equal':
             continue
-        
+
         changes.append({
             "type": tag,  # 'replace', 'delete', 'insert'
             "old_start": i1,
@@ -62,21 +61,21 @@ def _generate_inline_diff(old_content: str, new_content: str, context_lines: int
             "old_lines": old_lines[i1:i2],
             "new_lines": new_lines[j1:j2],
         })
-    
+
     return changes
 
 
 def _format_diff_output(diff_text: str, max_lines: int = 100) -> str:
     """Format diff for display."""
     lines = diff_text.split('\n')
-    
+
     if len(lines) > max_lines:
         lines = lines[:max_lines]
         lines.append(f"\n... (diff truncated, showing first {max_lines} lines)")
-    
+
     # Add colors (for terminals that support it)
     colored_lines = [_colorize_line(line) for line in lines]
-    
+
     return '\n'.join(colored_lines)
 
 
@@ -90,7 +89,7 @@ def _validate(input_data: dict) -> dict:
         raise ValueError("files must be a list")
     if not files:
         raise ValueError("files cannot be empty")
-    
+
     for i, file_entry in enumerate(files):
         if not isinstance(file_entry, dict):
             raise ValueError(f"files[{i}] must be an object")
@@ -98,14 +97,14 @@ def _validate(input_data: dict) -> dict:
             raise ValueError(f"files[{i}] must have a 'path' field")
         if "before" not in file_entry and "after" not in file_entry:
             raise ValueError(f"files[{i}] must have 'before' or 'after' field")
-    
+
     context_lines = int(input_data.get("context_lines", 3))
     if context_lines < 1 or context_lines > 10:
         raise ValueError("context_lines must be between 1 and 10")
     format_type = input_data.get("format", "unified")
     if format_type not in ("unified", "inline", "stat"):
         raise ValueError("format must be one of: unified, inline, stat")
-    
+
     return {
         "files": files,
         "context_lines": context_lines,
@@ -119,17 +118,17 @@ def _run(input_data: dict, context) -> ToolResult:
     context_lines = input_data["context_lines"]
     format_type = input_data["format"]
     cwd = Path(context.cwd)
-    
+
     all_diffs = []
     total_additions = 0
     total_deletions = 0
     files_with_changes = 0
-    
+
     for file_entry in files:
         file_path = cwd / file_entry["path"]
         old_content = file_entry.get("before", "")
         new_content = file_entry.get("after", "")
-        
+
         # Load from file if not provided
         if old_content == "__file__":
             if file_path.exists():
@@ -141,7 +140,7 @@ def _run(input_data: dict, context) -> ToolResult:
                 new_content = file_path.read_text(encoding="utf-8")
             else:
                 new_content = ""
-        
+
         # Skip if no changes
         if old_content == new_content:
             all_diffs.append({
@@ -150,9 +149,9 @@ def _run(input_data: dict, context) -> ToolResult:
                 "diff": "",
             })
             continue
-        
+
         files_with_changes += 1
-        
+
         # Generate diff based on format
         if format_type == "stat":
             # Simple stats
@@ -160,10 +159,10 @@ def _run(input_data: dict, context) -> ToolResult:
             new_lines = new_content.count('\n') + 1 if new_content else 0
             additions = max(0, new_lines - old_lines)
             deletions = max(0, old_lines - new_lines)
-            
+
             total_additions += additions
             total_deletions += deletions
-            
+
             all_diffs.append({
                 "file": file_entry["path"],
                 "status": "changed",
@@ -172,7 +171,7 @@ def _run(input_data: dict, context) -> ToolResult:
         elif format_type == "inline":
             # Inline diff
             changes = _generate_inline_diff(old_content, new_content, context_lines)
-            
+
             diff_lines = [f"\U0001f4c4 {file_entry['path']}", ""]
             for change in changes[:10]:  # Limit to 10 changes per file
                 if change["type"] == "replace":
@@ -189,9 +188,9 @@ def _run(input_data: dict, context) -> ToolResult:
                     diff_lines.append(f"  L{change['new_start']+1}: INSERTED")
                     for line in change["new_lines"]:
                         diff_lines.append(f"    + {line}")
-                
+
                 diff_lines.append("")
-            
+
             all_diffs.append({
                 "file": file_entry["path"],
                 "status": "changed",
@@ -202,48 +201,48 @@ def _run(input_data: dict, context) -> ToolResult:
             old_name = f"a/{file_entry['path']}"
             new_name = f"b/{file_entry['path']}"
             diff_text = _generate_diff(old_content, new_content, old_name, new_name, context_lines)
-            
+
             # Count additions and deletions
             for line in diff_text.split('\n'):
                 if line.startswith('+') and not line.startswith('+++'):
                     total_additions += 1
                 elif line.startswith('-') and not line.startswith('---'):
                     total_deletions += 1
-            
+
             all_diffs.append({
                 "file": file_entry["path"],
                 "status": "changed",
                 "diff": diff_text,
             })
-    
+
     # Format output
     lines = ["🔍 Diff Viewer", "=" * 70, ""]
-    
+
     lines.append(f"Files compared: {len(files)}")
     lines.append(f"Files with changes: {files_with_changes}")
-    
+
     if format_type == "stat":
         lines.append(f"Total additions: +{total_additions} lines")
         lines.append(f"Total deletions: -{total_deletions} lines")
-    
+
     lines.append("")
     lines.append("-" * 70)
     lines.append("")
-    
+
     for diff_entry in all_diffs:
         if diff_entry["status"] == "unchanged":
             lines.append(f"✓ {diff_entry['file']} (no changes)")
         else:
             lines.append(f"📋 {diff_entry['file']}")
             lines.append(diff_entry["diff"])
-        
+
         lines.append("")
         lines.append("-" * 70)
         lines.append("")
-    
+
     if files_with_changes == 0:
         lines.append("✓ All files are identical. No differences found.")
-    
+
     return ToolResult(ok=True, output="\n".join(lines))
 
 

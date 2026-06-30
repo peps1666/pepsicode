@@ -89,7 +89,6 @@ def _restore_windows_console_mode() -> None:
         return
     try:
         import ctypes
-        import ctypes.wintypes as wintypes
 
         kernel32 = ctypes.windll.kernel32  # type: ignore[attr-defined]
         STD_INPUT_HANDLE = -10

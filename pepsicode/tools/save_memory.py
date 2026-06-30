@@ -26,7 +26,7 @@ def _validate(input_data: dict) -> dict:
 
 
 def _run(input_data: dict, context) -> ToolResult:
-    from pepsicode.memory import MemoryManager, MemoryScope
+    from pepsicode.memory import MemoryScope
 
     scope_map = {
         "user": MemoryScope.USER,

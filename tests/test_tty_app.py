@@ -1,3 +1,4 @@
+from pepsicode.permissions import PermissionManager
 from pepsicode.tty_app import (
     _apply_tool_result_visual_state,
     _format_history,
@@ -8,7 +9,6 @@ from pepsicode.tty_app import (
     summarize_tool_input,
     summarize_tool_output,
 )
-from pepsicode.permissions import PermissionManager
 from pepsicode.tui.chrome import strip_ansi
 from pepsicode.tui.transcript import format_transcript_text
 from pepsicode.tui.types import TranscriptEntry

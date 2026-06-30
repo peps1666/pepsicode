@@ -9,8 +9,9 @@ Provides a simple, predictable state container with:
 from __future__ import annotations
 
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any, Callable, Generic, TypeVar
+from typing import Any, Generic, TypeVar
 
 T = TypeVar("T")
 
@@ -25,7 +26,7 @@ class Store(Generic[T]):
     Provides predictable state updates with subscriber notifications.
     Inspired by Claude Code's Zustand store implementation.
     """
-    
+
     def __init__(
         self,
         initial_state: T,
@@ -41,11 +42,11 @@ class Store(Generic[T]):
         self._listeners: list[Callable[[], None]] = []
         self._on_change = on_change
         self._update_count = 0
-    
+
     def get_state(self) -> T:
         """Get current state."""
         return self._state
-    
+
     def set_state(self, updater: Callable[[T], T]) -> None:
         """Update state using an updater function.
         
@@ -54,18 +55,18 @@ class Store(Generic[T]):
         """
         prev = self._state
         next_state = updater(prev)
-        
+
         # Skip no-op updates
         if next_state is prev:
             return
-        
+
         # Invoke change callback
         if self._on_change:
             self._on_change(next_state, prev)
-        
+
         self._state = next_state
         self._update_count += 1
-        
+
         # Notify subscribers
         for listener in self._listeners:
             try:
@@ -73,7 +74,7 @@ class Store(Generic[T]):
             except Exception:
                 # Don't let listener errors break state updates
                 pass
-    
+
     def subscribe(self, listener: Callable[[], None]) -> Callable[[], None]:
         """Subscribe to state changes.
         
@@ -84,18 +85,18 @@ class Store(Generic[T]):
             Unsubscribe function
         """
         self._listeners.append(listener)
-        
+
         def unsubscribe():
             if listener in self._listeners:
                 self._listeners.remove(listener)
-        
+
         return unsubscribe
-    
+
     @property
     def update_count(self) -> int:
         """Number of state updates."""
         return self._update_count
-    
+
     @property
     def subscriber_count(self) -> int:
         """Number of active subscribers."""
@@ -116,40 +117,40 @@ class AppState:
     session_id: str = ""
     workspace: str = ""
     model: str = "unknown"
-    
+
     # Context tracking
     message_count: int = 0
     tool_call_count: int = 0
     token_usage: int = 0
     context_window_size: int = 128_000
     context_usage_percentage: float = 0.0
-    
+
     # Cost tracking
     total_cost_usd: float = 0.0
     api_calls: int = 0
     api_errors: int = 0
-    
+
     # Task tracking
     active_tasks: int = 0
     completed_tasks: int = 0
-    
+
     # UI state
     is_busy: bool = False
     active_tool: str | None = None
     status_message: str = ""
-    
+
     # Feature flags
     verbose: bool = False
     skills_enabled: bool = True
     mcp_enabled: bool = True
-    
+
     # Timestamps
     created_at: float = field(default_factory=time.time)
     last_updated: float = field(default_factory=time.time)
-    
+
     # Custom metadata
     metadata: dict[str, Any] = field(default_factory=dict)
-    
+
     def update_timestamp(self) -> None:
         """Update the last_updated timestamp."""
         self.last_updated = time.time()
@@ -177,7 +178,7 @@ def create_app_store(
         for key, value in initial.items():
             if hasattr(state, key):
                 setattr(state, key, value)
-    
+
     return Store(state, on_change)
 
 
@@ -219,7 +220,7 @@ def format_app_state_summary(state: AppState) -> str:
         f"  Active tool: {state.active_tool or 'none'}",
         f"  Message: {state.status_message or 'ready'}",
     ]
-    
+
     return "\n".join(lines)
 
 

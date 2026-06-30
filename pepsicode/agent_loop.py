@@ -1,14 +1,14 @@
 from __future__ import annotations
 
+from collections.abc import Callable, Generator
 from concurrent.futures import ThreadPoolExecutor
-from typing import Callable, Generator
 
 from pepsicode.anthropic_adapter import ContextOverflowError
-from pepsicode.context_manager import ContextManager, estimate_message_tokens
+from pepsicode.context_manager import ContextManager
 from pepsicode.logging_config import get_logger
 from pepsicode.permissions import PermissionManager
 from pepsicode.tooling import ToolContext, ToolRegistry
-from pepsicode.types import AgentStep, ChatMessage, ModelAdapter, ProviderThinkingBlock, StreamToken
+from pepsicode.types import AgentStep, ChatMessage, ModelAdapter, StreamToken
 
 logger = get_logger("agent_loop")
 
@@ -214,9 +214,9 @@ def run_agent_turn(
     if context_manager:
         context_manager.messages = current_messages
         stats = context_manager.get_stats()
-        logger.info("Context: %d tokens (%.0f%%), %d messages", 
+        logger.info("Context: %d tokens (%.0f%%), %d messages",
                    stats.total_tokens, stats.usage_percentage, stats.messages_count)
-        
+
         # Auto-compact if usage is near the limit
         if context_manager.should_auto_compact():
             logger.warning("Context near limit, auto-compacting...")

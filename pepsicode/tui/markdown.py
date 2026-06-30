@@ -1,6 +1,6 @@
 from __future__ import annotations
+
 import re
-from functools import lru_cache
 
 RESET = "\u001b[0m"
 DIM = "\u001b[2m"

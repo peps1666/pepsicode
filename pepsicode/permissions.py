@@ -3,8 +3,9 @@ from __future__ import annotations
 import json
 import os
 import sys
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Callable, Literal
+from typing import Any, Literal
 
 from pepsicode.config import PEPSI_CODE_PERMISSIONS_PATH
 

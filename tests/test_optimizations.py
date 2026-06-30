@@ -6,11 +6,11 @@ usage, LLM/heuristic summarization, opt-in governance, and the Task tool.
 import threading
 import time
 
-from pepsicode.agent_loop import run_agent_turn, _snip_tool_outputs, _execute_calls_in_order
+from pepsicode.agent_loop import _execute_calls_in_order, _snip_tool_outputs, run_agent_turn
 from pepsicode.anthropic_adapter import ContextOverflowError
 from pepsicode.context_manager import ContextManager, _heuristic_summary
 from pepsicode.tooling import ToolContext, ToolDefinition, ToolRegistry, ToolResult
-from pepsicode.types import AgentStep, ChatMessage, ModelAdapter
+from pepsicode.types import AgentStep, ModelAdapter
 
 
 class ScriptedModel(ModelAdapter):
@@ -266,8 +266,8 @@ def test_task_tool_requires_model():
 
 
 def test_task_tool_excludes_itself_from_sub_registry():
-    from pepsicode.tools.task import _build_sub_registry
     from pepsicode.sub_agents import AgentDefinition
+    from pepsicode.tools.task import _build_sub_registry
     reg = _build_sub_registry(AgentDefinition.general_agent())
     assert "task" not in [t.name for t in reg.list()]
 

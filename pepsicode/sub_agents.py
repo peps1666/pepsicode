@@ -16,11 +16,10 @@ import time
 import uuid
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Callable
+from typing import Any
 
 from pepsicode.context_manager import ContextManager
 from pepsicode.state import AppState, Store
-
 
 # ---------------------------------------------------------------------------
 # Agent types
@@ -49,9 +48,9 @@ class AgentDefinition:
     model: str = "inherit"  # inherit from parent or specific model
     max_turns: int = 10
     is_read_only: bool = False
-    
+
     @classmethod
-    def explore_agent(cls) -> "AgentDefinition":
+    def explore_agent(cls) -> AgentDefinition:
         """Create Explore agent - fast, read-only exploration."""
         return cls(
             type=AgentType.EXPLORE,
@@ -67,9 +66,9 @@ class AgentDefinition:
             is_read_only=True,
             max_turns=5,
         )
-    
+
     @classmethod
-    def plan_agent(cls) -> "AgentDefinition":
+    def plan_agent(cls) -> AgentDefinition:
         """Create Plan agent - thorough context gathering."""
         return cls(
             type=AgentType.PLAN,
@@ -85,9 +84,9 @@ class AgentDefinition:
             is_read_only=True,
             max_turns=8,
         )
-    
+
     @classmethod
-    def general_agent(cls) -> "AgentDefinition":
+    def general_agent(cls) -> AgentDefinition:
         """Create General-purpose agent - full capabilities."""
         return cls(
             type=AgentType.GENERAL,
@@ -133,7 +132,7 @@ class SubAgentManager:
     
     Inspired by Claude Code's coordinator/ system.
     """
-    
+
     def __init__(self, parent_session_id: str, app_state: Store[AppState] | None = None):
         self.parent_session_id = parent_session_id
         self.app_state = app_state
@@ -143,11 +142,11 @@ class SubAgentManager:
             AgentType.PLAN: AgentDefinition.plan_agent(),
             AgentType.GENERAL: AgentDefinition.general_agent(),
         }
-    
+
     def get_definition(self, agent_type: AgentType) -> AgentDefinition:
         """Get agent definition."""
         return self.definitions[agent_type]
-    
+
     def spawn_agent(
         self,
         agent_type: AgentType,
@@ -165,20 +164,20 @@ class SubAgentManager:
             AgentInstance
         """
         definition = self.get_definition(agent_type)
-        
+
         agent_id = f"agent-{uuid.uuid4().hex[:8]}"
-        
+
         # Create context manager for isolated context
         context_manager = ContextManager(
             model=model or definition.model,
         )
-        
+
         # Build system message
         system_message = {
             "role": "system",
             "content": definition.system_prompt_template,
         }
-        
+
         instance = AgentInstance(
             id=agent_id,
             definition=definition,
@@ -187,78 +186,78 @@ class SubAgentManager:
             messages=[system_message],
             context_manager=context_manager,
         )
-        
+
         self.agents[agent_id] = instance
         return instance
-    
+
     def add_message(self, agent_id: str, message: dict[str, Any]) -> bool:
         """Add message to agent conversation."""
         instance = self.agents.get(agent_id)
         if not instance or instance.status != "running":
             return False
-        
+
         instance.messages.append(message)
         instance.turn_count += 1
-        
+
         # Update context
         if instance.context_manager:
             instance.context_manager.add_message(message)
-        
+
         return True
-    
+
     def complete_agent(self, agent_id: str, result: str) -> bool:
         """Mark agent as completed with result."""
         instance = self.agents.get(agent_id)
         if not instance:
             return False
-        
+
         instance.status = "completed"
         instance.result = result
         instance.completed_at = time.time()
-        
+
         return True
-    
+
     def fail_agent(self, agent_id: str, error: str) -> bool:
         """Mark agent as failed."""
         instance = self.agents.get(agent_id)
         if not instance:
             return False
-        
+
         instance.status = "failed"
         instance.error = error
         instance.completed_at = time.time()
-        
+
         return False
-    
+
     def cancel_agent(self, agent_id: str) -> bool:
         """Cancel a running agent."""
         instance = self.agents.get(agent_id)
         if not instance:
             return False
-        
+
         instance.status = "cancelled"
         instance.completed_at = time.time()
-        
+
         return True
-    
+
     def get_agent(self, agent_id: str) -> AgentInstance | None:
         """Get agent instance by ID."""
         return self.agents.get(agent_id)
-    
+
     def get_active_agents(self) -> list[AgentInstance]:
         """Get all running agents."""
         return [
             agent for agent in self.agents.values()
             if agent.status == "running"
         ]
-    
+
     def format_agent_status(self) -> str:
         """Format status report for all agents."""
         if not self.agents:
             return "No sub-agents spawned."
-        
+
         lines = ["Sub-Agents Status", "=" * 50, ""]
-        
+
         for agent_id, instance in self.agents.items():
             status_icon = {
                 "running": "◐",
@@ -266,11 +265,11 @@ class SubAgentManager:
                 "failed": "✗",
                 "cancelled": "⊘",
             }.get(instance.status, "")
-            
+
             duration = time.time() - instance.started_at
             if instance.completed_at:
                 duration = instance.completed_at - instance.started_at
-            
+
             lines.extend([
                 f"{status_icon} {instance.definition.name} ({agent_id})",
                 f"  Task: {instance.task_description[:60]}",
@@ -278,40 +277,40 @@ class SubAgentManager:
                 f"  Turns: {instance.turn_count}/{instance.definition.max_turns}",
                 f"  Duration: {duration:.0f}s",
             ])
-            
+
             if instance.result:
                 result_preview = instance.result[:100]
                 lines.append(f"  Result: {result_preview}...")
-            
+
             if instance.error:
                 lines.append(f"  Error: {instance.error}")
-            
+
             lines.append("")
-        
+
         active = len(self.get_active_agents())
         lines.append(f"Active: {active} | Total: {len(self.agents)}")
-        
+
         return "\n".join(lines)
-    
+
     def compile_result_summary(self, agent_id: str) -> str:
         """Compile a summary of agent execution for parent context."""
         instance = self.agents.get(agent_id)
         if not instance:
             return f"Agent {agent_id} not found."
-        
+
         lines = [
             f"[Sub-agent {instance.definition.name} completed]",
             f"  Turns: {instance.turn_count}",
             f"  Status: {instance.status}",
         ]
-        
+
         if instance.result:
             lines.append(f"  Result: {instance.result[:200]}")
-        
+
         if instance.context_manager:
             stats = instance.context_manager.get_stats()
             lines.append(f"  Tokens used: {stats.total_tokens:,}")
-        
+
         return "\n".join(lines)
 
 
@@ -350,16 +349,16 @@ def choose_agent_type(task_description: str) -> AgentType:
         Recommended AgentType
     """
     desc_lower = task_description.lower()
-    
+
     # Exploration tasks
     exploration_keywords = ["explore", "search", "find", "understand", "explain"]
     if any(kw in desc_lower for kw in exploration_keywords):
         return AgentType.EXPLORE
-    
+
     # Planning/context-gathering tasks
     planning_keywords = ["plan", "analyze", "review", "audit", "survey"]
     if any(kw in desc_lower for kw in planning_keywords):
         return AgentType.PLAN
-    
+
     # Default to general-purpose
     return AgentType.GENERAL

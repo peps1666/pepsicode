@@ -11,9 +11,6 @@ from __future__ import annotations
 
 import os
 import sys
-import json
-import shutil
-import tempfile
 import textwrap
 from pathlib import Path
 from typing import Any
@@ -24,17 +21,16 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from pepsicode.agent_loop import run_agent_turn
+from pepsicode.config import PEPSI_CODE_DIR, load_effective_settings
+from pepsicode.context_manager import ContextManager
 from pepsicode.mock_model import MockModelAdapter
 from pepsicode.permissions import PermissionManager
-from pepsicode.tooling import ToolContext, ToolRegistry, ToolDefinition, ToolResult
-from pepsicode.tools import create_default_tool_registry
-from pepsicode.types import AgentStep, ChatMessage
-from pepsicode.context_manager import ContextManager
-from pepsicode.session import SessionData, save_session, load_session, list_sessions
-from pepsicode.config import load_effective_settings, PEPSI_CODE_DIR
 from pepsicode.prompt import build_system_prompt
-from pepsicode.tui.types import TranscriptEntry, _create_transcript_entry, _recycle_transcript_entry
-
+from pepsicode.session import SessionData, list_sessions, load_session, save_session
+from pepsicode.tooling import ToolRegistry
+from pepsicode.tools import create_default_tool_registry
+from pepsicode.tui.types import _create_transcript_entry, _recycle_transcript_entry
+from pepsicode.types import AgentStep, ChatMessage
 
 # ---------------------------------------------------------------------------
 # Fixtures

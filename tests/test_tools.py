@@ -1,11 +1,10 @@
 from pathlib import Path
 
 from pepsicode.permissions import PermissionManager
-from pepsicode.tools.run_command import _build_execution_command, split_command_line
-from pepsicode.tools.patch_file import patch_file_tool
-from pepsicode.tools.run_command import run_command_tool
-from pepsicode.tools.write_file import write_file_tool
 from pepsicode.tooling import ToolContext
+from pepsicode.tools.patch_file import patch_file_tool
+from pepsicode.tools.run_command import _build_execution_command, run_command_tool, split_command_line
+from pepsicode.tools.write_file import write_file_tool
 
 
 def test_split_command_line_supports_quotes() -> None:

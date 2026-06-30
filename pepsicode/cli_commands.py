@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from pepsicode.poly_commands import create_builtin_commands, CommandRegistry
 from pepsicode.config import (
     CLAUDE_SETTINGS_PATH,
     PEPSI_CODE_MCP_PATH,
@@ -117,7 +116,7 @@ def format_slash_commands() -> str:
         "║ - Type naturally - I'll understand Chinese & English  ║",
         "╚═══════════════════════════════════════════════════════════════════════════╝",
     ])
-    
+
     return "\n".join(lines)
 
 
@@ -164,6 +163,7 @@ def try_handle_local_command(user_input: str, tools=None) -> str | None:
         # Memory system display
         try:
             import os
+
             from pepsicode.memory import MemoryManager, MemoryScope
             memory_mgr = MemoryManager(workspace=os.getcwd())
 

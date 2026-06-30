@@ -17,7 +17,6 @@ from pepsicode.mcp import (
 )
 from pepsicode.tooling import ToolContext
 
-
 # ---------------------------------------------------------------------------
 # Stdio tests (existing)
 # ---------------------------------------------------------------------------

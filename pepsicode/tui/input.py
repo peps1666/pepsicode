@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 from .chrome import (
-    RESET, DIM, BOLD,
-    ACCENT, SUBTLE,
-    HIGHLIGHT_BG, ICON_PROMPT,
+    ACCENT,
+    BOLD,
+    DIM,
+    HIGHLIGHT_BG,
+    ICON_PROMPT,
+    RESET,
 )
 
 

@@ -1,12 +1,12 @@
 from __future__ import annotations
 
 import json
-import urllib.request
-import urllib.error
 import time
+import urllib.error
+import urllib.request
 from typing import Any
-from pepsicode.tooling import ToolDefinition, ToolResult
 
+from pepsicode.tooling import ToolDefinition, ToolResult
 
 # ---------------------------------------------------------------------------
 # API Tester Helpers
@@ -23,10 +23,10 @@ def _format_body(body: Any, content_type: str = "") -> str:
     """Format request/response body for display."""
     if body is None:
         return ""
-    
+
     if isinstance(body, (dict, list)):
         return json.dumps(body, indent=2, ensure_ascii=False)
-    
+
     if isinstance(body, str):
         # Try to parse as JSON
         try:
@@ -34,7 +34,7 @@ def _format_body(body: Any, content_type: str = "") -> str:
             return json.dumps(parsed, indent=2, ensure_ascii=False)
         except (json.JSONDecodeError, TypeError):
             return body[:1000]
-    
+
     return str(body)[:1000]
 
 
@@ -52,7 +52,7 @@ def _build_request(method: str, url: str, headers: dict, body: Any, auth: dict |
             data = body
     else:
         data = None
-    
+
     # Add authentication
     if auth:
         auth_type = auth.get("type", "bearer")
@@ -66,17 +66,17 @@ def _build_request(method: str, url: str, headers: dict, body: Any, auth: dict |
         elif auth_type == "api_key":
             key_name = auth.get("key_name", "X-API-Key")
             headers[key_name] = auth.get("key", "")
-    
+
     # Build request
     req = urllib.request.Request(url, data=data, headers=headers, method=method)
-    
+
     return req
 
 
 def _validate_response(response_text: str, expected_schema: dict | None = None) -> dict[str, Any]:
     """Validate response against expected schema."""
     validation_result = {"valid": True, "errors": []}
-    
+
     # Check if response is valid JSON
     try:
         parsed = json.loads(response_text)
@@ -86,7 +86,7 @@ def _validate_response(response_text: str, expected_schema: dict | None = None) 
         validation_result["is_json"] = False
         validation_result["errors"].append("Response is not valid JSON")
         return validation_result
-    
+
     # Validate against schema if provided
     if expected_schema:
         for key, expected_type in expected_schema.items():
@@ -100,7 +100,7 @@ def _validate_response(response_text: str, expected_schema: dict | None = None) 
                         f"Field '{key}': expected {expected_type}, got {actual_type}"
                     )
                     validation_result["valid"] = False
-    
+
     return validation_result
 
 
@@ -111,27 +111,27 @@ def _validate_response(response_text: str, expected_schema: dict | None = None) 
 def _validate(input_data: dict) -> dict:
     method = input_data.get("method", "GET").upper()
     if method not in ("GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"):
-        raise ValueError(f"method must be one of: GET, POST, PUT, PATCH, DELETE, HEAD, OPTIONS")
-    
+        raise ValueError("method must be one of: GET, POST, PUT, PATCH, DELETE, HEAD, OPTIONS")
+
     url = input_data.get("url")
     if not isinstance(url, str) or not url:
         raise ValueError("url is required")
-    
+
     headers = input_data.get("headers", {})
     if not isinstance(headers, dict):
         raise ValueError("headers must be a dictionary")
-    
+
     body = input_data.get("body")
     auth = input_data.get("auth")
     if auth and not isinstance(auth, dict):
         raise ValueError("auth must be a dictionary")
-    
+
     expected_status = int(input_data.get("expected_status", 200))
     expected_schema = input_data.get("expected_schema")
     timeout = int(input_data.get("timeout", 30))
     if timeout < 1 or timeout > 120:
         raise ValueError("timeout must be between 1 and 120 seconds")
-    
+
     return {
         "method": method,
         "url": url,
@@ -154,42 +154,42 @@ def _run(input_data: dict, context) -> ToolResult:
     expected_status = input_data["expected_status"]
     expected_schema = input_data.get("expected_schema")
     timeout = input_data["timeout"]
-    
+
     lines = [
         "🔌 API Tester",
         "=" * 60,
         "",
-        f"Request:",
+        "Request:",
         f"  Method: {method}",
         f"  URL: {url}",
     ]
-    
+
     if headers:
-        lines.append(f"  Headers:")
+        lines.append("  Headers:")
         lines.append(_format_headers(headers))
-    
+
     if auth:
         lines.append(f"  Auth: {auth.get('type', 'unknown')}")
-    
+
     if body:
-        lines.append(f"  Body:")
+        lines.append("  Body:")
         lines.append(_format_body(body))
-    
+
     lines.append("")
     lines.append("-" * 60)
     lines.append("")
-    
+
     # Build and send request
     start_time = time.time()
-    
+
     try:
         req = _build_request(method, url, headers.copy(), body, auth)
-        
+
         with urllib.request.urlopen(req, timeout=timeout) as response:
             status_code = response.status
             response_headers = dict(response.headers)
             response_body = response.read().decode("utf-8", errors="replace")
-            
+
     except urllib.error.HTTPError as e:
         status_code = e.code
         response_headers = dict(e.headers) if hasattr(e, 'headers') else {}
@@ -207,56 +207,56 @@ def _run(input_data: dict, context) -> ToolResult:
             ok=False,
             output="\n".join(lines) + f"鉂?Error: {e}\n\nURL: {url}",
         )
-    
+
     elapsed_ms = int((time.time() - start_time) * 1000)
-    
+
     # Format response
-    lines.append(f"Response:")
+    lines.append("Response:")
     lines.append(f"  Status: {status_code} {'OK' if status_code == expected_status else 'X (expected ' + str(expected_status) + ')'}")
     lines.append(f"  Time: {elapsed_ms}ms")
     lines.append("")
-    
+
     if response_headers:
         content_type = response_headers.get("Content-Type", "")
         content_length = response_headers.get("Content-Length", "")
-        lines.append(f"  Headers:")
+        lines.append("  Headers:")
         if content_type:
             lines.append(f"    Content-Type: {content_type}")
         if content_length:
             lines.append(f"    Content-Length: {content_length}")
-    
+
     # Parse and validate response body
     if response_body:
         validation = _validate_response(response_body, expected_schema)
-        
+
         if validation.get("is_json"):
             lines.append("")
-            lines.append(f"  Response Body (JSON):")
+            lines.append("  Response Body (JSON):")
             lines.append(_format_body(validation.get("parsed", response_body)))
-            
+
             if expected_schema:
                 lines.append("")
                 if validation["valid"]:
-                    lines.append(f"  ✓ Schema validation passed")
+                    lines.append("  ✓ Schema validation passed")
                 else:
-                    lines.append(f"  ✗ Schema validation failed:")
+                    lines.append("  ✗ Schema validation failed:")
                     for error in validation["errors"]:
                         lines.append(f"    - {error}")
         else:
             lines.append("")
-            lines.append(f"  Response Body:")
+            lines.append("  Response Body:")
             lines.append(response_body[:2000])
             if len(response_body) > 2000:
-                lines.append(f"\n  ... (truncated)")
-    
+                lines.append("\n  ... (truncated)")
+
     # Final verdict
     lines.append("")
     lines.append("-" * 60)
     lines.append("")
-    
+
     status_ok = status_code == expected_status
     schema_ok = not expected_schema or validation.get("valid", True)
-    
+
     if status_ok and schema_ok:
         lines.append("✓ API test passed!")
     else:
@@ -264,8 +264,8 @@ def _run(input_data: dict, context) -> ToolResult:
         if not status_ok:
             lines.append(f"  - Expected status {expected_status}, got {status_code}")
         if not schema_ok:
-            lines.append(f"  - Schema validation failed")
-    
+            lines.append("  - Schema validation failed")
+
     return ToolResult(
         ok=status_ok and schema_ok,
         output="\n".join(lines),

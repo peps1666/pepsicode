@@ -5,7 +5,8 @@ import random
 import time
 import urllib.error
 import urllib.request
-from typing import Any, Generator
+from collections.abc import Generator
+from typing import Any
 
 from pepsicode.types import AgentStep, ChatMessage, ProviderThinkingBlock, StepDiagnostics, StreamToken
 
@@ -66,7 +67,6 @@ def _parse_retry_after_ms(retry_after: str | None) -> int | None:
     try:
         from email.utils import parsedate_to_datetime
         target = parsedate_to_datetime(retry_after)
-        import datetime
         delta_ms = int((target.timestamp() - time.time()) * 1000)
         return max(0, delta_ms)
     except (ValueError, TypeError):
@@ -196,10 +196,7 @@ def _process_sse_event(event: dict[str, Any]) -> Generator[StreamToken, None, No
         if isinstance(usage, dict):
             # Stash the usage on a sentinel attribute so next_stream() can
             # assign it back to self.last_usage at the end of the stream.
-            setattr(_process_sse_event, "_pending_usage", {
-                "input_tokens": int(usage.get("input_tokens", 0) or 0),
-                "output_tokens": int(usage.get("output_tokens", 0) or 0),
-            })
+            _process_sse_event._pending_usage = {"input_tokens": int(usage.get("input_tokens", 0) or 0), "output_tokens": int(usage.get("output_tokens", 0) or 0)}
 
 
 def _consume_pending_usage() -> dict[str, int] | None:

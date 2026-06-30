@@ -11,15 +11,13 @@ availability checks, and multi-source loading.
 
 from __future__ import annotations
 
-import asyncio
 from abc import ABC, abstractmethod
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from enum import Enum
-from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 from pepsicode.state import AppState, Store
-
 
 # ---------------------------------------------------------------------------
 # Command types
@@ -60,7 +58,7 @@ class CommandMetadata:
     is_hidden: bool = False
     tags: list[str] = field(default_factory=list)
     is_enabled: Callable[[], bool] = field(default=lambda: True)
-    
+
     def meets_availability(self, mode: CommandAvailability = CommandAvailability.CONSOLE) -> bool:
         """Check if command is available in current mode."""
         if self.is_hidden:
@@ -76,33 +74,33 @@ class CommandMetadata:
 
 class CommandBase(ABC):
     """Abstract base for all commands."""
-    
+
     def __init__(self, metadata: CommandMetadata):
         self.metadata = metadata
-    
+
     @property
     def name(self) -> str:
         return self.metadata.name
-    
+
     @property
     def description(self) -> str:
         return self.metadata.description
-    
+
     @abstractmethod
     async def execute(self, args: str, context: dict[str, Any]) -> CommandResult:
         """Execute the command."""
         ...
-    
+
     def is_enabled(self) -> bool:
         return self.metadata.is_enabled()
-    
+
     def meets_availability(self, mode: CommandAvailability = CommandAvailability.CONSOLE) -> bool:
         return self.metadata.meets_availability(mode)
 
 
 class CommandResult:
     """Command execution result."""
-    
+
     def __init__(
         self,
         output: str,
@@ -125,12 +123,12 @@ class LocalCommand(CommandBase):
     
     Inspired by Claude Code's LocalCommand type.
     """
-    
+
     def __init__(self, metadata: CommandMetadata, handler: Callable[[str, dict], str]):
         super().__init__(metadata)
         self.handler = handler
         self.metadata.context = "inline"
-    
+
     async def execute(self, args: str, context: dict[str, Any]) -> CommandResult:
         try:
             output = self.handler(args, context)
@@ -156,12 +154,12 @@ class PromptCommand(CommandBase):
     
     Inspired by Claude Code's PromptCommand type.
     """
-    
+
     def __init__(self, metadata: CommandMetadata, prompt_builder: Callable[[str, dict], str]):
         super().__init__(metadata)
         self.prompt_builder = prompt_builder
         self.metadata.context = "inline"
-    
+
     async def execute(self, args: str, context: dict[str, Any]) -> CommandResult:
         try:
             prompt = self.prompt_builder(args, context)
@@ -187,12 +185,12 @@ class InteractiveCommand(CommandBase):
     
     Inspired by Claude Code's LocalJSXCommand type.
     """
-    
+
     def __init__(self, metadata: CommandMetadata, ui_handler: Callable[[str, dict], str]):
         super().__init__(metadata)
         self.ui_handler = ui_handler
         self.metadata.context = "inline"
-    
+
     async def execute(self, args: str, context: dict[str, Any]) -> CommandResult:
         try:
             output = self.ui_handler(args, context)
@@ -218,25 +216,25 @@ class CommandRegistry:
     
     Inspired by Claude Code's command loading system.
     """
-    
+
     def __init__(self):
         self._commands: dict[str, CommandBase] = {}
         self._loaders: list[Callable[[], list[CommandBase]]] = []
-    
+
     def register(self, command: CommandBase) -> None:
         """Register a command."""
         self._commands[command.name] = command
         for alias in command.metadata.aliases:
             self._commands[alias] = command
-    
+
     def register_loader(self, loader: Callable[[], list[CommandBase]]) -> None:
         """Register a command loader function."""
         self._loaders.append(loader)
-    
+
     def get(self, name: str) -> CommandBase | None:
         """Get command by name or alias."""
         return self._commands.get(name)
-    
+
     def list_commands(
         self,
         mode: CommandAvailability = CommandAvailability.CONSOLE,
@@ -251,13 +249,13 @@ class CommandRegistry:
                         self.register(cmd)
             except Exception:
                 pass
-        
+
         # Filter by availability
         return [
             cmd for cmd in self._commands.values()
             if cmd.meets_availability(mode)
         ]
-    
+
     async def execute(
         self,
         name: str,
@@ -271,7 +269,7 @@ class CommandRegistry:
                 output=f"Unknown command: {name}",
                 success=False,
             )
-        
+
         return await command.execute(args, context or {})
 
 
@@ -293,14 +291,14 @@ def create_builtin_commands(
         List of built-in commands
     """
     commands = []
-    
+
     # /cost - Show cost report
     def cost_handler(args: str, context: dict) -> str:
         if cost_tracker:
             detailed = "--detailed" in args or "-d" in args
             return cost_tracker.format_cost_report(detailed=detailed)
         return "Cost tracking not initialized."
-    
+
     commands.append(LocalCommand(
         metadata=CommandMetadata(
             name="/cost",
@@ -311,14 +309,14 @@ def create_builtin_commands(
         ),
         handler=cost_handler,
     ))
-    
+
     # /status - Show app state summary
     def status_handler(args: str, context: dict) -> str:
         if app_state:
             from pepsicode.state import format_app_state_summary
             return format_app_state_summary(app_state.get_state())
         return "App state not initialized."
-    
+
     commands.append(LocalCommand(
         metadata=CommandMetadata(
             name="/status",
@@ -329,7 +327,7 @@ def create_builtin_commands(
         ),
         handler=status_handler,
     ))
-    
+
     # /context - Show context window usage
     def context_handler(args: str, context: dict) -> str:
         if app_state:
@@ -344,15 +342,15 @@ def create_builtin_commands(
                 f"Tool calls: {state.tool_call_count}",
                 "",
             ]
-            
+
             if state.context_usage_percentage > 80:
                 lines.append("⚠️  WARNING: Context is near capacity!")
                 if state.context_usage_percentage > 95:
                     lines.append("🔄 Auto-compaction will trigger soon.")
-            
+
             return "\n".join(lines)
         return "Context tracking not initialized."
-    
+
     commands.append(LocalCommand(
         metadata=CommandMetadata(
             name="/context",
@@ -363,7 +361,7 @@ def create_builtin_commands(
         ),
         handler=context_handler,
     ))
-    
+
     # /memory - Show memory status
     def memory_handler(args: str, context: dict) -> str:
         try:
@@ -373,7 +371,7 @@ def create_builtin_commands(
             return mm.format_stats()
         except Exception as e:
             return f"Memory system error: {e}"
-    
+
     commands.append(LocalCommand(
         metadata=CommandMetadata(
             name="/memory",
@@ -384,7 +382,7 @@ def create_builtin_commands(
         ),
         handler=memory_handler,
     ))
-    
+
     # /tasks - Show task list
     def tasks_handler(args: str, context: dict) -> str:
         try:
@@ -395,7 +393,7 @@ def create_builtin_commands(
             return "No active task list. Tasks are auto-detected from multi-step requests."
         except Exception as e:
             return f"Task system error: {e}"
-    
+
     commands.append(LocalCommand(
         metadata=CommandMetadata(
             name="/tasks",
@@ -406,5 +404,5 @@ def create_builtin_commands(
         ),
         handler=tasks_handler,
     ))
-    
+
     return commands

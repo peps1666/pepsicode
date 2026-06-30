@@ -17,11 +17,11 @@ from __future__ import annotations
 import asyncio
 import sys
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
-from typing import Any, Callable
-
+from typing import Any
 
 # ---------------------------------------------------------------------------
 # Hook events
@@ -32,21 +32,21 @@ class HookEvent(str, Enum):
     # Tool lifecycle
     PRE_TOOL_USE = "pre_tool_use"       # Before tool execution
     POST_TOOL_USE = "post_tool_use"     # After tool execution
-    
+
     # Agent lifecycle
     AGENT_START = "agent_start"         # Agent turn started
     AGENT_STOP = "agent_stop"           # Agent turn stopped
     SUBAGENT_START = "subagent_start"   # Sub-agent spawned
     SUBAGENT_STOP = "subagent_stop"     # Sub-agent completed
-    
+
     # Session events
     SESSION_SAVE = "session_save"       # Session autosaved
     SESSION_RESUME = "session_resume"   # Session restored
-    
+
     # User interactions
     USER_INPUT = "user_input"           # User submitted input
     ASSISTANT_OUTPUT = "assistant_output"  # Assistant responded
-    
+
     # System
     STARTUP = "startup"                 # Application started
     SHUTDOWN = "shutdown"               # Application shutting down
@@ -63,31 +63,31 @@ class HookContext:
     timestamp: float = field(default_factory=time.time)
     data: dict[str, Any] = field(default_factory=dict)
     metadata: dict[str, Any] = field(default_factory=dict)
-    
+
     @property
     def tool_name(self) -> str | None:
         return self.data.get("tool_name")
-    
+
     @property
     def tool_input(self) -> Any:
         return self.data.get("tool_input")
-    
+
     @property
     def tool_output(self) -> str | None:
         return self.data.get("tool_output")
-    
+
     @property
     def is_error(self) -> bool:
         return self.data.get("is_error", False)
-    
+
     @property
     def session_id(self) -> str | None:
         return self.data.get("session_id")
-    
+
     @property
     def user_input(self) -> str | None:
         return self.data.get("user_input")
-    
+
     @property
     def assistant_output(self) -> str | None:
         return self.data.get("assistant_output")
@@ -124,13 +124,13 @@ class HookManager:
     
     Inspired by Claude Code's hooks system and plugin event listeners.
     """
-    
+
     def __init__(self):
         self._hooks: dict[HookEvent, list[HookRegistration]] = {
             event: [] for event in HookEvent
         }
         self._enabled = True
-    
+
     def register(
         self,
         event: HookEvent,
@@ -148,22 +148,22 @@ class HookManager:
             Unregister function
         """
         import asyncio
-        
+
         registration = HookRegistration(
             event=event,
             handler=handler,
             is_async=asyncio.iscoroutinefunction(handler),
             description=description,
         )
-        
+
         self._hooks[event].append(registration)
-        
+
         def unregister():
             if registration in self._hooks[event]:
                 self._hooks[event].remove(registration)
-        
+
         return unregister
-    
+
     async def fire(self, event: HookEvent, **kwargs: Any) -> list[Any]:
         """Fire an event, calling all registered hooks.
         
@@ -176,94 +176,94 @@ class HookManager:
         """
         if not self._enabled:
             return []
-        
+
         context = HookContext(event=event, data=kwargs)
         results = []
-        
+
         for registration in self._hooks[event]:
             if not registration.enabled:
                 continue
-            
+
             start_time = time.time()
             try:
                 if registration.is_async:
                     result = await registration.handler(context)
                 else:
                     result = registration.handler(context)
-                
+
                 registration.call_count += 1
                 registration.last_called = time.time()
-                
+
                 duration_ms = int((time.time() - start_time) * 1000)
                 registration.total_duration_ms += duration_ms
-                
+
                 results.append(result)
-            
+
             except Exception as e:
                 # Don't let hook errors break main flow
                 results.append(f"Hook error: {e}")
-        
+
         return results
-    
+
     def fire_sync(self, event: HookEvent, **kwargs: Any) -> list[Any]:
         """Fire event synchronously (for sync hooks only)."""
         if not self._enabled:
             return []
-        
+
         context = HookContext(event=event, data=kwargs)
         results = []
-        
+
         for registration in self._hooks[event]:
             if not registration.enabled or registration.is_async:
                 continue
-            
+
             start_time = time.time()
             try:
                 result = registration.handler(context)
                 registration.call_count += 1
                 registration.last_called = time.time()
-                
+
                 duration_ms = int((time.time() - start_time) * 1000)
                 registration.total_duration_ms += duration_ms
-                
+
                 results.append(result)
-            
+
             except Exception as e:
                 results.append(f"Hook error: {e}")
-        
+
         return results
-    
+
     def enable(self) -> None:
         """Enable all hooks."""
         self._enabled = True
-    
+
     def disable(self) -> None:
         """Disable all hooks."""
         self._enabled = False
-    
+
     def get_hook_stats(self, event: HookEvent | None = None) -> dict[str, Any]:
         """Get hook execution statistics."""
         if event:
             hooks = self._hooks.get(event, [])
         else:
             hooks = [h for hooks_list in self._hooks.values() for h in hooks_list]
-        
+
         return {
             "total_hooks": len(hooks),
             "enabled_hooks": sum(1 for h in hooks if h.enabled),
             "total_calls": sum(h.call_count for h in hooks),
             "total_duration_ms": sum(h.total_duration_ms for h in hooks),
         }
-    
+
     def format_hook_status(self) -> str:
         """Format hook status for display."""
         lines = ["Hooks Status", "=" * 50, ""]
-        
+
         for event in HookEvent:
             hooks = self._hooks[event]
             if not hooks:
                 continue
-            
+
             lines.append(f"{event.value}:")
             for hook in hooks:
                 status = "on" if hook.enabled else "off"
@@ -272,7 +272,7 @@ class HookManager:
                     f"({hook.call_count} calls, {hook.total_duration_ms}ms)"
                 )
             lines.append("")
-        
+
         stats = self.get_hook_stats()
         lines.extend([
             "-" * 50,
@@ -281,7 +281,7 @@ class HookManager:
             f"Total calls: {stats['total_calls']}",
             f"Total duration: {stats['total_duration_ms']}ms",
         ])
-        
+
         return "\n".join(lines)
 
 
@@ -301,17 +301,17 @@ def create_logging_hook(log_file: Path | None = None) -> HookHandler:
     def handler(ctx: HookContext) -> None:
         timestamp = time.strftime("%H:%M:%S", time.localtime(ctx.timestamp))
         message = f"[{timestamp}] {ctx.event.value}"
-        
+
         if ctx.tool_name:
             message += f" tool={ctx.tool_name}"
         if ctx.session_id:
             message += f" session={ctx.session_id[:8]}"
-        
+
         if log_file:
             log_file.parent.mkdir(parents=True, exist_ok=True)
             with open(log_file, "a", encoding="utf-8") as f:
                 f.write(message + "\n")
-    
+
     return handler
 
 
@@ -352,15 +352,15 @@ def create_script_hook(script_path: Path) -> AsyncHookHandler:
                 stderr=asyncio.subprocess.PIPE,
             )
             stdout, stderr = await process.communicate()
-            
+
             if process.returncode == 0:
                 return stdout.decode("utf-8", errors="replace")
             else:
                 return f"Script failed: {stderr.decode('utf-8', errors='replace')}"
-        
+
         except Exception as e:
             return f"Script execution failed: {e}"
-    
+
     return handler
 
 

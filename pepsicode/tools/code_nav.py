@@ -4,8 +4,8 @@ import ast
 import os
 from pathlib import Path
 from typing import Any
-from pepsicode.tooling import ToolDefinition, ToolResult
 
+from pepsicode.tooling import ToolDefinition, ToolResult
 
 # ---------------------------------------------------------------------------
 # AST Analysis Helpers
@@ -136,7 +136,7 @@ def _validate_find_symbols(input_data: dict) -> dict:
     path = input_data.get("path", ".")
     symbol_type = input_data.get("symbol_type", "all")
     if symbol_type not in ("all", "class", "function", "variable"):
-        raise ValueError(f"symbol_type must be one of: all, class, function, variable")
+        raise ValueError("symbol_type must be one of: all, class, function, variable")
     return {"path": path, "symbol_type": symbol_type}
 
 

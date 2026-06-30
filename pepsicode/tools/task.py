@@ -9,25 +9,26 @@ pattern; see CoreCoder article 06-multi-agent).
 
 from __future__ import annotations
 
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 
 from pepsicode.sub_agents import AgentDefinition, AgentType
 from pepsicode.tooling import ToolContext, ToolDefinition, ToolRegistry, ToolResult
+from pepsicode.tools.code_nav import find_references_tool, find_symbols_tool, get_ast_info_tool
+from pepsicode.tools.edit_file import edit_file_tool
+from pepsicode.tools.file_tree import file_tree_tool
+from pepsicode.tools.grep_files import grep_files_tool
+from pepsicode.tools.list_files import list_files_tool
+from pepsicode.tools.modify_file import modify_file_tool
+from pepsicode.tools.multi_edit import multi_edit_tool
+from pepsicode.tools.patch_file import patch_file_tool
 
 # Read-only tools available to every sub-agent.
 from pepsicode.tools.read_file import read_file_tool
-from pepsicode.tools.list_files import list_files_tool
-from pepsicode.tools.grep_files import grep_files_tool
-from pepsicode.tools.file_tree import file_tree_tool
-from pepsicode.tools.code_nav import find_symbols_tool, find_references_tool, get_ast_info_tool
+from pepsicode.tools.run_command import run_command_tool
 
 # Additional write/exec tools available to the general-purpose sub-agent.
 from pepsicode.tools.write_file import write_file_tool
-from pepsicode.tools.edit_file import edit_file_tool
-from pepsicode.tools.patch_file import patch_file_tool
-from pepsicode.tools.modify_file import modify_file_tool
-from pepsicode.tools.multi_edit import multi_edit_tool
-from pepsicode.tools.run_command import run_command_tool
 
 _READ_ONLY_TOOLS = [
     read_file_tool,
