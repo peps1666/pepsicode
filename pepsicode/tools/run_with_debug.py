@@ -75,7 +75,7 @@ def _parse_python_error(output: str, cwd: str) -> list[dict[str, Any]]:
 
                 for i in range(start, end):
                     marker = "→ " if i == line_idx else "  "
-                    context_lines.append(f"{marker}{i+1:4d} | {lines[i]}")
+                    context_lines.append(f"{marker}{i + 1:4d} | {lines[i]}")
             except Exception:
                 context_lines = ["Unable to read file"]
 

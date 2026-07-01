@@ -45,6 +45,22 @@ def _suggest_model_name(typed: str) -> str:
     return ""
 
 
+def _truthy(value: Any) -> bool:
+    """Interpret a config/env value as a boolean.
+
+    Accepts genuine bools, the strings ``"true"/"1"/"yes"/"on"`` (case
+    insensitive), and numbers. Anything else (including ``None`` and ``""``)
+    is falsy.
+    """
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value != 0
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "on"}
+    return False
+
+
 def project_mcp_path(cwd: str | Path | None = None) -> Path:
     return Path(cwd or Path.cwd()) / ".mcp.json"
 
@@ -148,6 +164,28 @@ def load_runtime_config(cwd: str | Path | None = None) -> dict[str, Any]:
         or None
     )
 
+    # Loop-engineering knobs (opt-in). Parsed here so future wiring can read
+    # them from the runtime config; not yet consumed by the run path.
+    raw_budget_limit = os.environ.get("PEPSI_CODE_BUDGET_LIMIT") or effective.get("budgetLimitUsd")
+    budget_limit_usd: float | None = None
+    if raw_budget_limit is not None:
+        try:
+            budget_limit_usd = float(raw_budget_limit)
+        except (TypeError, ValueError):
+            budget_limit_usd = None
+
+    raw_max_iterations = os.environ.get("PEPSI_CODE_MAX_ITERATIONS") or effective.get("maxIterations")
+    max_iterations = 3
+    if raw_max_iterations is not None:
+        try:
+            parsed_iterations = int(raw_max_iterations)
+            if parsed_iterations > 0:
+                max_iterations = parsed_iterations
+        except (TypeError, ValueError):
+            pass
+
+    verifier_enabled = _truthy(os.environ.get("PEPSI_CODE_VERIFIER_ENABLED") or effective.get("verifierEnabled"))
+
     return {
         "model": model,
         "fallbackModel": fallback_model,
@@ -157,6 +195,9 @@ def load_runtime_config(cwd: str | Path | None = None) -> dict[str, Any]:
         "maxOutputTokens": max_output_tokens,
         "governance": bool(effective.get("governance", False)),
         "mcpServers": effective.get("mcpServers", {}),
+        "budgetLimitUsd": budget_limit_usd,
+        "maxIterations": max_iterations,
+        "verifierEnabled": verifier_enabled,
         "sourceSummary": f"config: {PEPSI_CODE_SETTINGS_PATH} > {CLAUDE_SETTINGS_PATH} > process.env",
     }
 

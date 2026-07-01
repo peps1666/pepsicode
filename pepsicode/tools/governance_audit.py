@@ -262,7 +262,7 @@ def audit_dependency_directions(pkg_root: Path) -> AuditResult:
                 last_import_is_config = True
             elif last_import_is_config and CONFIG_IMPORT_LAST:
                 result.warnings.append(
-                    f"Config import should come last: " f"{source_file.relative_to(pkg_root)} imports {import_module}"
+                    f"Config import should come last: {source_file.relative_to(pkg_root)} imports {import_module}"
                 )
 
     # Check for cycles (simple DFS)

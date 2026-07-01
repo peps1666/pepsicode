@@ -5,6 +5,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 from pepsicode.anthropic_adapter import ContextOverflowError
 from pepsicode.context_manager import ContextManager
+from pepsicode.cost_tracker import BudgetExceededError, CostTracker
 from pepsicode.logging_config import get_logger
 from pepsicode.permissions import PermissionManager
 from pepsicode.tooling import ToolContext, ToolRegistry
@@ -144,6 +145,34 @@ def _is_concurrency_safe(tools: ToolRegistry, tool_name: str) -> bool:
     return bool(tool and getattr(tool, "concurrency_safe", False))
 
 
+def _record_cost_usage(model: ModelAdapter, cost_tracker: CostTracker | None) -> None:
+    """Feed the provider's reported token usage into the cost tracker.
+
+    Mirrors the existing ``context_manager.update_usage`` recording: both read
+    the same ``model.last_usage`` dict so context stats and cost stats stay in
+    sync from a single source of truth.
+    """
+    if cost_tracker is None:
+        return
+    usage = getattr(model, "last_usage", None)
+    if not isinstance(usage, dict):
+        return
+    model_name = usage.get("model") or getattr(model, "name", None) or "default"
+    cost_tracker.add_usage(
+        model=model_name,
+        input_tokens=usage.get("input_tokens", 0),
+        output_tokens=usage.get("output_tokens", 0),
+        cache_read_tokens=usage.get("cache_read_tokens", 0),
+        cache_write_tokens=usage.get("cache_write_tokens", 0),
+    )
+
+
+def _check_budget(cost_tracker: CostTracker | None, cost_limit_usd: float | None) -> None:
+    """Raise ``BudgetExceededError`` if spend has crossed the cap, if any."""
+    if cost_tracker is not None and cost_limit_usd is not None and cost_tracker.total_cost_usd >= cost_limit_usd:
+        raise BudgetExceededError(limit=cost_limit_usd, spent=cost_tracker.total_cost_usd)
+
+
 def _execute_calls_in_order(
     calls: list[dict],
     tools: ToolRegistry,
@@ -204,6 +233,8 @@ def run_agent_turn(
     on_assistant_message: Callable[[str], None] | None = None,
     on_progress_message: Callable[[str], None] | None = None,
     context_manager: ContextManager | None = None,
+    cost_tracker: CostTracker | None = None,
+    cost_limit_usd: float | None = None,
 ) -> list[ChatMessage]:
     current_messages = list(messages)
     saw_tool_result = False
@@ -229,6 +260,8 @@ def run_agent_turn(
 
     while max_steps is None or step < max_steps:
         step += 1
+        # Budget guard: stop before doing more work once the cap is hit.
+        _check_budget(cost_tracker, cost_limit_usd)
         next_step: AgentStep
         # Layer 1 compression: trim oversized older tool outputs before the
         # model sees them.  Cheap and lossless for recent context.
@@ -290,6 +323,7 @@ def run_agent_turn(
                     usage.get("input_tokens", 0),
                     usage.get("output_tokens", 0),
                 )
+        _record_cost_usage(model, cost_tracker)
 
         if next_step.type == "assistant":
             is_empty = _is_empty_assistant_response(next_step.content)
@@ -557,6 +591,8 @@ def run_agent_turn_stream(
     on_assistant_message: Callable[[str], None] | None = None,
     on_progress_message: Callable[[str], None] | None = None,
     context_manager: ContextManager | None = None,
+    cost_tracker: CostTracker | None = None,
+    cost_limit_usd: float | None = None,
 ) -> list[ChatMessage]:
     """Run an agent turn with streaming token output.
 
@@ -592,6 +628,8 @@ def run_agent_turn_stream(
 
     while max_steps is None or step < max_steps:
         step += 1
+        # Budget guard: stop before doing more work once the cap is hit.
+        _check_budget(cost_tracker, cost_limit_usd)
         current_messages = _snip_tool_outputs(current_messages)
 
         # ------ Stream the model response ------
@@ -672,6 +710,7 @@ def run_agent_turn_stream(
                     usage.get("input_tokens", 0),
                     usage.get("output_tokens", 0),
                 )
+        _record_cost_usage(model, cost_tracker)
 
         # ------ Handle empty responses ------
         is_empty = len(text_content.strip()) == 0 and not parsed_calls

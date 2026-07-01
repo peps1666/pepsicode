@@ -207,7 +207,7 @@ def format_app_state_summary(state: AppState) -> str:
         "Context:",
         f"  Messages: {state.message_count}",
         f"  Tool calls: {state.tool_call_count}",
-        f"  Tokens: {state.token_usage:,} / {state.context_window_size:,} " f"({state.context_usage_percentage:.1f}%)",
+        f"  Tokens: {state.token_usage:,} / {state.context_window_size:,} ({state.context_usage_percentage:.1f}%)",
         "",
         "Cost:",
         f"  Total: ${state.total_cost_usd:.4f}",

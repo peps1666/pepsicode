@@ -39,6 +39,11 @@ class Task:
     updated_at: float = field(default_factory=time.time)
     completed_at: float | None = None
     error: str | None = None
+    # Loop-engineering retry bookkeeping. Defaults keep existing callers
+    # (which construct Task with only id/description) unchanged.
+    retry_count: int = 0
+    max_retries: int = 3
+    last_error: str | None = None
 
     def complete(self) -> None:
         """Mark task as completed."""
@@ -61,6 +66,26 @@ class Task:
         """Mark task as in progress."""
         self.status = TaskStatus.IN_PROGRESS
         self.updated_at = time.time()
+
+    def increment_retry(self, error: str) -> bool:
+        """Record a failed attempt.
+
+        Args:
+            error: The reason this attempt failed.
+
+        Returns:
+            True if retries remain, False once the cap is reached (i.e. the
+            task is now blocked and should not be retried again).
+        """
+        self.retry_count += 1
+        self.last_error = error
+        self.updated_at = time.time()
+        return self.retry_count < self.max_retries
+
+    @property
+    def is_blocked(self) -> bool:
+        """Whether the retry cap has been reached (no further retries)."""
+        return self.retry_count >= self.max_retries
 
 
 @dataclass
@@ -209,7 +234,7 @@ class TaskManager:
         if tl.title:
             status_parts.append(f"📋 {tl.title}")
 
-        status_parts.append(f"{tl.completed_count}/{tl.total} done " f"({tl.progress_percentage:.0f}%)")
+        status_parts.append(f"{tl.completed_count}/{tl.total} done ({tl.progress_percentage:.0f}%)")
 
         if tl.in_progress_count > 0:
             current = tl.get_current_task()

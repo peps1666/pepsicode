@@ -332,4 +332,4 @@ def format_retry_state(state: RetryState) -> str:
     if state.succeeded:
         return f"✓ Succeeded on attempt {state.attempts}"
     else:
-        return f"✗ Failed after {state.attempts} attempts, " f"waited {state.total_wait_time:.1f}s total"
+        return f"✗ Failed after {state.attempts} attempts, waited {state.total_wait_time:.1f}s total"

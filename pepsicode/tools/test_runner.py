@@ -182,8 +182,7 @@ def _run(input_data: dict, context) -> ToolResult:
     if not test_files:
         return ToolResult(
             ok=False,
-            output=f"No test files found in {input_data['path']}\n\n"
-            f"Expected files matching: test_*.py or *_test.py",
+            output=f"No test files found in {input_data['path']}\n\nExpected files matching: test_*.py or *_test.py",
         )
 
     # Apply pattern filter if provided

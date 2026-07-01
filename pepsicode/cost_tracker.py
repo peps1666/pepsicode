@@ -10,6 +10,25 @@ import time
 from dataclasses import dataclass, field
 
 # ---------------------------------------------------------------------------
+# Budget enforcement
+# ---------------------------------------------------------------------------
+
+
+class BudgetExceededError(Exception):
+    """Raised when accumulated spend crosses the configured budget cap.
+
+    Lives in this leaf module so both ``agent_loop`` (turn-level guard) and
+    ``loop_engine`` (loop-level guard) can import it without a circular
+    dependency.
+    """
+
+    def __init__(self, limit: float, spent: float) -> None:
+        super().__init__(f"Budget exceeded: ${spent:.4f} >= ${limit:.4f}")
+        self.limit = limit
+        self.spent = spent
+
+
+# ---------------------------------------------------------------------------
 # Pricing (approximate, per 1M tokens)
 # ---------------------------------------------------------------------------
 
@@ -297,7 +316,5 @@ class CostTracker:
             return "Cost: $0.0000"
 
         return (
-            f"Cost: ${self.total_cost_usd:.4f} | "
-            f"Tokens: {self.get_total_tokens():,} | "
-            f"Calls: {self.get_total_calls()}"
+            f"Cost: ${self.total_cost_usd:.4f} | Tokens: {self.get_total_tokens():,} | Calls: {self.get_total_calls()}"
         )

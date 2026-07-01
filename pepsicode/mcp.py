@@ -177,7 +177,7 @@ def _validate_mcp_command(command: str) -> None:
 
     if base_command not in ALLOWED_COMMANDS:
         raise RuntimeError(
-            f"MCP command \"{command}\" is not in the allowed list. "
+            f'MCP command "{command}" is not in the allowed list. '
             f"Allowed commands: {', '.join(sorted(ALLOWED_COMMANDS))}. "
             f"Use absolute paths for custom commands."
         )
@@ -862,9 +862,9 @@ def create_mcp_backed_tools(*, cwd: str, mcp_servers: dict[str, dict[str, Any]])
                 name="list_mcp_resources",
                 description="List available MCP resources exposed by connected MCP servers.",
                 input_schema={"type": "object", "properties": {"server": {"type": "string"}}},
-                validator=lambda value: {"server": value.get("server")}
-                if isinstance(value, dict)
-                else {"server": None},
+                validator=lambda value: (
+                    {"server": value.get("server")} if isinstance(value, dict) else {"server": None}
+                ),
                 run=lambda input_data, _context: ToolResult(
                     ok=True,
                     output="\n".join(
@@ -905,9 +905,9 @@ def create_mcp_backed_tools(*, cwd: str, mcp_servers: dict[str, dict[str, Any]])
                 name="list_mcp_prompts",
                 description="List available MCP prompts exposed by connected MCP servers.",
                 input_schema={"type": "object", "properties": {"server": {"type": "string"}}},
-                validator=lambda value: {"server": value.get("server")}
-                if isinstance(value, dict)
-                else {"server": None},
+                validator=lambda value: (
+                    {"server": value.get("server")} if isinstance(value, dict) else {"server": None}
+                ),
                 run=lambda input_data, _context: ToolResult(
                     ok=True,
                     output="\n".join(

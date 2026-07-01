@@ -42,8 +42,7 @@ def _render_banner(runtime: dict | None, cwd: str, permission_summary: list[str]
             for perm in permission_summary[:2]:
                 lines.append(f"  {perm}")
         lines.append(
-            f"  Skills: {counts['skillCount']} | MCP: {counts['mcpCount']} | "
-            f"Transcript: {counts['transcriptCount']}"
+            f"  Skills: {counts['skillCount']} | MCP: {counts['mcpCount']} | Transcript: {counts['transcriptCount']}"
         )
     return "\n".join(lines)
 

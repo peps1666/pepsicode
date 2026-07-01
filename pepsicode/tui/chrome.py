@@ -555,7 +555,7 @@ def render_slash_menu(commands: list[Any], selected_index: int) -> str:
                     f"{HIGHLIGHT_BG}  {SUBTLE}{desc}{RESET}"
                 )
             else:
-                line = f"   {SUBTLE}{shortcut}{RESET}" f"  {usage}" f"  {SUBTLE}{desc}{RESET}"
+                line = f"   {SUBTLE}{shortcut}{RESET}  {usage}  {SUBTLE}{desc}{RESET}"
             rows.append(truncate_plain(line, width))
             flat_index += 1
 
@@ -711,7 +711,7 @@ def render_permission_prompt(
                 lines.extend(visible)
                 if total > len(visible):
                     lines.append(
-                        f"{SUBTLE}  {ICON_DIVIDER * 3} scroll {scroll_offset+1}/{total} (Wheel/PgUp/PgDn) {ICON_DIVIDER * 3}{RESET}"
+                        f"{SUBTLE}  {ICON_DIVIDER * 3} scroll {scroll_offset + 1}/{total} (Wheel/PgUp/PgDn) {ICON_DIVIDER * 3}{RESET}"
                     )
             lines.append("")
         for i, choice in enumerate(request.get("choices", [])):

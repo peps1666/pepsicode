@@ -183,17 +183,17 @@ def _run(input_data: dict, context) -> ToolResult:
             diff_lines = [f"\U0001f4c4 {file_entry['path']}", ""]
             for change in changes[:10]:  # Limit to 10 changes per file
                 if change["type"] == "replace":
-                    diff_lines.append(f"  L{change['old_start']+1} → L{change['new_start']+1}:")
+                    diff_lines.append(f"  L{change['old_start'] + 1} → L{change['new_start'] + 1}:")
                     for line in change["old_lines"]:
                         diff_lines.append(f"    - {line}")
                     for line in change["new_lines"]:
                         diff_lines.append(f"    + {line}")
                 elif change["type"] == "delete":
-                    diff_lines.append(f"  L{change['old_start']+1}: DELETED")
+                    diff_lines.append(f"  L{change['old_start'] + 1}: DELETED")
                     for line in change["old_lines"]:
                         diff_lines.append(f"    - {line}")
                 elif change["type"] == "insert":
-                    diff_lines.append(f"  L{change['new_start']+1}: INSERTED")
+                    diff_lines.append(f"  L{change['new_start'] + 1}: INSERTED")
                     for line in change["new_lines"]:
                         diff_lines.append(f"    + {line}")
 

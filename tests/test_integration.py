@@ -282,7 +282,7 @@ class TestAgentLoopIntegration:
                     type="tool_calls",
                     calls=[
                         {
-                            "id": f"inf-{int(time.time()*1000)}",
+                            "id": f"inf-{int(time.time() * 1000)}",
                             "toolName": "list_files",
                             "input": {},
                         }
