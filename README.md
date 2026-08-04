@@ -1,468 +1,334 @@
-<div align="center">
+# pepsicode v2
 
-<a id="top"></a>
+pepsicode 是一个面向本地开发工作流的 Python 终端编程代理。第二版在原有工具、MCP、Skills、子代理、Plan 模式和上下文压缩能力之上，新增了可配置、可审计且受权限系统约束的 Hooks v2。
 
-# pepsicode Python / pepsicode Python 中文版
+> English summary: pepsicode v2 is a Python terminal coding agent with permission-aware tools, Plan mode, context compaction, MCP/Skills/sub-agents, and a secure configurable hook engine.
 
-### 🚀 Bilingual Terminal AI Coding Assistant / 双语终端 AI 编程助手
+## 第二版亮点
 
-[![Python 3.11+](https://img.shields.io/badge/python-3.11+-3776AB?style=for-the-badge&logo=python&logoColor=white)](https://www.python.org/)
-[![License: MIT](https://img.shields.io/badge/license-MIT-22c55e?style=for-the-badge)](LICENSE)
-[![Dependencies: 0](https://img.shields.io/badge/dependencies-0-f97316?style=for-the-badge)](pyproject.toml)
-[![Tests: 98.9%](https://img.shields.io/badge/tests-98.9%25-22c55e?style=for-the-badge)](tests/)
+- Hooks v2：支持工具前后、代理、会话、输入输出、压缩和应用生命周期事件。
+- 安全动作：`deny`、`notify`、`context`、`command`，其中命令 Hook 复用现有权限审批。
+- 项目信任：项目 Hook 默认禁用，用户确认后按文件内容指纹信任；文件变化后自动失效。
+- Plan 模式隔离：命令 Hook 在 Plan 模式中强制禁用，不能绕过只读边界。
+- 同步优先执行：关键的工具前置 Hook 可确定性阻断；后台动作由受管线程池执行并在退出时收敛。
+- 临时上下文注入：Hook 生成的上下文只进入下一次模型请求，不写入持久会话历史。
+- 完整生命周期：主代理与子代理共用 Hook 引擎，同时保留各自的 scope。
+- 统一版本：包、TUI 和 MCP 客户端标识均为 `2.0.0`。
 
-[![Readability: 9/10](https://img.shields.io/badge/readability-9%2F10-4F46E5?style=for-the-badge)](docs/)
-[![Performance: Optimized](https://img.shields.io/badge/performance-optimized-06B6D4?style=for-the-badge)](#performance-highlights)
+## 环境要求
 
----
+- Python 3.11+
+- Windows、macOS 或 Linux
+- 一个 Anthropic 兼容接口；也可以使用内置 mock 模型进行本地验证
 
-**🇬🇧 [English](#english) | 🇨🇳 [中文](#chinese)**
-
----
-
-_A zero-dependency, high-performance terminal coding assistant with cross-platform launchers. / 零依赖、高性能、跨平台启动器的终端编程助手。_
-
-</div>
-
----
-
-<a id="chinese"></a>
-
-# 🇨🇳 中文
-
-## 🚀 快速开始
-
-### 安装
+## 安装与启动
 
 ```bash
 git clone https://github.com/peps1666/pepsicode.git
 cd pepsicode
-
-# 交互式安装（推荐）
+python -m pip install -e ".[dev]"
 python -m pepsicode.main --install
 ```
 
-### 跨平台启动命令
-
-| 平台        | 安装后命令      | 直接运行命令                |
-| ----------- | --------------- | --------------------------- |
-| **Windows** | `pepsicode.bat` | `python -m pepsicode.main`  |
-| **macOS**   | `pepsicode-py`  | `python3 -m pepsicode.main` |
-| **Linux**   | `pepsicode-py`  | `python3 -m pepsicode.main` |
-
-### 配置 PATH
-
-<details>
-<summary><strong>💻 Windows 配置 PATH</strong></summary>
-
-1. 按 `Win+R` 输入 `sysdm.cpl`
-2. 高级 → 环境变量
-3. 在用户变量中找到 `Path`
-4. 添加：`%USERPROFILE%\.pepsi-code\bin`
-5. 重启终端后使用：`pepsicode.bat`
-</details>
-
-<details>
-<summary><strong>🍎 macOS 配置 PATH (zsh)</strong></summary>
+安装后可以直接运行：
 
 ```bash
-# 快速添加（macOS 默认 zsh）
-echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc
-source ~/.zshrc
-
-# 启动命令
-pepsicode-py
+pepsicode
 ```
 
-</details>
-
-<details>
-<summary><strong>🐧 Linux 配置 PATH (bash)</strong></summary>
+也可以不安装命令入口：
 
 ```bash
-# 快速添加
-echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc
-source ~/.bashrc
-
-# 启动命令
-pepsicode-py
+python -m pepsicode.main
 ```
 
-</details>
+使用 mock 模型启动：
 
----
+```powershell
+$env:PEPSI_CODE_MODEL_MODE = "mock"
+python -m pepsicode.main
+```
 
-## ⚡ 性能亮点
+```bash
+PEPSI_CODE_MODEL_MODE=mock python -m pepsicode.main
+```
 
-经过 **8 轮系统化优化**（93+ 优化点），在关键性能指标上达到**生产级优秀水平**：
+## 模型配置
 
-| 性能指标             | 优化前     | 优化后          | **提升**       |
-| -------------------- | ---------- | --------------- | -------------- |
-| **Token 估算速度**   | 35 ops/sec | 479,326 ops/sec | **🚀 13,695x** |
-| **CPU 空闲使用率**   | 5%         | 2%              | **⬇️ 60%**     |
-| **文件读取（缓存）** | 196ms/1000 | 107ms/1000      | **⬆️ 1.8x**    |
-| **GC 压力**          | 高         | 低              | **⬇️ 30-50%**  |
-| **代码可读性**       | 3/10       | 9/10            | **⬆️ 200%**    |
-| **测试通过率**       | -          | **98.9%**       | ✅ 生产级      |
-
----
-
-## 🎆 核心特性
-
-- **🖼️ 丰富的终端 UI** — 备用屏幕 TUI，面板、ANSI 样式、平滑滚动
-- **🧠 智能代理循环** — 多轮工具使用，自动规划、执行、迭代
-- **🔨 30+ 内置工具** — 文件 I/O、代码搜索、Shell、Git、测试等
-- **🔐 权限系统** — 审批、拒绝、自动允许工具调用
-- **💑 会话持久化** — 保存并恢复对话，30 秒自动保存
-- **📚 三级记忆** — 对话 → 会话 → 长期记忆
-- **🔲 MCP 集成** — 连接外部模型上下文协议服务器
-- **⌨️ 斜杠命令** — `/help`、`/tools`、`/cost`、`/config`、`/context`、`/memory`
-
----
-
-## 🔨 内置工具
-
-### 文件操作
-
-| 工具                       | 说明                   |
-| -------------------------- | ---------------------- |
-| `list_files`               | 列出目录内容           |
-| `grep_files`               | 跨文件正则搜索         |
-| `read_file`                | 读取文件（支持行范围） |
-| `write_file`               | 创建或覆盖文件         |
-| `edit_file` / `patch_file` | 文件编辑               |
-
-### 代码智能
-
-| 工具              | 说明         |
-| ----------------- | ------------ |
-| `find_symbols`    | AST 符号搜索 |
-| `find_references` | 查找符号引用 |
-| `code_review`     | 代码质量分析 |
-
-### 执行与测试
-
-| 工具          | 说明            |
-| ------------- | --------------- |
-| `run_command` | 执行 Shell 命令 |
-| `test_runner` | 测试发现和执行  |
-
-### DevOps
-
-| 工具            | 说明              |
-| --------------- | ----------------- |
-| `git`           | Git 工作流        |
-| `worktree`      | Git Worktree 隔离环境 |
-| `docker_helper` | Docker 管理       |
-| `db_explorer`   | SQLite 数据库探索 |
-
-_完整工具列表见[英文版文档](#built-in-tools)_
-
----
-
-## ⚙️ 配置
-
-### 设置文件
-
-`~/.pepsi-code/settings.json`：
+用户配置文件位于 `~/.pepsi-code/settings.json`：
 
 ```json
 {
-  "model": "deepseek-v4-flash",
+  "model": "your-model-name",
   "env": {
-    "ANTHROPIC_BASE_URL": "https://api.deepseek.com/anthropic",
-    "ANTHROPIC_API_KEY": "your-deepseek-key"
+    "ANTHROPIC_BASE_URL": "https://your-provider.example/anthropic",
+    "ANTHROPIC_API_KEY": "your-api-key"
   }
 }
 ```
 
----
+也可使用环境变量：
 
-## 🐍 开发
+| 变量 | 说明 |
+| --- | --- |
+| `ANTHROPIC_MODEL` | 模型名称 |
+| `ANTHROPIC_API_KEY` | API Key |
+| `ANTHROPIC_AUTH_TOKEN` | 可替代 API Key 的认证令牌 |
+| `ANTHROPIC_BASE_URL` | Anthropic 兼容接口地址 |
+| `PEPSI_CODE_MODEL_MODE=mock` | 使用 mock 模型 |
+| `PEPSI_CODE_HOOKS=0` | 完全关闭 Hooks v2，不加载配置也不提示信任 |
 
-```bash
-# 克隆仓库
-git clone https://github.com/peps1666/pepsicode.git
-cd pepsicode
-
-# 运行测试
-pip install -e ".[dev]"
-pytest
-
-# Mock 模式（无需 API 密钥）
-PEPSI_CODE_MODEL_MODE=mock python -m pepsicode.main
-```
-
----
-
-## 📊 项目统计
-
-| 指标          | 值        |
-| ------------- | --------- |
-| Python 文件数 | 69        |
-| 代码行数      | ~15,000   |
-| 内置工具      | 30+       |
-| 外部依赖      | **0**     |
-| 优化点        | **93+**   |
-| 测试通过率    | **98.9%** |
-| 代码可读性    | **9/10**  |
-
----
-
-<a id="english"></a>
-
-# 🇬🇧 ENGLISH
-
-## ⚡ Performance Highlights
-
-After **8 rounds of systematic optimization** (93+ optimizations), pepsicode Python achieves **production-grade performance**:
-
-| Metric                 | Before     | After           | **Improvement**     |
-| ---------------------- | ---------- | --------------- | ------------------- |
-| **Token Estimation**   | 35 ops/sec | 479,326 ops/sec | **🚀 13,695x**      |
-| **CPU Idle Usage**     | 5%         | 2%              | **⬇️ 60%**          |
-| **File Read (Cached)** | 196ms/1000 | 107ms/1000      | **⬆️ 1.8x**         |
-| **GC Pressure**        | High       | Low             | **⬇️ 30-50%**       |
-| **Code Readability**   | 3/10       | 9/10            | **⬆️ 200%**         |
-| **Test Pass Rate**     | -          | **98.9%**       | ✅ Production-ready |
-
----
-
-## 🚀 Quick Start
-
-### Installation
+使用下面的命令检查配置：
 
 ```bash
-git clone https://github.com/peps1666/pepsicode.git
-cd pepsicode
-
-# Interactive installer (recommended)
-python -m pepsicode.main --install
+python -m pepsicode.main --validate-config
 ```
 
-### Cross-Platform Launch Commands
+## 常用命令
 
-| Platform    | After Install   | Direct Run                  |
-| ----------- | --------------- | --------------------------- |
-| **Windows** | `pepsicode.bat` | `python -m pepsicode.main`  |
-| **macOS**   | `pepsicode-py`  | `python3 -m pepsicode.main` |
-| **Linux**   | `pepsicode-py`  | `python3 -m pepsicode.main` |
+| 命令 | 用途 |
+| --- | --- |
+| `/help` | 查看命令帮助 |
+| `/tools` | 列出工具 |
+| `/skills` | 列出 Skills |
+| `/mcp` | 查看 MCP 状态 |
+| `/plan [task]` | 进入只读 Plan 模式 |
+| `/hooks` | 查看 Hooks v2 状态 |
+| `/context` | 查看上下文占用 |
+| `/cost` | 查看模型调用成本 |
+| `/tasks` | 查看后台任务 |
+| `/resume [id]` | 恢复会话 |
+| `/worktree` | 管理 Git worktree |
+| `/exit` | 退出并保存会话 |
 
-### Configure PATH
+## Plan 模式
 
-<details>
-<summary><strong>💻 Windows PATH Setup</strong></summary>
+输入 `/plan` 或 `/plan <任务>` 后，pepsicode 进入只读规划状态：
 
-1. Press `Win+R`, type `sysdm.cpl`
-2. Advanced → Environment Variables
-3. Find `Path` in User Variables
-4. Add: `%USERPROFILE%\.pepsi-code\bin`
-5. Restart terminal, then use: `pepsicode.bat`
-</details>
+- 只允许只读工具、`ask_user`、`exit_plan_mode` 以及 explore/plan 子代理。
+- 仅当前 `.pepsi-code/plans/` 中的计划文件允许写入。
+- 模型调研并写出计划，用户批准后才退出 Plan 模式。
+- Hooks v2 的 `command` 动作无条件禁用。
+- `/hooks trust` 等会写入持久状态的入口也会被拒绝。
 
-<details>
-<summary><strong>🍎 macOS PATH Setup (zsh)</strong></summary>
+这意味着 Hook 可以为规划补充提醒或模型上下文，但不能借 Hook 运行命令绕过 Plan 边界。
 
-```bash
-# Quick setup (macOS default zsh)
-echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc
-source ~/.zshrc
+## Hooks v2
 
-# Launch command
-pepsicode-py
-```
+### 配置层级
 
-</details>
+按以下顺序加载，同 ID 的可信后层配置覆盖前层配置：
 
-<details>
-<summary><strong>🐧 Linux PATH Setup (bash)</strong></summary>
+1. `~/.pepsi-code/hooks.json`：用户级，自动视为可信。
+2. `<workspace>/.pepsi-code/hooks.json`：项目级，适合提交到仓库。
+3. `<workspace>/.pepsi-code/hooks.local.json`：本机覆盖，默认已加入 `.gitignore`。
 
-```bash
-# Quick setup
-echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc
-source ~/.bashrc
+项目级和本机 Hook 默认不执行。首次发现时，交互模式会提供“信任当前版本”“仅本次信任”“保持禁用”三个选择；非交互模式保持禁用。永久信任记录绑定到路径和文件内容 SHA-256 指纹，配置一旦变化就必须重新确认。
 
-# Launch command
-pepsicode-py
-```
-
-</details>
-
----
-
-## 🎆 Core Features
-
-- **🖼️ Rich Terminal UI** — Alternate-screen TUI with panels, ANSI styling, smooth scrolling
-- **🧠 Intelligent Agent Loop** — Multi-turn tool use, auto-plan/execute/iterate
-- **🔨 30+ Built-in Tools** — File I/O, code search, shell, git, testing, and more
-- **🔐 Permission System** — Approve, deny, auto-allow tool calls
-- **💑 Session Persistence** — Save & resume conversations, 30s autosave
-- **📚 3-Tier Memory** — Conversation → Session → Long-term memory
-- **🔲 MCP Integration** — Connect external Model Context Protocol servers
-- **⌨️ Slash Commands** — `/help`, `/tools`, `/cost`, `/config`, `/context`, `/memory`, `/worktree`
-
----
-
-## 🔨 Built-in Tools
-
-### File Operations
-
-| Tool                       | Description                       |
-| -------------------------- | --------------------------------- |
-| `list_files`               | List directory contents with glob |
-| `grep_files`               | Regex search across files         |
-| `read_file`                | Read file with line ranges        |
-| `write_file`               | Create or overwrite files         |
-| `edit_file` / `patch_file` | Structured editing and patching   |
-
-### Code Intelligence
-
-| Tool              | Description                                  |
-| ----------------- | -------------------------------------------- |
-| `find_symbols`    | AST-based symbol search (functions, classes) |
-| `find_references` | Find all references to a symbol              |
-| `code_review`     | Automated code quality analysis              |
-
-### Execution & Testing
-
-| Tool          | Description                         |
-| ------------- | ----------------------------------- |
-| `run_command` | Execute shell commands with timeout |
-| `test_runner` | Smart test discovery and execution  |
-| `api_tester`  | HTTP API endpoint testing           |
-
-### Web & Search
-
-| Tool         | Description                        |
-| ------------ | ---------------------------------- |
-| `web_fetch`  | Fetch and extract web page content |
-| `web_search` | Web search via API                 |
-
-### DevOps
-
-| Tool            | Description                              |
-| --------------- | ---------------------------------------- |
-| `git`           | Git workflow (status, diff, log, commit) |
-| `docker_helper` | Docker & Docker Compose management       |
-| `db_explorer`   | SQLite database exploration & queries    |
-
-### Visualization & Misc
-
-| Tool            | Description                   |
-| --------------- | ----------------------------- |
-| `file_tree`     | Visual directory tree         |
-| `diff_viewer`   | Rich diff visualization       |
-| `notebook_edit` | Jupyter notebook editing      |
-| `todo_write`    | Task list management          |
-| `ask_user`      | Prompt user for clarification |
-| `load_skill`    | Load domain-specific skills   |
-
----
-
-## ⚙️ Configuration
-
-### Settings File
-
-`~/.pepsi-code/settings.json`:
+### 最小配置
 
 ```json
 {
-  "model": "deepseek-v4-flash",
-  "env": {
-    "ANTHROPIC_BASE_URL": "https://api.deepseek.com/anthropic",
-    "ANTHROPIC_API_KEY": "your-deepseek-key"
+  "version": 1,
+  "hooks": [
+    {
+      "id": "protect-secrets",
+      "event": "pre_tool_use",
+      "priority": 10,
+      "when": {
+        "tool": ["write_file", "edit_file", "patch_file"],
+        "args.path": {"regex": "(^|[/\\\\])\\.env($|[/\\\\])"}
+      },
+      "action": {
+        "type": "deny",
+        "message": "拒绝修改受保护的环境配置：{path}"
+      }
+    },
+    {
+      "id": "review-after-tests",
+      "event": "post_tool_use",
+      "when": {
+        "tool": "run_command",
+        "args.command": {"contains": "pytest"}
+      },
+      "action": {
+        "type": "context",
+        "message": "测试命令已结束。检查失败原因和回归风险后再继续。"
+      }
+    },
+    {
+      "id": "notify-session-save",
+      "event": "session_save",
+      "action": {
+        "type": "notify",
+        "message": "会话 {session_id} 已保存"
+      }
+    }
+  ]
+}
+```
+
+配置根节点也可直接写成 Hook 数组。设置 `"strict": true` 后，只要同一文件存在一条无效配置，整份文件都不会加载。
+
+### 支持的事件
+
+| 事件 | 触发时机 |
+| --- | --- |
+| `pre_tool_use` | 工具校验后、权限检查和实际执行前 |
+| `post_tool_use` | 工具执行完成后 |
+| `agent_start` / `agent_stop` | 主代理回合开始和结束 |
+| `subagent_start` / `subagent_stop` | 子代理开始和结束 |
+| `user_input` | 收到用户输入 |
+| `assistant_output` | 代理产出最终回复 |
+| `context_compact` | 自动或溢出恢复压缩完成 |
+| `session_save` / `session_resume` | 会话保存和恢复 |
+| `startup` / `shutdown` | 应用启动和关闭 |
+| `error` | 工具或模型流程发生错误 |
+
+### 动作
+
+`deny`
+
+- 仅允许用于 `pre_tool_use`。
+- 在权限检查和工具执行前同步阻断，并向模型返回明确错误。
+
+`notify`
+
+- 向 CLI/TTY 输出通知，不修改模型上下文。
+
+`context`
+
+- 将受长度限制的 `<hook-context>` 块加入下一次模型调用。
+- 注入内容不会追加到会话消息，因此不会在多轮中重复积累。
+
+`command`
+
+- 使用 argv 数组，不通过字符串 shell 拼接。
+- 复用 `run_command` 的目录边界、命令分类和权限审批。
+- 不能用于 `pre_tool_use`，Plan 模式中始终禁用。
+- 支持 `timeoutSeconds`、`background` 和 `exposeOutputToModel`。
+- 大输出会写入 `.pepsi-code/tool-results/`，模型和 UI 只接收有界预览。
+
+示例：
+
+```json
+{
+  "id": "format-after-write",
+  "event": "post_tool_use",
+  "scope": ["main"],
+  "when": {
+    "tool": ["write_file", "edit_file", "patch_file"],
+    "args.path": {"glob": "*.py"}
+  },
+  "action": {
+    "type": "command",
+    "argv": ["python", "-m", "ruff", "format", "{path}"],
+    "timeoutSeconds": 30,
+    "exposeOutputToModel": true
   }
 }
 ```
 
-### Environment Variables
+命令是否获准仍由当前 PermissionManager 决定。Hook 配置本身不能声明“免审批”。
 
-| Variable                | Description                       | Default                     |
-| ----------------------- | --------------------------------- | --------------------------- |
-| `ANTHROPIC_API_KEY`     | Provider API key                  | —                           |
-| `ANTHROPIC_AUTH_TOKEN`  | Auth token (alternative)          | —                           |
-| `ANTHROPIC_BASE_URL`    | Anthropic-compatible API base URL | `https://api.anthropic.com` |
-| `ANTHROPIC_MODEL`       | Model name                        | —                           |
-| `PEPSI_CODE_MODEL_MODE` | Set to `mock` for testing         | —                           |
+### 条件与模板
 
----
+`when` 支持以下结构化操作符：
 
-## 📖 Usage
+- 直接值：`eq`
+- 数组：`in`
+- `{ "contains": "..." }`
+- `{ "glob": "..." }`
+- `{ "regex": "..." }`
 
-### Slash Commands
+常用字段包括 `event`、`tool`、`path`、`args.<name>`、`result.<name>`、`permission_mode`、`agent_scope` 和错误字段。正则表达式和参与匹配的值都有长度限制，避免配置造成无界处理。
 
-| Command    | Description                    |
-| ---------- | ------------------------------ |
-| `/help`    | Show available commands        |
-| `/tools`   | List all tools                 |
-| `/cost`    | Show session cost              |
-| `/config`  | Show configuration diagnostics |
-| `/context` | Show context window usage      |
-| `/memory`  | Show memory system status      |
-| `/exit`    | Exit pepsicode                 |
+消息与 argv 支持 `{event}`、`{tool}`、`{path}`、`{cwd}`、`{permission_mode}`、`{agent_scope}`、`{error}` 和 `{args.<name>}` 替换。
 
-### Keyboard Shortcuts
+### Scope、顺序与一次性执行
 
-| Key               | Action            |
-| ----------------- | ----------------- |
-| `Enter`           | Submit input      |
-| `Up/Down`         | Input history     |
-| `PageUp/PageDown` | Scroll transcript |
-| `Ctrl+C`          | Cancel operation  |
-| `Ctrl+U`          | Clear input line  |
+- `scope` 可为 `main`、`subagent` 或两者数组，默认两者都执行。
+- `priority` 越小越先执行，默认 `100`。
+- `once: true` 在单进程中最多执行一次；并行工具调用下也使用原子 claim。
+- `background: true` 只适用于非前置动作，后台任务由受管线程池执行。
+- Hook 失败不会让代理循环崩溃；`onError` 可设为 `ignore`、`warn`，前置 Hook 还可用 `deny`。
 
----
+### 管理命令
 
-## 🐍 Development
-
-```bash
-# Clone
-git clone https://github.com/peps1666/pepsicode.git
-cd pepsicode
-
-# Run tests
-pip install -e ".[dev]"
-pytest
-
-# Mock mode (no API key needed)
-PEPSI_CODE_MODEL_MODE=mock python -m pepsicode.main
+```text
+/hooks
+/hooks list
+/hooks errors
+/hooks reload
+/hooks trust
+/hooks enable <id>
+/hooks disable <id>
 ```
 
-### Project Stats
+`/hooks enable` 和 `/hooks disable` 只影响当前进程。`/hooks trust` 会为当前项目 Hook 文件保存内容指纹，并重新加载配置。
 
-| Metric                | Value     |
-| --------------------- | --------- |
-| Python files          | 69        |
-| Lines of code         | ~15,000   |
-| Built-in tools        | 30+       |
-| External dependencies | **0**     |
-| Optimizations         | **93+**   |
-| Test pass rate        | **98.9%** |
-| Code readability      | **9/10**  |
+### Python 兼容 API
 
----
+旧版程序化事件 API 保持可用：
 
-## 🙏 Acknowledgments
+```python
+from pepsicode.hooks import HookEvent, register_hook
 
-- **[@LiuMengxuan04](https://github.com/LiuMengxuan04)** — Creator of [MiniCode](https://github.com/LiuMengxuan04/MiniCode) — foundational
-- **[@he-yufeng](https://github.com/he-yufeng)** — Creator of [CoreCoder](https://github.com/he-yufeng/CoreCoder) — core inspirationarchitecture reference
-- **[Claude Code](https://docs.anthropic.com/en/docs/claude-code)** — Design inspiration
-- **All Contributors** — Everyone who contributed to pepsicode
+unregister = register_hook(
+    HookEvent.POST_TOOL_USE,
+    lambda context: print(context.tool_name),
+    "audit tool usage",
+)
+```
 
----
+`HookManager`、`register_hook`、`fire_hook`、`fire_hook_sync`、`create_logging_hook` 和 `create_script_hook` 均保留。配置驱动的新 Hook 建议优先使用 `hooks.json`，因为它具备验证、信任和权限治理。
 
-## 📝 License
+## 上下文管理
 
-MIT — see [LICENSE](LICENSE) for details.
+pepsicode 使用分层上下文控制：
 
----
+1. 对较旧的大型工具结果保留头尾并截断中间部分。
+2. 大工具输出持久化为上下文 artifact，只把有界预览传给模型。
+3. 接近模型上下文上限时自动压缩旧消息。
+4. API 返回上下文溢出时强制压缩并有限重试，压缩无进展时触发断路保护。
 
-<div align="center">
+Hooks v2 的 `context` 动作沿用同样的有界原则：单条和单批注入都有上限，且只存活到下一次模型调用。
 
-**🇨🇳 由 [@peps1666](https://github.com/peps1666) 用 ❤️ 制作** | **🇬🇧 Made with ❤️ by [@peps1666](https://github.com/peps1666)**
+## 开发与验证
 
-_轻量级终端 AI 编程助手 / Lightweight Terminal AI Coding Assistant_
+```bash
+python -m ruff check pepsicode tests
+python -m pytest -q
+```
 
-[⬆ Back to Top](#top)
+Hooks v2 专项测试：
 
-</div>
+```bash
+python -m pytest -q tests/test_hooks_v2.py
+```
+
+主要目录：
+
+```text
+pepsicode/
+  agent_loop.py          主代理同步/流式循环
+  permissions.py         权限与 Plan 模式边界
+  context_manager.py     上下文压缩与恢复
+  hooks/                 Hooks v2 模型、加载、信任、引擎与运行时接线
+  tools/                 内置工具
+  agents/                子代理定义与追踪
+  tui/                   终端界面
+tests/
+```
+
+## 安全说明
+
+- 请在提交项目 Hook 前进行代码审查；项目 Hook 的信任是安全边界，不是形式提示。
+- 不要把密钥写入 `hooks.json`、README 或仓库。
+- `command` Hook 不会绕过命令权限，也不会在 Plan 模式执行。
+- 后台 Hook 任务在进程关闭时会等待有限时间，未完成任务会被取消。
+- `.pepsi-code/hooks.local.json` 适合本机差异，不应提交。
+
+## License
+
+MIT，见 [LICENSE](LICENSE)。

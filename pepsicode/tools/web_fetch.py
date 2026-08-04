@@ -4,6 +4,7 @@ import urllib.error
 import urllib.request
 
 from pepsicode.tooling import ToolDefinition, ToolResult
+from pepsicode.version import VERSION
 
 MAX_CONTENT_LENGTH = 50000
 MAX_REDIRECTS = 5  # Limit redirect count to prevent SSRF
@@ -55,7 +56,7 @@ def _run(input_data: dict, context) -> ToolResult:
         req = urllib.request.Request(
             url,
             headers={
-                "User-Agent": "pepsicode/0.5.0 (Terminal Coding Assistant)",
+                "User-Agent": f"pepsicode/{VERSION} (Terminal Coding Assistant)",
                 "Accept": "text/html,application/xhtml+xml,text/plain;q=0.9,*/*;q=0.8",
             },
         )

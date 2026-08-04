@@ -2,12 +2,14 @@ from __future__ import annotations
 
 from collections.abc import Callable, Generator, Sequence
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import replace
 from typing import Any, cast
 
 from pepsicode.anthropic_adapter import ContextOverflowError
 from pepsicode.context_artifacts import ContextArtifactStore, prepare_tool_result
 from pepsicode.context_manager import ContextManager
 from pepsicode.cost_tracker import BudgetExceededError, CostTracker
+from pepsicode.hooks import HookContext, HookEngine, HookEvent
 from pepsicode.logging_config import get_logger
 from pepsicode.permissions import PermissionManager
 from pepsicode.tooling import ToolContext, ToolRegistry, ToolResult
@@ -188,6 +190,93 @@ def _check_budget(cost_tracker: CostTracker | None, cost_limit_usd: float | None
         raise BudgetExceededError(limit=cost_limit_usd, spent=cost_tracker.total_cost_usd)
 
 
+def _hook_metadata(permissions: PermissionManager | None, agent_scope: str, **extra: Any) -> dict[str, Any]:
+    mode = getattr(permissions, "mode", "default")
+    return {
+        "permission_mode": getattr(mode, "value", str(mode)),
+        "agent_scope": agent_scope,
+        **extra,
+    }
+
+
+def _emit_hook(
+    hook_engine: HookEngine | None,
+    event: HookEvent,
+    *,
+    cwd: str,
+    permissions: PermissionManager | None,
+    agent_scope: str,
+    data: dict[str, Any] | None = None,
+) -> None:
+    if hook_engine is None:
+        return
+    try:
+        hook_engine.emit(
+            event,
+            HookContext(
+                event=event,
+                cwd=cwd,
+                data=data or {},
+                metadata=_hook_metadata(permissions, agent_scope),
+            ),
+        )
+    except Exception as error:  # noqa: BLE001 - hooks must never break the agent loop
+        logger.warning("Hook event %s failed: %s", event.value, error)
+
+
+def _messages_for_model(messages: list[ChatMessage], hook_engine: HookEngine | None) -> list[ChatMessage]:
+    if hook_engine is None:
+        return messages
+    hook_context = hook_engine.drain_context_messages()
+    if not hook_context:
+        return messages
+    return [*messages, cast(ChatMessage, {"role": "system", "content": "\n\n".join(hook_context)})]
+
+
+def _finish_hook_turn(
+    messages: list[ChatMessage],
+    hook_engine: HookEngine | None,
+    *,
+    cwd: str,
+    permissions: PermissionManager | None,
+    agent_scope: str,
+    status: str = "completed",
+    error: str = "",
+) -> list[ChatMessage]:
+    assistant_output = next(
+        (str(message.get("content", "")) for message in reversed(messages) if message.get("role") == "assistant"),
+        "",
+    )
+    if error:
+        _emit_hook(
+            hook_engine,
+            HookEvent.ERROR,
+            cwd=cwd,
+            permissions=permissions,
+            agent_scope=agent_scope,
+            data={"error": error, "status": status},
+        )
+    if assistant_output:
+        _emit_hook(
+            hook_engine,
+            HookEvent.ASSISTANT_OUTPUT,
+            cwd=cwd,
+            permissions=permissions,
+            agent_scope=agent_scope,
+            data={"assistant_output": assistant_output, "status": status},
+        )
+    stop_event = HookEvent.SUBAGENT_STOP if agent_scope.startswith("subagent") else HookEvent.AGENT_STOP
+    _emit_hook(
+        hook_engine,
+        stop_event,
+        cwd=cwd,
+        permissions=permissions,
+        agent_scope=agent_scope,
+        data={"status": status, "error": error, "message_count": len(messages)},
+    )
+    return messages
+
+
 def _execute_calls_in_order(
     calls: Sequence[dict[str, Any]],
     tools: ToolRegistry,
@@ -226,7 +315,13 @@ def _execute_calls_in_order(
                     on_tool_start(calls[k]["toolName"], calls[k]["input"])
             with ThreadPoolExecutor(max_workers=min(MAX_PARALLEL_TOOLS, len(run))) as pool:
                 future_by_index = {
-                    k: pool.submit(tools.execute, calls[k]["toolName"], calls[k]["input"], context) for k in run
+                    k: pool.submit(
+                        tools.execute,
+                        calls[k]["toolName"],
+                        calls[k]["input"],
+                        replace(context, tool_use_id=str(calls[k].get("id", "")), call_index=k),
+                    )
+                    for k in run
                 }
                 for k in run:
                     results[k] = future_by_index[k].result()
@@ -237,7 +332,11 @@ def _execute_calls_in_order(
             k = index
             if on_tool_start:
                 on_tool_start(calls[k]["toolName"], calls[k]["input"])
-            results[k] = tools.execute(calls[k]["toolName"], calls[k]["input"], context)
+            results[k] = tools.execute(
+                calls[k]["toolName"],
+                calls[k]["input"],
+                replace(context, tool_use_id=str(calls[k].get("id", "")), call_index=k),
+            )
             if on_tool_result:
                 on_tool_result(calls[k]["toolName"], results[k].output, not results[k].ok)
             index += 1
@@ -260,6 +359,8 @@ def run_agent_turn(
     cost_tracker: CostTracker | None = None,
     cost_limit_usd: float | None = None,
     on_usage: Callable[[dict], None] | None = None,
+    hook_engine: HookEngine | None = None,
+    agent_scope: str = "main",
 ) -> list[ChatMessage]:
     current_messages = list(messages)
     saw_tool_result = False
@@ -269,6 +370,15 @@ def run_agent_turn(
     tool_error_count = 0
     step = 0
     artifact_store = ContextArtifactStore.for_workspace(cwd)
+    start_event = HookEvent.SUBAGENT_START if agent_scope.startswith("subagent") else HookEvent.AGENT_START
+    _emit_hook(
+        hook_engine,
+        start_event,
+        cwd=cwd,
+        permissions=permissions,
+        agent_scope=agent_scope,
+        data={"message_count": len(current_messages)},
+    )
 
     if context_manager:
         context_manager.update_runtime_state(cwd, permissions)
@@ -281,7 +391,16 @@ def run_agent_turn(
         # Auto-compact if usage is near the limit
         if context_manager.should_auto_compact():
             logger.warning("Context near limit, auto-compacting...")
+            previous_count = len(current_messages)
             current_messages = cast(list[ChatMessage], context_manager.compact_messages())
+            _emit_hook(
+                hook_engine,
+                HookEvent.CONTEXT_COMPACT,
+                cwd=cwd,
+                permissions=permissions,
+                agent_scope=agent_scope,
+                data={"reason": "automatic", "before": previous_count, "after": len(current_messages)},
+            )
             if on_assistant_message:
                 on_assistant_message(context_manager.get_context_summary())
 
@@ -294,7 +413,7 @@ def run_agent_turn(
         # model sees them.  Cheap and lossless for recent context.
         current_messages = _snip_tool_outputs(current_messages)
         try:
-            next_step = model.next(current_messages)
+            next_step = model.next(_messages_for_model(current_messages, hook_engine))
         except KeyboardInterrupt:
             raise  # Let Ctrl-C propagate
         except ContextOverflowError as error:
@@ -306,7 +425,16 @@ def run_agent_turn(
                     "Context overflow (%s); compacting and retrying (attempt %d)", error, overflow_retry_count
                 )
                 context_manager.messages = cast(list[dict[str, Any]], current_messages)
+                previous_count = len(current_messages)
                 current_messages = cast(list[ChatMessage], context_manager.compact_messages(force=True))
+                _emit_hook(
+                    hook_engine,
+                    HookEvent.CONTEXT_COMPACT,
+                    cwd=cwd,
+                    permissions=permissions,
+                    agent_scope=agent_scope,
+                    data={"reason": "overflow", "before": previous_count, "after": len(current_messages)},
+                )
                 if not context_manager.last_compaction_changed:
                     if overflow_retry_count == 1:
                         logger.warning("Compaction made no change; allowing one direct retry before circuit break")
@@ -318,7 +446,15 @@ def run_agent_turn(
                     if on_assistant_message:
                         on_assistant_message(fallback)
                     current_messages.append({"role": "assistant", "content": fallback})
-                    return current_messages
+                    return _finish_hook_turn(
+                        current_messages,
+                        hook_engine,
+                        cwd=cwd,
+                        permissions=permissions,
+                        agent_scope=agent_scope,
+                        status="error",
+                        error=fallback,
+                    )
                 if on_progress_message:
                     on_progress_message(context_manager.get_context_summary())
                 step -= 1  # don't consume a step on a pure retry
@@ -328,21 +464,45 @@ def run_agent_turn(
             if on_assistant_message:
                 on_assistant_message(fallback)
             current_messages.append({"role": "assistant", "content": fallback})
-            return current_messages
+            return _finish_hook_turn(
+                current_messages,
+                hook_engine,
+                cwd=cwd,
+                permissions=permissions,
+                agent_scope=agent_scope,
+                status="error",
+                error=fallback,
+            )
         except ConnectionError as error:
             fallback = f"Network error (connection failed or dropped): {error}"
             logger.error("Model API connection error: %s", error)
             if on_assistant_message:
                 on_assistant_message(fallback)
             current_messages.append({"role": "assistant", "content": fallback})
-            return current_messages
+            return _finish_hook_turn(
+                current_messages,
+                hook_engine,
+                cwd=cwd,
+                permissions=permissions,
+                agent_scope=agent_scope,
+                status="error",
+                error=fallback,
+            )
         except TimeoutError as error:
             fallback = f"Model API timeout: {error}"
             logger.error("Model API timeout: %s", error)
             if on_assistant_message:
                 on_assistant_message(fallback)
             current_messages.append({"role": "assistant", "content": fallback})
-            return current_messages
+            return _finish_hook_turn(
+                current_messages,
+                hook_engine,
+                cwd=cwd,
+                permissions=permissions,
+                agent_scope=agent_scope,
+                status="error",
+                error=fallback,
+            )
         except Exception as error:
             # Catch-all for unexpected errors (rate limit, auth, server 5xx, etc.)
             error_type = type(error).__name__
@@ -351,7 +511,15 @@ def run_agent_turn(
             if on_assistant_message:
                 on_assistant_message(fallback)
             current_messages.append({"role": "assistant", "content": fallback})
-            return current_messages
+            return _finish_hook_turn(
+                current_messages,
+                hook_engine,
+                cwd=cwd,
+                permissions=permissions,
+                agent_scope=agent_scope,
+                status="error",
+                error=fallback,
+            )
 
         # Record real token usage from the provider when available, so context
         # stats reflect what the model actually saw rather than an estimate.
@@ -455,7 +623,15 @@ def run_agent_turn(
                 if thinking_blocks:
                     current_messages.append({"role": "assistant_thinking", "blocks": thinking_blocks})
                 current_messages.append({"role": "assistant", "content": fallback})
-                return current_messages
+                return _finish_hook_turn(
+                    current_messages,
+                    hook_engine,
+                    cwd=cwd,
+                    permissions=permissions,
+                    agent_scope=agent_scope,
+                    status="error",
+                    error=fallback,
+                )
 
             # Preserve thinking blocks before final assistant response
             thinking_blocks = getattr(next_step, "thinkingBlocks", None)
@@ -464,7 +640,13 @@ def run_agent_turn(
             if on_assistant_message:
                 on_assistant_message(next_step.content)
             current_messages.append({"role": "assistant", "content": next_step.content})
-            return current_messages
+            return _finish_hook_turn(
+                current_messages,
+                hook_engine,
+                cwd=cwd,
+                permissions=permissions,
+                agent_scope=agent_scope,
+            )
 
         # Preserve thinking blocks before tool call messages (always, even without content)
         thinking_blocks = getattr(next_step, "thinkingBlocks", None)
@@ -490,7 +672,13 @@ def run_agent_turn(
                 current_messages.append({"role": role, "content": next_step.content})
 
         if not next_step.calls and next_step.content and next_step.contentKind != "progress":
-            return current_messages
+            return _finish_hook_turn(
+                current_messages,
+                hook_engine,
+                cwd=cwd,
+                permissions=permissions,
+                agent_scope=agent_scope,
+            )
 
         for call in next_step.calls:
             current_messages.append(
@@ -502,7 +690,12 @@ def run_agent_turn(
                 }
             )
 
-        context = ToolContext(cwd=cwd, permissions=permissions)
+        context = ToolContext(
+            cwd=cwd,
+            permissions=permissions,
+            hooks=hook_engine,
+            agent_scope=agent_scope,
+        )
         results = _execute_calls_in_order(
             cast(Sequence[dict[str, Any]], next_step.calls),
             tools,
@@ -546,13 +739,28 @@ def run_agent_turn(
             if on_assistant_message:
                 on_assistant_message(await_user_result.output)
             current_messages.append({"role": "assistant", "content": await_user_result.output})
-            return current_messages
+            return _finish_hook_turn(
+                current_messages,
+                hook_engine,
+                cwd=cwd,
+                permissions=permissions,
+                agent_scope=agent_scope,
+                status="awaiting_user",
+            )
 
     fallback = "Reached the maximum tool step limit for this turn."
     if on_assistant_message:
         on_assistant_message(fallback)
     current_messages.append({"role": "assistant", "content": fallback})
-    return current_messages
+    return _finish_hook_turn(
+        current_messages,
+        hook_engine,
+        cwd=cwd,
+        permissions=permissions,
+        agent_scope=agent_scope,
+        status="max_steps",
+        error=fallback,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -648,6 +856,8 @@ def run_agent_turn_stream(
     cost_tracker: CostTracker | None = None,
     cost_limit_usd: float | None = None,
     on_usage: Callable[[dict], None] | None = None,
+    hook_engine: HookEngine | None = None,
+    agent_scope: str = "main",
 ) -> list[ChatMessage]:
     """Run an agent turn with streaming token output.
 
@@ -666,6 +876,15 @@ def run_agent_turn_stream(
     tool_error_count = 0
     step = 0
     artifact_store = ContextArtifactStore.for_workspace(cwd)
+    start_event = HookEvent.SUBAGENT_START if agent_scope.startswith("subagent") else HookEvent.AGENT_START
+    _emit_hook(
+        hook_engine,
+        start_event,
+        cwd=cwd,
+        permissions=permissions,
+        agent_scope=agent_scope,
+        data={"message_count": len(current_messages)},
+    )
 
     if context_manager:
         context_manager.update_runtime_state(cwd, permissions)
@@ -679,7 +898,16 @@ def run_agent_turn_stream(
         )
         if context_manager.should_auto_compact():
             logger.warning("Context near limit, auto-compacting...")
+            previous_count = len(current_messages)
             current_messages = cast(list[ChatMessage], context_manager.compact_messages())
+            _emit_hook(
+                hook_engine,
+                HookEvent.CONTEXT_COMPACT,
+                cwd=cwd,
+                permissions=permissions,
+                agent_scope=agent_scope,
+                data={"reason": "automatic", "before": previous_count, "after": len(current_messages)},
+            )
             if on_assistant_message:
                 on_assistant_message(context_manager.get_context_summary())
 
@@ -696,14 +924,14 @@ def run_agent_turn_stream(
             # For the first step we use next_stream(); retries of the same step
             # fall back to the non-streaming path so error handling stays simple.
             if step == 1 or True:  # always stream for now
-                token_stream = model.next_stream(current_messages)
+                token_stream = model.next_stream(_messages_for_model(current_messages, hook_engine))
                 text_content, parsed_calls = _accumulate_stream_tokens(
                     token_stream,
                     on_token=on_token,
                 )
             else:
                 # Fallback non-stream (kept as reference; can be removed later)
-                next_step = model.next(current_messages)
+                next_step = model.next(_messages_for_model(current_messages, hook_engine))
                 text_content = next_step.content
                 parsed_calls = (
                     [{"id": c["id"], "toolName": c["toolName"], "input": c.get("input")} for c in next_step.calls]
@@ -722,7 +950,16 @@ def run_agent_turn_stream(
                     overflow_retry_count,
                 )
                 context_manager.messages = cast(list[dict[str, Any]], current_messages)
+                previous_count = len(current_messages)
                 current_messages = cast(list[ChatMessage], context_manager.compact_messages(force=True))
+                _emit_hook(
+                    hook_engine,
+                    HookEvent.CONTEXT_COMPACT,
+                    cwd=cwd,
+                    permissions=permissions,
+                    agent_scope=agent_scope,
+                    data={"reason": "overflow", "before": previous_count, "after": len(current_messages)},
+                )
                 if not context_manager.last_compaction_changed:
                     if overflow_retry_count == 1:
                         logger.warning("Compaction made no change; allowing one direct retry before circuit break")
@@ -734,7 +971,15 @@ def run_agent_turn_stream(
                     if on_assistant_message:
                         on_assistant_message(fallback)
                     current_messages.append({"role": "assistant", "content": fallback})
-                    return current_messages
+                    return _finish_hook_turn(
+                        current_messages,
+                        hook_engine,
+                        cwd=cwd,
+                        permissions=permissions,
+                        agent_scope=agent_scope,
+                        status="error",
+                        error=fallback,
+                    )
                 if on_progress_message:
                     on_progress_message(context_manager.get_context_summary())
                 step -= 1
@@ -744,7 +989,15 @@ def run_agent_turn_stream(
             if on_assistant_message:
                 on_assistant_message(fallback)
             current_messages.append({"role": "assistant", "content": fallback})
-            return current_messages
+            return _finish_hook_turn(
+                current_messages,
+                hook_engine,
+                cwd=cwd,
+                permissions=permissions,
+                agent_scope=agent_scope,
+                status="error",
+                error=fallback,
+            )
 
         except ConnectionError as error:
             fallback = f"Network error (connection failed or dropped): {error}"
@@ -752,7 +1005,15 @@ def run_agent_turn_stream(
             if on_assistant_message:
                 on_assistant_message(fallback)
             current_messages.append({"role": "assistant", "content": fallback})
-            return current_messages
+            return _finish_hook_turn(
+                current_messages,
+                hook_engine,
+                cwd=cwd,
+                permissions=permissions,
+                agent_scope=agent_scope,
+                status="error",
+                error=fallback,
+            )
 
         except TimeoutError as error:
             fallback = f"Model API timeout: {error}"
@@ -760,7 +1021,15 @@ def run_agent_turn_stream(
             if on_assistant_message:
                 on_assistant_message(fallback)
             current_messages.append({"role": "assistant", "content": fallback})
-            return current_messages
+            return _finish_hook_turn(
+                current_messages,
+                hook_engine,
+                cwd=cwd,
+                permissions=permissions,
+                agent_scope=agent_scope,
+                status="error",
+                error=fallback,
+            )
 
         except Exception as error:
             error_type = type(error).__name__
@@ -769,7 +1038,15 @@ def run_agent_turn_stream(
             if on_assistant_message:
                 on_assistant_message(fallback)
             current_messages.append({"role": "assistant", "content": fallback})
-            return current_messages
+            return _finish_hook_turn(
+                current_messages,
+                hook_engine,
+                cwd=cwd,
+                permissions=permissions,
+                agent_scope=agent_scope,
+                status="error",
+                error=fallback,
+            )
 
         # ------ Record token usage ------
         if context_manager is not None:
@@ -800,7 +1077,15 @@ def run_agent_turn_stream(
             if on_assistant_message:
                 on_assistant_message(fallback)
             current_messages.append({"role": "assistant", "content": fallback})
-            return current_messages
+            return _finish_hook_turn(
+                current_messages,
+                hook_engine,
+                cwd=cwd,
+                permissions=permissions,
+                agent_scope=agent_scope,
+                status="error",
+                error=fallback,
+            )
 
         # ------ Handle tool calls ------
         if parsed_calls:
@@ -821,7 +1106,12 @@ def run_agent_turn_stream(
                     }
                 )
 
-            context = ToolContext(cwd=cwd, permissions=permissions)
+            context = ToolContext(
+                cwd=cwd,
+                permissions=permissions,
+                hooks=hook_engine,
+                agent_scope=agent_scope,
+            )
             results = _execute_calls_in_order(
                 cast(Sequence[dict[str, Any]], parsed_calls),
                 tools,
@@ -865,7 +1155,14 @@ def run_agent_turn_stream(
                 if on_assistant_message:
                     on_assistant_message(await_user_result.output)
                 current_messages.append({"role": "assistant", "content": await_user_result.output})
-                return current_messages
+                return _finish_hook_turn(
+                    current_messages,
+                    hook_engine,
+                    cwd=cwd,
+                    permissions=permissions,
+                    agent_scope=agent_scope,
+                    status="awaiting_user",
+                )
 
             # Continue to the next agent step after tool execution.
             continue
@@ -874,10 +1171,24 @@ def run_agent_turn_stream(
         if on_assistant_message:
             on_assistant_message(text_content)
         current_messages.append({"role": "assistant", "content": text_content})
-        return current_messages
+        return _finish_hook_turn(
+            current_messages,
+            hook_engine,
+            cwd=cwd,
+            permissions=permissions,
+            agent_scope=agent_scope,
+        )
 
     fallback = "Reached the maximum tool step limit for this turn."
     if on_assistant_message:
         on_assistant_message(fallback)
     current_messages.append({"role": "assistant", "content": fallback})
-    return current_messages
+    return _finish_hook_turn(
+        current_messages,
+        hook_engine,
+        cwd=cwd,
+        permissions=permissions,
+        agent_scope=agent_scope,
+        status="max_steps",
+        error=fallback,
+    )

@@ -10,6 +10,7 @@ from pepsicode.config import (
     load_runtime_config,
     save_mini_code_settings,
 )
+from pepsicode.hooks.loader import LOCAL_HOOKS_FILE, PROJECT_HOOKS_FILE, USER_HOOKS_PATH
 
 
 @dataclass(frozen=True, slots=True)
@@ -32,6 +33,7 @@ SLASH_COMMANDS = [
     SlashCommand("/transcript-save", "/transcript-save <path>", "Save transcript to a text file.", "Session"),
     # Tools
     SlashCommand("/tools", "/tools", "List tools available to the coding agent.", "Tools"),
+    SlashCommand("/hooks", "/hooks [list|errors|reload|trust|enable|disable]", "Inspect and manage Hooks v2.", "Tools"),
     SlashCommand("/skills", "/skills", "List discovered SKILL.md workflows.", "Tools"),
     SlashCommand("/mcp", "/mcp", "Show MCP servers and connection state.", "Tools"),
     SlashCommand("/cmd", "/cmd [cwd::]<command> [args...]", "Run an allowed development command.", "Tools"),
@@ -85,6 +87,7 @@ def format_slash_commands() -> str:
         ],
         "\U0001f6e0️ Tool Commands": [
             ("/tools", "List all available tools"),
+            ("/hooks", "Inspect and manage Hooks v2"),
             ("/skills", "List discovered SKILL.md workflows"),
             ("/mcp", "Show MCP servers and connection state"),
             ("/cmd", "Run development commands directly"),
@@ -162,6 +165,9 @@ def try_handle_local_command(user_input: str, tools=None, permissions=None) -> s
                 f"pepsi-code settings: {PEPSI_CODE_SETTINGS_PATH}",
                 f"pepsi-code permissions: {PEPSI_CODE_PERMISSIONS_PATH}",
                 f"pepsi-code mcp: {PEPSI_CODE_MCP_PATH}",
+                f"user hooks: {USER_HOOKS_PATH}",
+                f"project hooks: {PROJECT_HOOKS_FILE}",
+                f"local hooks: {LOCAL_HOOKS_FILE}",
                 f"compat fallback: {CLAUDE_SETTINGS_PATH}",
             ]
         )

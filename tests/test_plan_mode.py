@@ -175,6 +175,9 @@ def test_exit_plan_mode_must_be_the_only_tool_call(tmp_path: Path) -> None:
         "/worktree enter feature",
         "/worktree exit feature",
         "/worktree cleanup",
+        "/hooks trust",
+        "/hooks  trust",
+        "/hooks\ttrust",
     ],
 )
 def test_plan_mode_blocks_mutating_local_command_bypasses(tmp_path: Path, command: str) -> None:

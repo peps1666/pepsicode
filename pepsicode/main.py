@@ -11,6 +11,7 @@ from pepsicode.anthropic_adapter import AnthropicModelAdapter
 from pepsicode.cli_commands import try_handle_local_command
 from pepsicode.config import load_runtime_config
 from pepsicode.history import load_history_entries, save_history_entries
+from pepsicode.hooks import HookContext, HookEvent, create_hook_engine
 from pepsicode.local_tool_shortcuts import parse_local_tool_shortcut
 from pepsicode.manage_cli import maybe_handle_management_command
 from pepsicode.mock_model import MockModelAdapter
@@ -26,11 +27,21 @@ from pepsicode.workspace import resolve_tool_path
 
 
 # 当地命令处理器：处理以 "/" 开头的命令，如 "/tools" 列出可用工具，或其他自定义命令
-def _handle_local_command(user_input: str, tools, permissions=None) -> str | None:
+def _handle_local_command(user_input: str, tools, permissions=None, hook_engine=None) -> str | None:
     if user_input == "/tools":
         return "\n".join(f"{tool.name}: {tool.description}" for tool in tools.list())
+    if user_input == "/hooks" or user_input.startswith("/hooks "):
+        return hook_engine.handle_command(user_input) if hook_engine is not None else "Hooks are unavailable."
     local_result = try_handle_local_command(user_input, tools=tools, permissions=permissions)
     return local_result
+
+
+def _print_hook_notifications(hook_engine) -> None:
+    if hook_engine is None:
+        return
+    for notification in hook_engine.drain_notifications():
+        marker = "ok" if notification.success else "error"
+        print(f"[hook:{notification.hook_id} {marker}] {notification.output}")
 
 
 # 渲染欢迎横幅，显示模型、当前工作目录、权限摘要和工具统计信息（如果在详细模式下）
@@ -210,6 +221,15 @@ def main() -> None:
         cwd, runtime=runtime, cost_tracker=cost_tracker, trace_manager=trace_manager
     )  # 创建工具注册表，传入当前工作目录和运行时配置，工具注册表负责管理可用的技能和 MCP 服务器
     permissions = PermissionManager(cwd, prompt=prompt_handler)
+    hook_engine = create_hook_engine(cwd, permissions)
+    hook_engine.emit(
+        HookEvent.STARTUP,
+        HookContext(
+            event=HookEvent.STARTUP,
+            cwd=cwd,
+            metadata={"permission_mode": permissions.mode.value, "agent_scope": "main"},
+        ),
+    )
     model = (
         MockModelAdapter()
         if runtime is None or os.environ.get("PEPSI_CODE_MODEL_MODE") == "mock"
@@ -298,6 +318,7 @@ def main() -> None:
     )
     if worktree_session_hint:
         print(worktree_session_hint)
+    _print_hook_notifications(hook_engine)
 
     if os.environ.get("PEPSI_CODE_SHOW_GUIDE", "") == "1":
         print(_render_quick_start())
@@ -315,6 +336,15 @@ def main() -> None:
                     continue
                 if user_input == "/exit":
                     break
+                hook_engine.emit(
+                    HookEvent.USER_INPUT,
+                    HookContext(
+                        event=HookEvent.USER_INPUT,
+                        cwd=cwd,
+                        data={"user_input": user_input},
+                        metadata={"permission_mode": permissions.mode.value, "agent_scope": "main"},
+                    ),
+                )
                 if user_input == "/plan" or user_input.startswith("/plan "):
                     plan_path = permissions.enter_plan_mode()
                     task = user_input[len("/plan") :].strip()
@@ -336,11 +366,12 @@ def main() -> None:
                     saved_path = _save_transcript_file(cwd, permissions, transcript, output_path)
                     print(f"Saved transcript to {saved_path}")
                     continue
-                local_result = _handle_local_command(user_input, tools, permissions)
+                local_result = _handle_local_command(user_input, tools, permissions, hook_engine)
                 if local_result is not None:
                     _append_transcript(transcript, kind="user", body=user_input)
                     _append_transcript(transcript, kind="assistant", body=local_result)
                     print(local_result)
+                    _print_hook_notifications(hook_engine)
                     continue
                 shortcut = parse_local_tool_shortcut(user_input)
                 if shortcut is not None:
@@ -348,7 +379,7 @@ def main() -> None:
                     result = tools.execute(
                         shortcut["toolName"],
                         shortcut["input"],
-                        context=ToolContext(cwd=cwd, permissions=permissions),
+                        context=ToolContext(cwd=cwd, permissions=permissions, hooks=hook_engine),
                     )
                     _append_transcript(
                         transcript,
@@ -358,6 +389,7 @@ def main() -> None:
                         status="success" if result.ok else "error",
                     )
                     print(result.output)
+                    _print_hook_notifications(hook_engine)
                     continue
                 _append_transcript(transcript, kind="user", body=user_input)
                 messages.append({"role": "user", "content": user_input})
@@ -386,6 +418,7 @@ def main() -> None:
                     cwd=cwd,
                     permissions=permissions,
                     context_manager=context_mgr,
+                    hook_engine=hook_engine,
                 )
                 permissions.end_turn()
 
@@ -402,6 +435,7 @@ def main() -> None:
                     content = last_assistant.get("content", "")
                     _append_transcript(transcript, kind="assistant", body=content)
                     print(content)
+                _print_hook_notifications(hook_engine)
             return
         # If we're in a TTY, run the full interactive app with the agent loop and rich UI
         run_tty_app(
@@ -415,6 +449,7 @@ def main() -> None:
             list_sessions_only=args.list_sessions,
             cost_tracker=cost_tracker,
             trace_manager=trace_manager,
+            hook_engine=hook_engine,
         )
     except KeyboardInterrupt:
         if os.environ.get("PEPSI_CODE_VERBOSE", "") == "1":
@@ -425,6 +460,20 @@ def main() -> None:
 
         logger = get_logger("main")
         logger.info("Shutting down...")
+
+        try:
+            hook_engine.emit(
+                HookEvent.SHUTDOWN,
+                HookContext(
+                    event=HookEvent.SHUTDOWN,
+                    cwd=cwd,
+                    metadata={"permission_mode": permissions.mode.value, "agent_scope": "main"},
+                ),
+            )
+            hook_engine.close()
+            _print_hook_notifications(hook_engine)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("Error shutting down hooks: %s", e)
 
         # Restore Windows console mode (prevents ^[[A after exit)
         try:

@@ -32,6 +32,7 @@ from pepsicode.cli_commands import (
 )
 from pepsicode.cost_tracker import CostTracker
 from pepsicode.history import load_history_entries, save_history_entries
+from pepsicode.hooks import HookContext, HookEngine, HookEvent
 from pepsicode.local_tool_shortcuts import parse_local_tool_shortcut
 from pepsicode.permissions import PermissionManager
 from pepsicode.prompt import build_system_prompt
@@ -96,6 +97,7 @@ from pepsicode.tui.transcript import (
 )
 from pepsicode.tui.types import TranscriptEntry
 from pepsicode.types import ChatMessage, ModelAdapter, StreamToken
+from pepsicode.version import DISPLAY_VERSION
 from pepsicode.workspace import resolve_tool_path
 
 # ---------------------------------------------------------------------------
@@ -188,6 +190,42 @@ class TtyAppArgs:
     cost_tracker: CostTracker | None = None
     # Trace manager for sub-agent observability (token/tool-call tree).
     trace_manager: Any | None = None
+    hook_engine: HookEngine | None = None
+
+
+def _emit_tty_hook(
+    args: TtyAppArgs,
+    event: HookEvent,
+    *,
+    data: dict[str, Any] | None = None,
+) -> None:
+    if args.hook_engine is None:
+        return
+    mode = getattr(args.permissions.mode, "value", str(args.permissions.mode))
+    try:
+        args.hook_engine.emit(
+            event,
+            HookContext(
+                event=event,
+                cwd=args.cwd,
+                data=data or {},
+                metadata={"permission_mode": mode, "agent_scope": "main"},
+            ),
+        )
+    except Exception as error:  # noqa: BLE001 - UI hooks are isolated
+        logging.debug("Hook event %s failed: %s", event.value, error)
+
+
+def _drain_tty_hook_notifications(args: TtyAppArgs, state: ScreenState) -> None:
+    if args.hook_engine is None:
+        return
+    for notification in args.hook_engine.drain_notifications():
+        marker = "ok" if notification.success else "error"
+        _push_transcript_entry(
+            state,
+            kind="assistant",
+            body=f"[hook:{notification.hook_id} {marker}] {notification.output}",
+        )
 
 
 @dataclass
@@ -343,6 +381,12 @@ def _resume_session_by_id(args: TtyAppArgs, state: ScreenState, session_id: str)
         kind="assistant",
         body=f"Session {session.session_id[:8]} resumed ({len(session.messages)} messages loaded).",
     )
+    _emit_tty_hook(
+        args,
+        HookEvent.SESSION_RESUME,
+        data={"session_id": session.session_id, "message_count": len(session.messages)},
+    )
+    _drain_tty_hook_notifications(args, state)
     return True
 
 
@@ -1052,7 +1096,9 @@ def _render_stream_screen(args: TtyAppArgs, state: ScreenState) -> None:
 
     cwd_name = Path(args.cwd).name or args.cwd
     mode_label = f"  {YELLOW}PLAN{RESET}" if args.permissions.is_plan_mode else ""
-    footer = f"  {SUBTLE}{cwd_name}{RESET}  {SUBTLE}{msg_count} events{RESET}{mode_label}  {SUBTLE}v0.1{RESET}"
+    footer = (
+        f"  {SUBTLE}{cwd_name}{RESET}  {SUBTLE}{msg_count} events{RESET}{mode_label}  {SUBTLE}{DISPLAY_VERSION}{RESET}"
+    )
 
     frame = _truncate_frame_lines(transcript_lines, cols, transcript_height) + [sep] + input_lines + [footer]
     frame = _truncate_frame_lines(frame, cols, rows)
@@ -1352,7 +1398,7 @@ def _execute_tool_shortcut(
         result = args.tools.execute(
             tool_name,
             tool_input,
-            context=ToolContext(cwd=args.cwd, permissions=args.permissions),
+            context=ToolContext(cwd=args.cwd, permissions=args.permissions, hooks=args.hook_engine),
         )
         state.recent_tools.append(
             {
@@ -1365,6 +1411,7 @@ def _execute_tool_shortcut(
         _collapse_tool_entry(state, entry_id, _summarize_collapsed_tool_body(output))
         state.transcript_scroll_offset = 0
         state.user_scrolled_away = False
+        _drain_tty_hook_notifications(args, state)
     finally:
         state.is_busy = False
         state.active_tool = None
@@ -1394,6 +1441,9 @@ def _handle_input(
         return False
     if input_text == "/exit":
         return True
+
+    _emit_tty_hook(args, HookEvent.USER_INPUT, data={"user_input": input_text})
+    _drain_tty_hook_notifications(args, state)
 
     # History
     if not state.history or state.history[-1] != input_text:
@@ -1437,6 +1487,14 @@ def _handle_input(
             kind="assistant",
             body="\n".join(f"{t.name}: {t.description}" for t in args.tools.list()),
         )
+        return False
+
+    if input_text == "/hooks" or input_text.startswith("/hooks "):
+        output = (
+            args.hook_engine.handle_command(input_text) if args.hook_engine is not None else "Hooks are unavailable."
+        )
+        _push_transcript_entry(state, kind="assistant", body=output)
+        _drain_tty_hook_notifications(args, state)
         return False
 
     if input_text == "/resume" or input_text.startswith("/resume "):
@@ -1739,6 +1797,7 @@ def _handle_input(
                 on_assistant_message=on_assistant_message,
                 on_progress_message=on_progress_message,
                 context_manager=args.context_manager,
+                hook_engine=args.hook_engine,
             )
             if args.context_manager:
                 args.context_manager.messages = [dict(message) for message in next_messages]
@@ -1763,6 +1822,7 @@ def _handle_input(
             state.status = None
             # Clear streaming state
             state.streaming_entry_id = None
+            _drain_tty_hook_notifications(args, state)
             state.streaming_text = ""
             rerender()
 
@@ -1795,6 +1855,7 @@ def run_tty_app(
     list_sessions_only: bool = False,
     cost_tracker: CostTracker | None = None,
     trace_manager: Any | None = None,
+    hook_engine: HookEngine | None = None,
 ) -> list[ChatMessage]:
     """Event-driven full-screen TTY application, ported from the TypeScript version.
 
@@ -1823,6 +1884,7 @@ def run_tty_app(
         context_manager=context_manager,
         cost_tracker=cost_tracker,
         trace_manager=trace_manager,
+        hook_engine=hook_engine,
     )
 
     # Session initialization
@@ -1896,6 +1958,14 @@ def run_tty_app(
             state.transcript.append(entry)
 
         print(f"Restored {len(session.messages)} messages, {len(state.transcript)} transcript entries.")
+        _emit_tty_hook(
+            args,
+            HookEvent.SESSION_RESUME,
+            data={"session_id": session.session_id, "message_count": len(session.messages)},
+        )
+        _drain_tty_hook_notifications(args, state)
+
+    _drain_tty_hook_notifications(args, state)
 
     # Wire up permission prompt handler
     approval_event = threading.Event()
@@ -1919,6 +1989,7 @@ def run_tty_app(
         state.pending_approval = None
         return result
 
+    original_permission_prompt = permissions.prompt
     permissions.prompt = _permission_prompt_handler
 
     # Throttled renderer: coalesces rapid rerender() calls to reduce flickering
@@ -2071,6 +2142,7 @@ def run_tty_app(
 
         show_cursor()
         exit_alternate_screen()
+        permissions.prompt = original_permission_prompt
 
         # Final session save
         if state.session:
@@ -2101,6 +2173,12 @@ def run_tty_app(
                 state.autosave.force_save()
             else:
                 save_session(state.session)
+
+            _emit_tty_hook(
+                args,
+                HookEvent.SESSION_SAVE,
+                data={"session_id": state.session.session_id, "message_count": len(args.messages)},
+            )
 
             if os.environ.get("PEPSI_CODE_VERBOSE", "") == "1":
                 print(

@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import shlex
 import subprocess
+import time
 from collections.abc import Sequence
 
 from pepsicode.background_tasks import register_background_shell_task
@@ -171,11 +172,15 @@ def _validate(input_data: dict) -> dict:
     cwd = input_data.get("cwd")
     if cwd is not None and not isinstance(cwd, str):
         raise ValueError("cwd must be a string")
-    return {"command": command, "args": [str(arg) for arg in args], "cwd": cwd}
+    timeout = input_data.get("timeout", COMMAND_TIMEOUT)
+    if not isinstance(timeout, int) or isinstance(timeout, bool) or not 1 <= timeout <= COMMAND_TIMEOUT:
+        raise ValueError(f"timeout must be an integer between 1 and {COMMAND_TIMEOUT}")
+    return {"command": command, "args": [str(arg) for arg in args], "cwd": cwd, "timeout": timeout}
 
 
 def _run(input_data: dict, context) -> ToolResult:
     effective_cwd = str(resolve_tool_path(context, input_data["cwd"], "list")) if input_data.get("cwd") else context.cwd
+    timeout = int(input_data.get("timeout", COMMAND_TIMEOUT))
     normalized_command, normalized_args = _normalize_command_input(input_data)
     if not normalized_command:
         return ToolResult(ok=False, output="Command not allowed: empty command")
@@ -241,6 +246,17 @@ def _run(input_data: dict, context) -> ToolResult:
             backgroundTask=background_task,
         )
 
+    cancellation_event = getattr(context, "cancellation_event", None)
+    if cancellation_event is not None:
+        return _run_cancellable_command(
+            command,
+            args,
+            cwd=effective_cwd,
+            timeout=timeout,
+            cancellation_event=cancellation_event,
+            display_command=f"{normalized_command} {' '.join(normalized_args)}".strip(),
+        )
+
     try:
         completed = subprocess.run(  # noqa: S603
             [command, *args],
@@ -251,15 +267,61 @@ def _run(input_data: dict, context) -> ToolResult:
             encoding="utf-8",  # explicitly specify UTF-8
             errors="replace",  # replace undecodable characters instead of raising
             check=False,
-            timeout=COMMAND_TIMEOUT,
+            timeout=timeout,
         )
         output = "\n".join(part for part in [completed.stdout.strip(), completed.stderr.strip()] if part).strip()
         return ToolResult(ok=completed.returncode == 0, output=output)
     except subprocess.TimeoutExpired:
         return ToolResult(
             ok=False,
-            output=f"Command timed out after {COMMAND_TIMEOUT} seconds. Command: {normalized_command} {' '.join(normalized_args)}",
+            output=f"Command timed out after {timeout} seconds. Command: {normalized_command} {' '.join(normalized_args)}",
         )
+
+
+def _run_cancellable_command(
+    command: str,
+    args: list[str],
+    *,
+    cwd: str,
+    timeout: int,
+    cancellation_event,
+    display_command: str,
+) -> ToolResult:
+    process = subprocess.Popen(  # noqa: S603
+        [command, *args],
+        cwd=cwd,
+        env=os.environ.copy(),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        stdin=subprocess.DEVNULL,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+    )
+    deadline = time.monotonic() + timeout
+    while True:
+        if cancellation_event.is_set():
+            _stop_process(process)
+            return ToolResult(ok=False, output=f"Command cancelled during hook shutdown: {display_command}")
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            _stop_process(process)
+            return ToolResult(ok=False, output=f"Command timed out after {timeout} seconds. Command: {display_command}")
+        try:
+            stdout, stderr = process.communicate(timeout=min(0.1, remaining))
+            output = "\n".join(part for part in [stdout.strip(), stderr.strip()] if part).strip()
+            return ToolResult(ok=process.returncode == 0, output=output)
+        except subprocess.TimeoutExpired:
+            continue
+
+
+def _stop_process(process: subprocess.Popen) -> None:
+    try:
+        process.terminate()
+        process.communicate(timeout=1)
+    except (OSError, subprocess.TimeoutExpired):
+        process.kill()
+        process.communicate()
 
 
 run_command_tool = ToolDefinition(
@@ -267,7 +329,12 @@ run_command_tool = ToolDefinition(
     description="Run a common development command from an allowlist.",
     input_schema={
         "type": "object",
-        "properties": {"command": {"type": "string"}, "args": {"type": "array"}, "cwd": {"type": "string"}},
+        "properties": {
+            "command": {"type": "string"},
+            "args": {"type": "array"},
+            "cwd": {"type": "string"},
+            "timeout": {"type": "integer", "minimum": 1, "maximum": COMMAND_TIMEOUT},
+        },
         "required": ["command"],
     },
     validator=_validate,

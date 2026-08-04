@@ -12,6 +12,7 @@ from queue import Empty, Queue
 from typing import Any, Protocol, runtime_checkable
 
 from pepsicode.tooling import ToolCapability, ToolDefinition, ToolResult
+from pepsicode.version import VERSION
 
 # =============================================================================
 # Security: command validation constants
@@ -310,7 +311,7 @@ class StdioMcpClient:
                     {
                         "protocolVersion": "2024-11-05",
                         "capabilities": {},
-                        "clientInfo": {"name": "pepsicode", "version": "0.1.0"},
+                        "clientInfo": {"name": "pepsicode", "version": VERSION},
                     },
                     timeout_seconds=2.0,
                 )
@@ -623,7 +624,7 @@ class HttpMcpClient:
             {
                 "protocolVersion": "2024-11-05",
                 "capabilities": {},
-                "clientInfo": {"name": "pepsicode", "version": "0.1.0"},
+                "clientInfo": {"name": "pepsicode", "version": VERSION},
             },
             timeout_seconds=10.0,
         )

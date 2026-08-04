@@ -206,6 +206,8 @@ def create_task_tool(
                 on_usage=_record_trace_usage,
                 on_tool_start=_wrap_tool_start,
                 on_tool_result=_wrap_tool_result,
+                hook_engine=context.hooks,
+                agent_scope=f"subagent:{definition.name}",
             )
         except Exception as error:  # noqa: BLE001
             if trace_manager is not None and trace_node is not None:

@@ -7,6 +7,8 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
+from pepsicode.version import DISPLAY_VERSION
+
 # ANSI color constants
 RESET = "[0m"
 DIM = "[2m"
@@ -63,7 +65,7 @@ ICON_LOCK = ICON_DOT
 # Pre-compiled regex for ANSI stripping (avoid re-compiling every call)
 _ANSI_RE = re.compile(r"\[[0-9;]*m")
 APP_NAME = "pepsicode"
-APP_VERSION = "v0.1"
+APP_VERSION = DISPLAY_VERSION
 
 
 def strip_ansi(text: str) -> str:

@@ -264,6 +264,8 @@ class PermissionManager:
         if not self.is_plan_mode:
             return
         text = user_input.strip()
+        command_parts = text.casefold().split()
+        is_hook_trust = len(command_parts) >= 2 and command_parts[:2] == ["/hooks", "trust"]
         blocked = (
             text.startswith("/model ")
             or text.startswith("/transcript-save")
@@ -272,6 +274,7 @@ class PermissionManager:
             or text.startswith("/worktree enter")
             or text.startswith("/worktree exit")
             or text.startswith("/worktree cleanup")
+            or is_hook_trust
         )
         if blocked:
             raise RuntimeError(f"Plan mode denied local command: {text}")

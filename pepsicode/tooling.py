@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Protocol
+
+logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Tool metadata (inspired by Claude Code's Tool type)
@@ -108,6 +111,12 @@ class ToolResult:
 class ToolContext:
     cwd: str
     permissions: Any | None = None
+    hooks: Any | None = None
+    tool_use_id: str = ""
+    call_index: int = 0
+    agent_scope: str = "main"
+    suppress_hooks: bool = False
+    cancellation_event: Any | None = None
 
 
 Validator = Callable[[Any], Any]
@@ -168,15 +177,82 @@ class ToolRegistry:
 
         try:
             parsed = tool.validator(input_data)
+            if context.hooks is not None and not context.suppress_hooks:
+                from pepsicode.hooks import HookContext, HookEvent
+
+                decision = context.hooks.evaluate_pre_tool(
+                    HookContext(
+                        event=HookEvent.PRE_TOOL_USE,
+                        cwd=context.cwd,
+                        data={"tool_name": tool_name, "tool_input": parsed},
+                        metadata=self._hook_metadata(context),
+                    )
+                )
+                if not decision.allowed:
+                    reason = decision.reason or "blocked by a pre-tool hook"
+                    return ToolResult(ok=False, output=f"Hook '{decision.hook_id}' denied {tool_name}: {reason}")
+
             permissions = context.permissions
             if permissions is not None and hasattr(permissions, "ensure_tool_allowed"):
                 permissions.ensure_tool_allowed(tool, parsed)
-            return tool.run(parsed, context)
+            result = tool.run(parsed, context)
+            if context.hooks is not None and not context.suppress_hooks:
+                from pepsicode.hooks import HookContext, HookEvent
+
+                try:
+                    context.hooks.emit(
+                        HookEvent.POST_TOOL_USE,
+                        HookContext(
+                            event=HookEvent.POST_TOOL_USE,
+                            cwd=context.cwd,
+                            data={
+                                "tool_name": tool_name,
+                                "tool_input": parsed,
+                                "tool_output": result.output,
+                                "result": {"ok": result.ok, "output": result.output},
+                                "is_error": not result.ok,
+                            },
+                            metadata=self._hook_metadata(context),
+                        ),
+                    )
+                except Exception as hook_error:  # noqa: BLE001 - preserve a completed tool result
+                    logger.warning("Post-tool hook failed for %s: %s", tool_name, hook_error)
+            return result
         except (KeyboardInterrupt, SystemExit):
             # 这些异常应该向上传播，不应该被捕获
             raise
         except Exception as error:  # noqa: BLE001
+            if context.hooks is not None and not context.suppress_hooks:
+                from pepsicode.hooks import HookContext, HookEvent
+
+                try:
+                    context.hooks.emit(
+                        HookEvent.ERROR,
+                        HookContext(
+                            event=HookEvent.ERROR,
+                            cwd=context.cwd,
+                            data={
+                                "error": str(error),
+                                "error_type": type(error).__name__,
+                                "tool_name": tool_name,
+                                "tool_input": input_data,
+                            },
+                            metadata=self._hook_metadata(context),
+                        ),
+                    )
+                except Exception as hook_error:  # noqa: BLE001 - preserve the original tool failure
+                    logger.warning("Error hook failed for %s: %s", tool_name, hook_error)
             return ToolResult(ok=False, output=f"{type(tool).__name__} error: {error}")
+
+    @staticmethod
+    def _hook_metadata(context: ToolContext) -> dict[str, Any]:
+        mode = getattr(context.permissions, "mode", "default")
+        return {
+            "permission_mode": getattr(mode, "value", str(mode)),
+            "agent_scope": context.agent_scope,
+            "tool_use_id": context.tool_use_id,
+            "call_index": context.call_index,
+        }
 
     def dispose(self) -> None:
         if self._disposer is not None:

@@ -54,3 +54,4 @@ session-log.txt
 docs/superpowers/
 .pepsi-code/plans/
 .pepsi-code/tool-results/
+.pepsi-code/hooks.local.json
