@@ -229,6 +229,31 @@ def main() -> None:
     memory_mgr = create_memory_manager(cwd)
     logger.info("Memory manager initialized")
 
+    # Restore any persisted git worktree session.  If pepsicode was last run
+    # inside a worktree (or the worktree was created and entered), this lets
+    # us detect it and inform the user / agent.  We do NOT auto-switch cwd
+    # because the user may have intentionally restarted from the main repo.
+    worktree_session_hint = ""
+    try:
+        from pepsicode.worktree import WorktreeManager
+
+        wt_manager = WorktreeManager(repo_root=cwd)
+        restored = wt_manager.restore_session()
+        if restored is not None:
+            logger.info(
+                "Restored worktree session: name=%s path=%s",
+                restored.worktree_name,
+                restored.worktree_path,
+            )
+            worktree_session_hint = (
+                f"\n[worktree] Active session: '{restored.worktree_name}' at "
+                f"{restored.worktree_path}\n"
+                f"  Use /worktree exit {restored.worktree_name} to leave, "
+                f"or target this path for file operations."
+            )
+    except Exception as e:  # noqa: BLE001
+        logger.debug("Worktree session restore skipped: %s", e)
+
     messages = [
         {
             "role": "system",
@@ -259,6 +284,8 @@ def main() -> None:
             },
         )
     )
+    if worktree_session_hint:
+        print(worktree_session_hint)
 
     if os.environ.get("PEPSI_CODE_SHOW_GUIDE", "") == "1":
         print(_render_quick_start())

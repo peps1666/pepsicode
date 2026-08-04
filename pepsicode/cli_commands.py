@@ -55,6 +55,15 @@ SLASH_COMMANDS = [
         "/patch", "/patch <path>::<search1>::<replace1>...", "Apply multiple replacements to one file.", "Files"
     ),
     SlashCommand("/modify", "/modify <path>::<content>", "Replace a file with reviewable diff.", "Files"),
+    # Worktree
+    SlashCommand("/worktree", "/worktree", "List active git worktrees.", "Worktree"),
+    SlashCommand("/worktree", "/worktree status", "Show detailed worktree session status.", "Worktree"),
+    SlashCommand("/worktree", "/worktree create <name> [base]", "Create a new isolated worktree.", "Worktree"),
+    SlashCommand("/worktree", "/worktree enter <name>", "Enter a worktree (switch context into it).", "Worktree"),
+    SlashCommand(
+        "/worktree", "/worktree exit <name> [keep|remove]", "Exit a worktree, optionally removing it.", "Worktree"
+    ),
+    SlashCommand("/worktree", "/worktree cleanup [max_age_hours]", "Remove stale ephemeral worktrees.", "Worktree"),
 ]
 
 
@@ -94,6 +103,14 @@ def format_slash_commands() -> str:
             ("/edit <path>", "Edit file by exact replacement"),
             ("/patch <path>", "Apply multiple replacements in one go"),
             ("/modify <path>", "Replace file with reviewable diff"),
+        ],
+        "\U0001f33f Git Worktree": [
+            ("/worktree", "List active worktrees"),
+            ("/worktree status", "Show detailed session status"),
+            ("/worktree create <name>", "Create an isolated worktree"),
+            ("/worktree enter <name>", "Switch into a worktree"),
+            ("/worktree exit <name>", "Leave a worktree"),
+            ("/worktree cleanup", "Remove stale ephemeral worktrees"),
         ],
         "\U0001f4c5 Session Management": [
             ("/resume [id]", "Resume a saved session"),
@@ -149,6 +166,9 @@ def try_handle_local_command(user_input: str, tools=None) -> str | None:
 
     if user_input == "/permissions":
         return f"permission store: {PEPSI_CODE_PERMISSIONS_PATH}"
+
+    if user_input == "/worktree" or user_input.startswith("/worktree "):
+        return _handle_worktree_command(user_input)
 
     if user_input == "/skills":
         skills = tools.get_skills() if tools else []
@@ -268,3 +288,98 @@ def try_handle_local_command(user_input: str, tools=None) -> str | None:
         return f"saved model={model} to {PEPSI_CODE_SETTINGS_PATH}"
 
     return None
+
+
+def _handle_worktree_command(user_input: str) -> str:
+    """Handle /worktree subcommands: list, status, create, enter, exit, cleanup.
+
+    All operations run against the current working directory's git repo.
+    """
+    import os
+
+    from pepsicode.worktree import WorktreeError, WorktreeManager
+
+    parts = user_input.split()
+    # parts[0] == "/worktree"
+    sub = parts[1] if len(parts) > 1 else "list"
+
+    try:
+        manager = WorktreeManager(repo_root=os.getcwd())
+        manager.restore_session()
+    except Exception as e:  # noqa: BLE001
+        return f"Failed to initialize worktree manager: {e}"
+
+    try:
+        if sub in ("list", ""):
+            wts = manager.list_worktrees()
+            if not wts:
+                return "No active worktrees.\nUsage: /worktree create <name> [base_branch]"
+            lines = ["Active worktrees:", ""]
+            for wt in wts:
+                marker = (
+                    " *" if (manager.current_session and manager.current_session.worktree_name == wt.name) else "  "
+                )
+                lines.append(
+                    f"{marker}{wt.name}\n"
+                    f"      path:   {wt.path}\n"
+                    f"      branch: {wt.branch}\n"
+                    f"      head:   {wt.head_commit[:12] if wt.head_commit else '(unknown)'}"
+                )
+            return "\n".join(lines)
+
+        if sub == "status":
+            import json
+
+            return json.dumps(manager.status(), indent=2, ensure_ascii=False)
+
+        if sub == "create":
+            if len(parts) < 3:
+                return "Usage: /worktree create <name> [base_branch]"
+            name = parts[2]
+            base = parts[3] if len(parts) > 3 else "HEAD"
+            wt = manager.create(name, base_branch=base)
+            return (
+                f"Created worktree '{wt.name}':\n"
+                f"  path:   {wt.path}\n"
+                f"  branch: {wt.branch}\n"
+                f"  based:  {wt.based_on}\n"
+                f"  head:   {wt.head_commit[:12] if wt.head_commit else '(unknown)'}"
+            )
+
+        if sub == "enter":
+            if len(parts) < 3:
+                return "Usage: /worktree enter <name>"
+            name = parts[2]
+            session = manager.enter(name)
+            return (
+                f"Entered worktree '{name}'.\n"
+                f"  worktree path:  {session.worktree_path}\n"
+                f"  original cwd:   {session.original_cwd}\n"
+                f"  original branch: {session.original_branch}\n"
+                f"\nNote: pepsicode's cwd is not changed automatically. "
+                f"Use the worktree path above for subsequent file operations."
+            )
+
+        if sub == "exit":
+            if len(parts) < 3:
+                return "Usage: /worktree exit <name> [keep|remove]"
+            name = parts[2]
+            action_on_exit = parts[3] if len(parts) > 3 else "keep"
+            if action_on_exit not in ("keep", "remove"):
+                return "action must be 'keep' or 'remove'"
+            manager.exit(name, action=action_on_exit)
+            suffix = " (worktree removed)" if action_on_exit == "remove" else " (worktree kept on disk)"
+            return f"Exited worktree '{name}'{suffix}."
+
+        if sub == "cleanup":
+            from pepsicode.worktree.cleanup import cleanup_stale_worktrees
+
+            max_age = int(parts[2]) if len(parts) > 2 else 24
+            removed = cleanup_stale_worktrees(manager, cutoff_hours=max_age)
+            return f"Cleaned up {removed} stale worktree(s) older than {max_age}h."
+
+        return f"Unknown subcommand: {sub}\nAvailable: list, status, create, enter, exit, cleanup"
+    except WorktreeError as e:
+        return f"Worktree error: {e}"
+    except Exception as e:  # noqa: BLE001
+        return f"Unexpected error: {e}"

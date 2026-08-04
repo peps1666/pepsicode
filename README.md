@@ -152,6 +152,7 @@ pepsicode-py
 | 工具            | 说明              |
 | --------------- | ----------------- |
 | `git`           | Git 工作流        |
+| `worktree`      | Git Worktree 隔离环境 |
 | `docker_helper` | Docker 管理       |
 | `db_explorer`   | SQLite 数据库探索 |
 
@@ -298,7 +299,7 @@ pepsicode-py
 - **💑 Session Persistence** — Save & resume conversations, 30s autosave
 - **📚 3-Tier Memory** — Conversation → Session → Long-term memory
 - **🔲 MCP Integration** — Connect external Model Context Protocol servers
-- **⌨️ Slash Commands** — `/help`, `/tools`, `/cost`, `/config`, `/context`, `/memory`
+- **⌨️ Slash Commands** — `/help`, `/tools`, `/cost`, `/config`, `/context`, `/memory`, `/worktree`
 
 ---
 

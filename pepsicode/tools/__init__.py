@@ -30,6 +30,7 @@ from pepsicode.tools.test_runner import test_runner_tool
 from pepsicode.tools.todo_write import todo_write_tool
 from pepsicode.tools.web_fetch import web_fetch_tool
 from pepsicode.tools.web_search import web_search_tool
+from pepsicode.tools.worktree import worktree_tool
 from pepsicode.tools.write_file import write_file_tool
 
 
@@ -61,6 +62,8 @@ def create_default_tool_registry(cwd: str, runtime: dict | None = None) -> ToolR
             save_memory_tool,
             # Git workflow
             git_tool,
+            # Worktree isolation
+            worktree_tool,
             # Notebook editing
             notebook_edit_tool,
             # Code intelligence
