@@ -1,14 +1,15 @@
 from __future__ import annotations
 
-from collections.abc import Callable, Generator
+from collections.abc import Callable, Generator, Sequence
 from concurrent.futures import ThreadPoolExecutor
+from typing import Any, cast
 
 from pepsicode.anthropic_adapter import ContextOverflowError
 from pepsicode.context_manager import ContextManager
 from pepsicode.cost_tracker import BudgetExceededError, CostTracker
 from pepsicode.logging_config import get_logger
 from pepsicode.permissions import PermissionManager
-from pepsicode.tooling import ToolContext, ToolRegistry
+from pepsicode.tooling import ToolContext, ToolRegistry, ToolResult
 from pepsicode.types import AgentStep, ChatMessage, ModelAdapter, StreamToken
 
 logger = get_logger("agent_loop")
@@ -187,10 +188,10 @@ def _check_budget(cost_tracker: CostTracker | None, cost_limit_usd: float | None
 
 
 def _execute_calls_in_order(
-    calls: list[dict],
+    calls: Sequence[dict[str, Any]],
     tools: ToolRegistry,
     context: ToolContext,
-    on_tool_start: Callable[[str, dict], None] | None,
+    on_tool_start: Callable[[str, dict[str, Any]], None] | None,
     on_tool_result: Callable[[str, str, bool], None] | None,
 ):
     """Execute tool calls, running consecutive concurrency-safe (read-only)
@@ -202,6 +203,15 @@ def _execute_calls_in_order(
     results: list = [None] * len(calls)
     index = 0
     total = len(calls)
+    if total > 1 and any(call.get("toolName") == "exit_plan_mode" for call in calls):
+        message = "exit_plan_mode must be the only tool call in its response; no tools were executed."
+        for k, call in enumerate(calls):
+            if on_tool_start:
+                on_tool_start(call["toolName"], call["input"])
+            results[k] = ToolResult(ok=False, output=message)
+            if on_tool_result:
+                on_tool_result(call["toolName"], message, True)
+        return results
     while index < total:
         run = []
         cursor = index
@@ -259,7 +269,7 @@ def run_agent_turn(
     step = 0
 
     if context_manager:
-        context_manager.messages = current_messages
+        context_manager.messages = cast(list[dict[str, Any]], current_messages)
         stats = context_manager.get_stats()
         logger.info(
             "Context: %d tokens (%.0f%%), %d messages", stats.total_tokens, stats.usage_percentage, stats.messages_count
@@ -268,7 +278,7 @@ def run_agent_turn(
         # Auto-compact if usage is near the limit
         if context_manager.should_auto_compact():
             logger.warning("Context near limit, auto-compacting...")
-            current_messages = context_manager.compact_messages()
+            current_messages = cast(list[ChatMessage], context_manager.compact_messages())
             if on_assistant_message:
                 on_assistant_message(context_manager.get_context_summary())
 
@@ -292,8 +302,8 @@ def run_agent_turn(
                 logger.warning(
                     "Context overflow (%s); compacting and retrying (attempt %d)", error, overflow_retry_count
                 )
-                context_manager.messages = current_messages
-                current_messages = context_manager.compact_messages(force=True)
+                context_manager.messages = cast(list[dict[str, Any]], current_messages)
+                current_messages = cast(list[ChatMessage], context_manager.compact_messages(force=True))
                 if on_progress_message:
                     on_progress_message(context_manager.get_context_summary())
                 step -= 1  # don't consume a step on a pure retry
@@ -479,7 +489,7 @@ def run_agent_turn(
 
         context = ToolContext(cwd=cwd, permissions=permissions)
         results = _execute_calls_in_order(
-            next_step.calls,
+            cast(Sequence[dict[str, Any]], next_step.calls),
             tools,
             context,
             on_tool_start,
@@ -525,7 +535,7 @@ def _accumulate_stream_tokens(
     token_stream: Generator[StreamToken, None, None],
     *,
     on_token: Callable[[StreamToken], None] | None = None,
-) -> tuple[str, list[dict[str, any]] | None]:
+) -> tuple[str, list[dict[str, Any]] | None]:
     """Consume the token stream and accumulate text + tool-call blocks.
 
     Returns ``(text_content, tool_calls | None)``.  When the response contains
@@ -628,7 +638,7 @@ def run_agent_turn_stream(
     step = 0
 
     if context_manager:
-        context_manager.messages = current_messages
+        context_manager.messages = cast(list[dict[str, Any]], current_messages)
         stats = context_manager.get_stats()
         logger.info(
             "Context: %d tokens (%.0f%%), %d messages",
@@ -638,7 +648,7 @@ def run_agent_turn_stream(
         )
         if context_manager.should_auto_compact():
             logger.warning("Context near limit, auto-compacting...")
-            current_messages = context_manager.compact_messages()
+            current_messages = cast(list[ChatMessage], context_manager.compact_messages())
             if on_assistant_message:
                 on_assistant_message(context_manager.get_context_summary())
 
@@ -680,8 +690,8 @@ def run_agent_turn_stream(
                     error,
                     overflow_retry_count,
                 )
-                context_manager.messages = current_messages
-                current_messages = context_manager.compact_messages(force=True)
+                context_manager.messages = cast(list[dict[str, Any]], current_messages)
+                current_messages = cast(list[ChatMessage], context_manager.compact_messages(force=True))
                 if on_progress_message:
                     on_progress_message(context_manager.get_context_summary())
                 step -= 1
@@ -770,7 +780,7 @@ def run_agent_turn_stream(
 
             context = ToolContext(cwd=cwd, permissions=permissions)
             results = _execute_calls_in_order(
-                parsed_calls,
+                cast(Sequence[dict[str, Any]], parsed_calls),
                 tools,
                 context,
                 on_tool_start,

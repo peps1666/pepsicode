@@ -27,6 +27,7 @@ SLASH_COMMANDS = [
     SlashCommand("/clear", "/clear", "Clear the current transcript view.", "Session"),
     SlashCommand("/history", "/history", "Show recent prompt history.", "Session"),
     SlashCommand("/retry", "/retry", "Retry the last natural-language prompt.", "Session"),
+    SlashCommand("/plan", "/plan [task]", "Enter read-only Plan mode.", "Session"),
     SlashCommand("/resume", "/resume [id]", "Resume a saved session.", "Session"),
     SlashCommand("/transcript-save", "/transcript-save <path>", "Save transcript to a text file.", "Session"),
     # Tools
@@ -80,6 +81,7 @@ def format_slash_commands() -> str:
             ("/exit", "Exit pepsi-code"),
             ("/clear", "Clear the current transcript view"),
             ("/history", "Show recent prompt history"),
+            ("/plan [task]", "Enter read-only planning mode"),
         ],
         "\U0001f6e0️ Tool Commands": [
             ("/tools", "List all available tools"),
@@ -150,7 +152,7 @@ def complete_slash_command(line: str) -> tuple[list[str], str]:
     return (hits if hits else [command.usage for command in SLASH_COMMANDS], line)
 
 
-def try_handle_local_command(user_input: str, tools=None) -> str | None:
+def try_handle_local_command(user_input: str, tools=None, permissions=None) -> str | None:
     if user_input in {"/", "/help"}:
         return format_slash_commands()
 
@@ -263,15 +265,18 @@ def try_handle_local_command(user_input: str, tools=None) -> str | None:
         except Exception as error:  # noqa: BLE001
             return f"runtime not configured: {error}"
         auth = "ANTHROPIC_AUTH_TOKEN" if runtime.get("authToken") else "ANTHROPIC_API_KEY"
-        return "\n".join(
-            [
-                f"model: {runtime['model']}",
-                f"baseUrl: {runtime['baseUrl']}",
-                f"auth: {auth}",
-                f"mcp servers: {len(runtime.get('mcpServers', {}))}",
-                runtime["sourceSummary"],
-            ]
-        )
+        lines = [
+            f"model: {runtime['model']}",
+            f"baseUrl: {runtime['baseUrl']}",
+            f"auth: {auth}",
+            f"mcp servers: {len(runtime.get('mcpServers', {}))}",
+            runtime["sourceSummary"],
+        ]
+        if permissions is not None:
+            lines.append(f"permission mode: {permissions.mode.value}")
+            if permissions.plan_file_path:
+                lines.append(f"plan file: {permissions.plan_file_path}")
+        return "\n".join(lines)
 
     if user_input == "/model":
         try:

@@ -26,10 +26,10 @@ from pepsicode.workspace import resolve_tool_path
 
 
 # 当地命令处理器：处理以 "/" 开头的命令，如 "/tools" 列出可用工具，或其他自定义命令
-def _handle_local_command(user_input: str, tools) -> str | None:
+def _handle_local_command(user_input: str, tools, permissions=None) -> str | None:
     if user_input == "/tools":
         return "\n".join(f"{tool.name}: {tool.description}" for tool in tools.list())
-    local_result = try_handle_local_command(user_input, tools=tools)
+    local_result = try_handle_local_command(user_input, tools=tools, permissions=permissions)
     return local_result
 
 
@@ -274,6 +274,8 @@ def main() -> None:
                     "skills": tools.get_skills(),
                     "mcpServers": tools.get_mcp_servers(),
                     "memory_context": memory_mgr.get_relevant_context(),  # Inject memory
+                    "planMode": permissions.is_plan_mode,
+                    "planFilePath": permissions.plan_file_path,
                 },
             ),
         }
@@ -313,6 +315,19 @@ def main() -> None:
                     continue
                 if user_input == "/exit":
                     break
+                if user_input == "/plan" or user_input.startswith("/plan "):
+                    plan_path = permissions.enter_plan_mode()
+                    task = user_input[len("/plan") :].strip()
+                    print(f"Plan mode active. Plan file: {plan_path}")
+                    if not task:
+                        continue
+                    user_input = task
+                if user_input.startswith("/"):
+                    try:
+                        permissions.ensure_local_command_allowed(user_input)
+                    except RuntimeError as error:
+                        print(str(error))
+                        continue
                 if user_input.startswith("/transcript-save "):
                     output_path = user_input[len("/transcript-save ") :].strip()
                     if not output_path:
@@ -321,7 +336,7 @@ def main() -> None:
                     saved_path = _save_transcript_file(cwd, permissions, transcript, output_path)
                     print(f"Saved transcript to {saved_path}")
                     continue
-                local_result = _handle_local_command(user_input, tools)
+                local_result = _handle_local_command(user_input, tools, permissions)
                 if local_result is not None:
                     _append_transcript(transcript, kind="user", body=user_input)
                     _append_transcript(transcript, kind="assistant", body=local_result)
@@ -357,6 +372,8 @@ def main() -> None:
                             "skills": tools.get_skills(),
                             "mcpServers": tools.get_mcp_servers(),
                             "governance": bool(runtime.get("governance")) if runtime else False,
+                            "planMode": permissions.is_plan_mode,
+                            "planFilePath": permissions.plan_file_path,
                         },
                     ),
                 }

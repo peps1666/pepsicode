@@ -3,7 +3,10 @@ from __future__ import annotations
 import json
 import os
 import sys
+import time
+import uuid
 from collections.abc import Callable
+from enum import Enum
 from pathlib import Path
 from typing import Any, Literal
 
@@ -21,6 +24,15 @@ PermissionDecision = Literal[
 ]
 
 PromptHandler = Callable[[dict[str, Any]], dict[str, Any]]
+
+
+class PermissionMode(str, Enum):
+    DEFAULT = "default"
+    PLAN = "plan"
+
+
+_PLAN_CONTROL_TOOLS = frozenset({"ask_user", "task", "exit_plan_mode"})
+_PLAN_FILE_WRITE_TOOLS = frozenset({"write_file", "edit_file"})
 
 
 def _normalize_path(target_path: str) -> str:
@@ -179,7 +191,138 @@ class PermissionManager:
         self.session_denied_edits: set[str] = set()
         self.turn_allowed_edits: set[str] = set()
         self.turn_allow_all_edits = False
+        self.mode = PermissionMode.DEFAULT
+        self.previous_mode = PermissionMode.DEFAULT
+        self.plan_file_path: str | None = None
+        self._plan_followup: str | None = None
         self._initialize()
+
+    @property
+    def is_plan_mode(self) -> bool:
+        return self.mode == PermissionMode.PLAN
+
+    def enter_plan_mode(self) -> str:
+        """Enter plan mode and return the sole writable plan path."""
+        if not self.is_plan_mode:
+            self.previous_mode = self.mode
+            stamp = time.strftime("%Y%m%d-%H%M%S")
+            suffix = uuid.uuid4().hex[:8]
+            plan_path = Path(self.workspace_root) / ".pepsi-code" / "plans" / f"plan-{stamp}-{suffix}.md"
+            self.plan_file_path = str(plan_path.resolve())
+            if not _is_within_directory(self.workspace_root, self.plan_file_path):
+                self.plan_file_path = None
+                raise RuntimeError("Plan directory resolves outside the workspace")
+            self.mode = PermissionMode.PLAN
+        assert self.plan_file_path is not None
+        return self.plan_file_path
+
+    def restore_plan_state(self, mode: str | None, plan_file_path: str | None) -> None:
+        """Restore a persisted plan state after validating its workspace path."""
+        if mode != PermissionMode.PLAN.value or not plan_file_path:
+            return
+        candidate = _normalize_path(plan_file_path)
+        plans_root = _normalize_path(str(Path(self.workspace_root) / ".pepsi-code" / "plans"))
+        if not _is_within_directory(plans_root, candidate):
+            return
+        self.previous_mode = PermissionMode.DEFAULT
+        self.mode = PermissionMode.PLAN
+        self.plan_file_path = candidate
+
+    def _is_exact_plan_file(self, target_path: str) -> bool:
+        if not self.plan_file_path or not target_path:
+            return False
+        return os.path.normcase(_normalize_path(target_path)) == os.path.normcase(_normalize_path(self.plan_file_path))
+
+    def ensure_tool_allowed(self, tool: Any, parsed: Any) -> None:
+        """Apply the non-bypassable Plan-mode capability boundary."""
+        if not self.is_plan_mode:
+            return
+
+        tool_name = str(getattr(tool, "name", ""))
+        if tool_name in _PLAN_CONTROL_TOOLS:
+            if tool_name == "task" and isinstance(parsed, dict):
+                agent_type = str(parsed.get("agent_type", "explore")).lower()
+                if agent_type not in {"explore", "plan"}:
+                    raise RuntimeError("Plan mode only allows explore or plan sub-agents")
+            return
+
+        if bool(getattr(tool, "is_read_only", False)):
+            return
+
+        if tool_name in _PLAN_FILE_WRITE_TOOLS and isinstance(parsed, dict):
+            target = str(parsed.get("path") or parsed.get("file_path") or "")
+            if self._is_exact_plan_file(target):
+                return
+
+        raise RuntimeError(
+            f"Plan mode denied tool '{tool_name}'. Only read-only tools, explore/plan sub-agents, "
+            "ask_user, exit_plan_mode, and writes to the active plan file are allowed."
+        )
+
+    def ensure_local_command_allowed(self, user_input: str) -> None:
+        """Block local slash-command side doors while Plan mode is active."""
+        if not self.is_plan_mode:
+            return
+        text = user_input.strip()
+        blocked = (
+            text.startswith("/model ")
+            or text.startswith("/transcript-save")
+            or text.startswith("/resume")
+            or text.startswith("/worktree create")
+            or text.startswith("/worktree enter")
+            or text.startswith("/worktree exit")
+            or text.startswith("/worktree cleanup")
+        )
+        if blocked:
+            raise RuntimeError(f"Plan mode denied local command: {text}")
+
+    def request_plan_approval(self) -> dict[str, str]:
+        """Show the active plan for approval and update the mode atomically."""
+        if not self.is_plan_mode:
+            return {"status": "error", "message": "Not currently in Plan mode."}
+        if not self.plan_file_path:
+            return {"status": "error", "message": "No active plan file."}
+        plan_path = Path(self.plan_file_path)
+        if not plan_path.is_file():
+            return {"status": "error", "message": "The plan file does not exist yet."}
+        content = plan_path.read_text(encoding="utf-8").strip()
+        if not content:
+            return {"status": "error", "message": "The plan file is empty."}
+        if self.prompt is None:
+            return {
+                "status": "error",
+                "message": "Plan approval requires an interactive terminal; Plan mode remains active.",
+            }
+
+        result = self.prompt(
+            {
+                "kind": "plan",
+                "summary": "Review the implementation plan",
+                "details": [f"plan: {self.plan_file_path}", "", content],
+                "scope": self.plan_file_path,
+                "choices": [
+                    {"key": "1", "label": "approve and execute", "decision": "allow_once"},
+                    {"key": "2", "label": "request changes", "decision": "deny_with_feedback"},
+                    {"key": "3", "label": "keep planning", "decision": "deny_once"},
+                ],
+            }
+        )
+        decision = result.get("decision")
+        if decision == "allow_once":
+            self.mode = self.previous_mode
+            self._plan_followup = f"The plan has been approved. Execute it now:\n\n{content}"
+            return {"status": "approved", "message": "Plan approved. Exiting Plan mode."}
+        if decision == "deny_with_feedback":
+            feedback = str(result.get("feedback", "")).strip()
+            if feedback:
+                self._plan_followup = f"Revise the plan using this feedback:\n\n{feedback}"
+                return {"status": "feedback", "message": "Plan changes requested."}
+        return {"status": "pending", "message": "Plan was not approved; Plan mode remains active."}
+
+    def consume_plan_followup(self) -> str | None:
+        followup = self._plan_followup
+        self._plan_followup = None
+        return followup
 
     def _initialize(self) -> None:
         store = _read_permission_store()
@@ -209,7 +352,9 @@ class PermissionManager:
             suffix = f" (+{remaining} more)" if remaining > 0 else ""
             return ", ".join(shown) + suffix
 
-        summary = [f"cwd: {self.workspace_root}"]
+        summary = [f"cwd: {self.workspace_root}", f"mode: {self.mode.value}"]
+        if self.plan_file_path:
+            summary.append(f"plan: {self.plan_file_path}")
         summary.append("extra allowed dirs: " + _preview(self.allowed_directory_prefixes, 3))
         summary.append("dangerous allowlist: " + _preview(self.allowed_command_patterns, 2, max_chars=48))
         if self.allowed_edit_patterns:
@@ -336,6 +481,8 @@ class PermissionManager:
 
     def ensure_edit(self, target_path: str, diff_preview: str) -> None:
         normalized_target = _normalize_path(target_path)
+        if self.is_plan_mode and self._is_exact_plan_file(normalized_target):
+            return
         if normalized_target in self.session_denied_edits or normalized_target in self.denied_edit_patterns:
             raise RuntimeError(f"Edit denied: {normalized_target}")
         if (

@@ -6,7 +6,7 @@ import time
 import urllib.error
 import urllib.request
 from collections.abc import Generator
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 from pepsicode.types import AgentStep, ChatMessage, ProviderThinkingBlock, StepDiagnostics, StreamToken, ToolCall
 
@@ -251,9 +251,14 @@ def _push_anthropic_message(messages: list[dict[str, Any]], role: str, block: di
 
 
 def _to_anthropic_messages(messages: list[ChatMessage]) -> tuple[str, list[dict[str, Any]]]:
-    system = "\n\n".join(message["content"] for message in messages if message["role"] == "system")
+    # ChatMessage is a total=False TypedDict, so every key is optional to the
+    # type checker. The role branching below guarantees the relevant keys exist,
+    # so cast to dict[str, Any] for keyed access (same shape _to_assistant_text
+    # already expects).
+    raw_messages = cast(list[dict[str, Any]], messages)
+    system = "\n\n".join(message["content"] for message in raw_messages if message["role"] == "system")
     converted: list[dict[str, Any]] = []
-    for message in messages:
+    for message in raw_messages:
         role = message["role"]
         if role == "system":
             continue
