@@ -11,13 +11,14 @@ A higher-priority file with the same base name overrides a lower one.  Each
 agent definition takes effect on the next sub-agent invocation without
 restarting pepsicode.
 
-The built-in definitions (explore.md, plan.md, general-purpose.md,
+The built-in definitions (explore.md, plan.md, general.md,
 verification.md) are shipped with pepsicode and can be overridden by placing a
 file with the same name in the project or user directory.
 """
 
 from __future__ import annotations
 
+import re
 import threading
 from dataclasses import dataclass
 from pathlib import Path
@@ -34,9 +35,9 @@ _BUILTIN_TYPES: dict[str, AgentType] = {
     "explore": AgentType.EXPLORE,
     "plan": AgentType.PLAN,
     "general": AgentType.GENERAL,
-    "general-purpose": AgentType.GENERAL,
     "verification": AgentType.GENERAL,  # verification is a specialized general agent
 }
+_VALID_AGENT_NAME = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
 
 
 @dataclass
@@ -72,7 +73,7 @@ class AgentLoader:
         ``None`` when no definition exists.
         """
         normalized = name.strip().lower()
-        if not normalized:
+        if not normalized or _VALID_AGENT_NAME.fullmatch(normalized) is None:
             return None
 
         path = self._resolve(normalized)

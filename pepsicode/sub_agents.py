@@ -98,5 +98,29 @@ class AgentDefinition:
             max_turns=15,
         )
 
+    @classmethod
+    def verification_agent(cls) -> AgentDefinition:
+        """Create Verification agent - executes checks without editing files."""
+        return cls(
+            type=AgentType.GENERAL,
+            name="Verification",
+            description="Run builds, tests, lint, and type checks to verify a change",
+            system_prompt_template=(
+                "You are a verification agent. Run the project's real build, test, lint, "
+                "and type-check commands. Do not modify project files. Report each command, "
+                "its observed result, and finish with VERDICT: PASS, FAIL, or PARTIAL."
+            ),
+            disallowed_tools=[
+                "write_file",
+                "edit_file",
+                "patch_file",
+                "modify_file",
+                "multi_edit",
+                "notebook_edit",
+            ],
+            is_read_only=False,
+            max_turns=12,
+        )
+
 
 __all__ = ["AgentType", "AgentDefinition"]

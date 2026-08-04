@@ -167,6 +167,19 @@ def _record_cost_usage(model: ModelAdapter, cost_tracker: CostTracker | None) ->
     )
 
 
+def _notify_usage(model: ModelAdapter, on_usage: Callable[[dict], None] | None) -> None:
+    """Forward one provider usage report to an optional observer."""
+    if on_usage is None:
+        return
+    usage = getattr(model, "last_usage", None)
+    if not isinstance(usage, dict):
+        return
+    try:
+        on_usage(dict(usage))
+    except Exception as error:  # noqa: BLE001 -- telemetry must not break the agent loop
+        logger.debug("Usage callback failed: %s", error)
+
+
 def _check_budget(cost_tracker: CostTracker | None, cost_limit_usd: float | None) -> None:
     """Raise ``BudgetExceededError`` if spend has crossed the cap, if any."""
     if cost_tracker is not None and cost_limit_usd is not None and cost_tracker.total_cost_usd >= cost_limit_usd:
@@ -235,6 +248,7 @@ def run_agent_turn(
     context_manager: ContextManager | None = None,
     cost_tracker: CostTracker | None = None,
     cost_limit_usd: float | None = None,
+    on_usage: Callable[[dict], None] | None = None,
 ) -> list[ChatMessage]:
     current_messages = list(messages)
     saw_tool_result = False
@@ -324,6 +338,7 @@ def run_agent_turn(
                     usage.get("output_tokens", 0),
                 )
         _record_cost_usage(model, cost_tracker)
+        _notify_usage(model, on_usage)
 
         if next_step.type == "assistant":
             is_empty = _is_empty_assistant_response(next_step.content)
@@ -593,6 +608,7 @@ def run_agent_turn_stream(
     context_manager: ContextManager | None = None,
     cost_tracker: CostTracker | None = None,
     cost_limit_usd: float | None = None,
+    on_usage: Callable[[dict], None] | None = None,
 ) -> list[ChatMessage]:
     """Run an agent turn with streaming token output.
 
@@ -711,6 +727,7 @@ def run_agent_turn_stream(
                     usage.get("output_tokens", 0),
                 )
         _record_cost_usage(model, cost_tracker)
+        _notify_usage(model, on_usage)
 
         # ------ Handle empty responses ------
         is_empty = len(text_content.strip()) == 0 and not parsed_calls

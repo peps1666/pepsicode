@@ -9,12 +9,13 @@ Public entry points:
 """
 
 from pepsicode.agents.loader import AgentLoader, get_default_loader
-from pepsicode.agents.tool_filter import GLOBAL_DISALLOWED, resolve_agent_tools
+from pepsicode.agents.tool_filter import GLOBAL_DISALLOWED, READ_ONLY_TOOLS, resolve_agent_tools
 from pepsicode.agents.trace import TraceManager, TraceNode
 
 __all__ = [
     "AgentLoader",
     "GLOBAL_DISALLOWED",
+    "READ_ONLY_TOOLS",
     "TraceManager",
     "TraceNode",
     "get_default_loader",

@@ -275,6 +275,70 @@ def test_task_tool_rejects_unknown_agent_type():
         pass
 
 
+def test_task_tool_runs_project_defined_agent(tmp_path):
+    from pepsicode.tools.task import create_task_tool
+
+    agents_dir = tmp_path / ".pepsi-code" / "agents"
+    agents_dir.mkdir(parents=True)
+    (agents_dir / "reviewer.md").write_text(
+        "---\nname: Reviewer\nisReadOnly: true\n---\nReview carefully.",
+        encoding="utf-8",
+    )
+    captured = {}
+
+    def factory(registry):
+        captured["tools"] = {tool.name for tool in registry.list()}
+        return ScriptedModel([AgentStep(type="assistant", content="reviewed")])
+
+    tool = create_task_tool(str(tmp_path), None, model_factory=factory)
+    parsed = tool.validator({"agent_type": "reviewer", "task": "review this"})
+    result = tool.run(parsed, ToolContext(cwd=str(tmp_path), permissions=None))
+
+    assert result.ok
+    assert "Reviewer" in result.output
+    assert "write_file" not in captured["tools"]
+    assert "run_command" not in captured["tools"]
+
+
+def test_task_tool_records_model_usage_on_trace():
+    from pepsicode.agents.trace import TraceManager
+    from pepsicode.tools.task import create_task_tool
+
+    trace = TraceManager(session_id="root")
+
+    def factory(registry):
+        return ScriptedModel(
+            [AgentStep(type="assistant", content="done")],
+            last_usage={"model": "test", "input_tokens": 123, "output_tokens": 45},
+        )
+
+    tool = create_task_tool(".", None, model_factory=factory, trace_manager=trace)
+    parsed = tool.validator({"agent_type": "explore", "task": "find it"})
+    result = tool.run(parsed, ToolContext(cwd=".", permissions=None))
+
+    assert result.ok
+    assert "in=123" in result.output
+    assert "out=45" in result.output
+    node = trace.all_nodes()[0]
+    assert node.input_tokens == 123
+    assert node.output_tokens == 45
+
+
+def test_agent_model_override_updates_child_runtime():
+    from pepsicode.sub_agents import AgentDefinition
+    from pepsicode.tools.task import _runtime_for_agent
+
+    definition = AgentDefinition.general_agent()
+    definition.model = "child-model"
+    parent_runtime = {"model": "parent-model", "apiKey": "secret"}
+
+    child_runtime = _runtime_for_agent(parent_runtime, definition)
+
+    assert child_runtime["model"] == "child-model"
+    assert child_runtime["apiKey"] == "secret"
+    assert parent_runtime["model"] == "parent-model"
+
+
 def test_task_tool_requires_model():
     from pepsicode.tools.task import create_task_tool
 

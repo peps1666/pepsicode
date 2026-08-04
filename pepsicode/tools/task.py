@@ -32,6 +32,7 @@ from pepsicode.tools.run_command import run_command_tool
 
 # Additional write/exec tools available to the general-purpose sub-agent.
 from pepsicode.tools.write_file import write_file_tool
+from pepsicode.types import ChatMessage
 
 # The pool of tools a sub-agent can ever access.  Individual agents get a
 # filtered subset via :func:`resolve_agent_tools` based on their
@@ -63,6 +64,30 @@ _AGENT_TYPES = {
     "verification": AgentType.GENERAL,  # specialized general agent
 }
 
+_FALLBACK_FACTORIES: dict[str, Callable[[], AgentDefinition]] = {
+    "explore": AgentDefinition.explore_agent,
+    "plan": AgentDefinition.plan_agent,
+    "general": AgentDefinition.general_agent,
+    "verification": AgentDefinition.verification_agent,
+}
+
+
+def _load_agent_definition(agent_name: str, cwd: str) -> AgentDefinition | None:
+    """Load a markdown definition, with safe compatibility fallbacks."""
+    definition = get_default_loader(cwd).get(agent_name)
+    if definition is not None:
+        return definition
+    factory = _FALLBACK_FACTORIES.get(agent_name)
+    return factory() if factory is not None else None
+
+
+def _runtime_for_agent(runtime: dict[str, Any], definition: AgentDefinition) -> dict[str, Any]:
+    """Return an isolated runtime config honoring the agent's model override."""
+    child_runtime = dict(runtime)
+    if definition.model and definition.model.lower() != "inherit":
+        child_runtime["model"] = definition.model
+    return child_runtime
+
 
 def create_task_tool(
     cwd: str,
@@ -90,8 +115,11 @@ def create_task_tool(
 
     def _validate(input_data: dict) -> dict:
         agent_type = str(input_data.get("agent_type", "explore")).strip().lower()
-        if agent_type not in _AGENT_TYPES:
-            raise ValueError(f"agent_type must be one of {sorted(_AGENT_TYPES)}")
+        if not agent_type:
+            raise ValueError("agent_type must not be empty")
+        if _load_agent_definition(agent_type, cwd) is None:
+            available = sorted(set(_AGENT_TYPES) | set(get_default_loader(cwd).list_names()))
+            raise ValueError(f"unknown agent_type {agent_type!r}; available agents: {available}")
         task = input_data.get("task")
         if not isinstance(task, str) or not task.strip():
             raise ValueError("task is required")
@@ -106,15 +134,10 @@ def create_task_tool(
         # Load the agent definition from markdown files (hot-reloadable).
         # Falls back to the built-in AgentDefinition classmethods when the
         # loader cannot find a file, so existing behavior is preserved.
-        loader = get_default_loader(context.cwd or cwd)
-        definition = loader.get(agent_key)
+        effective_cwd = context.cwd or cwd
+        definition = _load_agent_definition(agent_key, effective_cwd)
         if definition is None:
-            agent_type = _AGENT_TYPES[agent_key]
-            definition = {
-                AgentType.EXPLORE: AgentDefinition.explore_agent,
-                AgentType.PLAN: AgentDefinition.plan_agent,
-                AgentType.GENERAL: AgentDefinition.general_agent,
-            }[agent_type]()
+            return ToolResult(ok=False, output=f"Agent definition not found: {agent_key}")
 
         sub_registry = resolve_agent_tools(_SUB_AGENT_TOOL_POOL, definition)
 
@@ -123,7 +146,7 @@ def create_task_tool(
         elif runtime is not None:
             from pepsicode.anthropic_adapter import AnthropicModelAdapter
 
-            sub_model = AnthropicModelAdapter(runtime, sub_registry)
+            sub_model = AnthropicModelAdapter(_runtime_for_agent(runtime, definition), sub_registry)
         else:
             return ToolResult(
                 ok=False,
@@ -159,7 +182,15 @@ def create_task_tool(
                 except Exception:  # noqa: BLE001
                     pass
 
-        sub_messages = [
+        def _record_trace_usage(usage: dict) -> None:
+            if trace_manager is not None and trace_node is not None:
+                trace_manager.record_tokens(
+                    trace_node.trace_id,
+                    usage.get("input_tokens", 0),
+                    usage.get("output_tokens", 0),
+                )
+
+        sub_messages: list[ChatMessage] = [
             {"role": "system", "content": definition.system_prompt_template},
             {"role": "user", "content": parsed["task"]},
         ]
@@ -172,15 +203,16 @@ def create_task_tool(
                 permissions=context.permissions,
                 max_steps=definition.max_turns,
                 cost_tracker=cost_tracker,
+                on_usage=_record_trace_usage,
                 on_tool_start=_wrap_tool_start,
                 on_tool_result=_wrap_tool_result,
             )
         except Exception as error:  # noqa: BLE001
-            if trace_node is not None:
+            if trace_manager is not None and trace_node is not None:
                 trace_manager.complete(trace_node.trace_id, status="failed")
             return ToolResult(ok=False, output=f"Sub-agent ({definition.name}) failed: {error}")
 
-        if trace_node is not None:
+        if trace_manager is not None and trace_node is not None:
             trace_manager.complete(trace_node.trace_id, status="completed")
 
         final = next(
@@ -189,7 +221,7 @@ def create_task_tool(
         )
         tool_calls = sum(1 for m in result_messages if m.get("role") == "assistant_tool_call")
         summary = f"[Sub-agent {definition.name} completed | tool calls: {tool_calls}]"
-        if trace_node is not None:
+        if trace_manager is not None and trace_node is not None:
             summary += " " + trace_manager.format_summary(trace_node.trace_id)
         summary += f"\n\n{final}"
         return ToolResult(ok=True, output=summary)
@@ -209,7 +241,7 @@ def create_task_tool(
             "properties": {
                 "agent_type": {
                     "type": "string",
-                    "enum": ["explore", "plan", "general", "verification"],
+                    "description": "Built-in or project/user-defined markdown agent name",
                 },
                 "task": {"type": "string", "description": "Self-contained task description for the sub-agent"},
             },

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import time
+import tomllib
 from pathlib import Path
 
 from pepsicode.agents.parser import parse_frontmatter
@@ -144,6 +145,18 @@ class TestToolFilter:
         assert "run_command" in names
         assert "write_file" not in names
 
+    def test_read_only_flag_enforces_capability_boundary(self):
+        registry = ToolRegistry([_make_tool("read_file"), _make_tool("write_file"), _make_tool("run_command")])
+        defn = AgentDefinition(
+            type=AgentType.GENERAL,
+            name="Custom Read Only",
+            description="",
+            system_prompt_template="",
+            is_read_only=True,
+        )
+        result = resolve_agent_tools(registry, defn)
+        assert {tool.name for tool in result.list()} == {"read_file"}
+
     def test_empty_pool_returns_empty(self):
         registry = ToolRegistry([])
         defn = AgentDefinition(
@@ -248,6 +261,15 @@ class TestAgentLoader:
         assert "VERDICT" in defn.system_prompt_template
         assert "write_file" in defn.disallowed_tools
 
+    def test_load_builtin_general(self, tmp_path: Path):
+        from pepsicode.agents.loader import AgentLoader
+
+        loader = AgentLoader(tmp_path)
+        defn = loader.get("general")
+        assert defn is not None
+        assert defn.name == "General"
+        assert defn.max_turns == 15
+
     def test_project_overrides_builtin(self, tmp_path: Path):
         from pepsicode.agents.loader import AgentLoader
 
@@ -294,7 +316,7 @@ class TestAgentLoader:
         names = loader.list_names()
         assert "explore" in names
         assert "plan" in names
-        assert "general-purpose" in names
+        assert "general" in names
         assert "verification" in names
 
     def test_get_nonexistent_returns_none(self, tmp_path: Path):
@@ -309,3 +331,14 @@ class TestAgentLoader:
         loader = AgentLoader(tmp_path)
         assert loader.get("") is None
         assert loader.get("   ") is None
+
+    def test_rejects_path_traversal_name(self, tmp_path: Path):
+        from pepsicode.agents.loader import AgentLoader
+
+        loader = AgentLoader(tmp_path)
+        assert loader.get("../explore") is None
+
+
+def test_builtin_agent_markdown_is_declared_as_package_data():
+    project = tomllib.loads((Path(__file__).parents[1] / "pyproject.toml").read_text(encoding="utf-8"))
+    assert "agents/builtins/*.md" in project["tool"]["setuptools"]["package-data"]["pepsicode"]

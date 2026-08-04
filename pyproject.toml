@@ -81,5 +81,8 @@ fail_under = 60
 [tool.setuptools]
 package-dir = {"" = "."}
 
+[tool.setuptools.package-data]
+pepsicode = ["agents/builtins/*.md"]
+
 [tool.setuptools.packages.find]
 where = ["."]
