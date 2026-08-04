@@ -1051,7 +1051,8 @@ def _render_stream_screen(args: TtyAppArgs, state: ScreenState) -> None:
     state.transcript_total_lines = total
 
     cwd_name = Path(args.cwd).name or args.cwd
-    footer = f"  {SUBTLE}{cwd_name}{RESET}  {SUBTLE}{msg_count} events{RESET}  {SUBTLE}v0.1{RESET}"
+    mode_label = f"  {YELLOW}PLAN{RESET}" if args.permissions.is_plan_mode else ""
+    footer = f"  {SUBTLE}{cwd_name}{RESET}  {SUBTLE}{msg_count} events{RESET}" f"{mode_label}  {SUBTLE}v0.1{RESET}"
 
     frame = _truncate_frame_lines(transcript_lines, cols, transcript_height) + [sep] + input_lines + [footer]
     frame = _truncate_frame_lines(frame, cols, rows)
@@ -1405,6 +1406,30 @@ def _handle_input(
     if state.autosave:
         state.autosave.mark_dirty()
 
+    if input_text == "/plan" or input_text.startswith("/plan "):
+        plan_path = args.permissions.enter_plan_mode()
+        if state.session:
+            state.session.permission_mode = args.permissions.mode.value
+            state.session.plan_file_path = args.permissions.plan_file_path
+        task = input_text[len("/plan") :].strip()
+        _push_transcript_entry(
+            state,
+            kind="assistant",
+            body=f"Plan mode active — read-only except for:\n{plan_path}",
+        )
+        if not task:
+            state.status = "PLAN mode"
+            rerender()
+            return False
+        input_text = task
+
+    if input_text.startswith("/"):
+        try:
+            args.permissions.ensure_local_command_allowed(input_text)
+        except RuntimeError as error:
+            _push_transcript_entry(state, kind="assistant", body=str(error))
+            return False
+
     # /tools
     if input_text == "/tools":
         _push_transcript_entry(
@@ -1423,7 +1448,7 @@ def _handle_input(
         return False
 
     # Local commands
-    local_result = try_handle_local_command(input_text, tools=args.tools)
+    local_result = try_handle_local_command(input_text, tools=args.tools, permissions=args.permissions)
     if local_result is not None:
         _push_transcript_entry(state, kind="assistant", body=local_result)
         return False
@@ -1477,6 +1502,8 @@ def _handle_input(
                 "skills": args.tools.get_skills(),
                 "mcpServers": args.tools.get_mcp_servers(),
                 "governance": bool(args.runtime.get("governance")) if args.runtime else False,
+                "planMode": args.permissions.is_plan_mode,
+                "planFilePath": args.permissions.plan_file_path,
             },
         ),
     }
@@ -1830,6 +1857,8 @@ def run_tty_app(
     if not session:
         session = create_new_session(workspace=str(Path(cwd).resolve()))
 
+    permissions.restore_plan_state(session.permission_mode, session.plan_file_path)
+
     # Initialize AppState store (Zustand-style)
     app_state_store = create_app_store(
         {
@@ -1958,6 +1987,14 @@ def run_tty_app(
                         if agent_result_data.get("messages"):
                             args.messages = agent_result_data["messages"]
                         agent_result_data["done"] = False  # Reset flag
+                    plan_followup = args.permissions.consume_plan_followup()
+                    if state.session:
+                        state.session.permission_mode = args.permissions.mode.value
+                        state.session.plan_file_path = args.permissions.plan_file_path
+                        if state.autosave:
+                            state.autosave.mark_dirty()
+                    if plan_followup and not state.is_busy:
+                        _handle_input(args, state, rerender, submitted_raw_input=plan_followup)
 
                 # Read raw input
                 if sys.platform == "win32":
@@ -2054,6 +2091,8 @@ def run_tty_app(
             state.session.permissions_summary = args.permissions.get_summary()
             state.session.skills = args.tools.get_skills()
             state.session.mcp_servers = args.tools.get_mcp_servers()
+            state.session.permission_mode = args.permissions.mode.value
+            state.session.plan_file_path = args.permissions.plan_file_path
 
             # Force save
             if state.autosave:

@@ -121,10 +121,15 @@ class ToolDefinition:
     input_schema: dict[str, Any]
     validator: Validator
     run: Runner
+    capabilities: set[ToolCapability] = field(default_factory=set)
     # Read-only tools with no side effects can run concurrently with each
     # other.  Tools that write files, run commands, or otherwise mutate state
     # must run exclusively (default).  See agent_loop._execute_calls.
     concurrency_safe: bool = False
+
+    @property
+    def is_read_only(self) -> bool:
+        return ToolCapability.READ_ONLY in self.capabilities
 
 
 class ToolRegistry:
@@ -162,6 +167,9 @@ class ToolRegistry:
 
         try:
             parsed = tool.validator(input_data)
+            permissions = context.permissions
+            if permissions is not None and hasattr(permissions, "ensure_tool_allowed"):
+                permissions.ensure_tool_allowed(tool, parsed)
             return tool.run(parsed, context)
         except (KeyboardInterrupt, SystemExit):
             # 这些异常应该向上传播，不应该被捕获

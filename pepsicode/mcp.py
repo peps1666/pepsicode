@@ -11,7 +11,7 @@ from pathlib import Path
 from queue import Empty, Queue
 from typing import Any, Protocol, runtime_checkable
 
-from pepsicode.tooling import ToolDefinition, ToolResult
+from pepsicode.tooling import ToolCapability, ToolDefinition, ToolResult
 
 # =============================================================================
 # Security: command validation constants
@@ -876,6 +876,7 @@ def create_mcp_backed_tools(*, cwd: str, mcp_servers: dict[str, dict[str, Any]])
                     )
                     or "No MCP resources available.",
                 ),
+                capabilities={ToolCapability.READ_ONLY},
             )
         )
 
@@ -896,6 +897,7 @@ def create_mcp_backed_tools(*, cwd: str, mcp_servers: dict[str, dict[str, Any]])
                 },
                 validator=lambda value: value,
                 run=_read_resource,
+                capabilities={ToolCapability.READ_ONLY},
             )
         )
 
@@ -928,6 +930,7 @@ def create_mcp_backed_tools(*, cwd: str, mcp_servers: dict[str, dict[str, Any]])
                     )
                     or "No MCP prompts available.",
                 ),
+                capabilities={ToolCapability.READ_ONLY},
             )
         )
 
@@ -952,6 +955,7 @@ def create_mcp_backed_tools(*, cwd: str, mcp_servers: dict[str, dict[str, Any]])
                 },
                 validator=lambda value: value,
                 run=_get_prompt,
+                capabilities={ToolCapability.READ_ONLY},
             )
         )
 

@@ -241,6 +241,26 @@ def build_system_prompt(
     if permission_summary:
         parts.append("Permission context:\n" + "\n".join(permission_summary))
 
+    if extras.get("planMode"):
+        plan_path = str(extras.get("planFilePath") or "(not initialized)")
+        parts.append(
+            f"""PLAN MODE IS ACTIVE. This overrides all general instructions to modify or execute.
+You must only investigate and produce an implementation plan. Do not modify the workspace, run commands, change configuration, create commits, or call side-effecting tools.
+
+The only file you may create or edit is the plan file below:
+{plan_path}
+
+Workflow:
+1. Read and search the relevant code until you understand the request and reusable patterns.
+2. If useful, call task only with agent_type='explore' or agent_type='plan'.
+3. Call ask_user when a material product or implementation decision cannot be inferred safely.
+4. Write the recommended plan to the plan file using write_file, then update only that same file with edit_file.
+5. The plan must include context, exact files to change, implementation details, safety considerations, and verification steps.
+6. When the plan is complete, call exit_plan_mode as the only tool call in the response.
+
+Never treat ordinary edit approval as permission to bypass Plan mode."""
+        )
+
     skills = extras.get("skills", [])
     if skills:
         parts.append(

@@ -3,7 +3,7 @@ from typing import Any
 
 from pepsicode.mcp import create_mcp_backed_tools
 from pepsicode.skills import discover_skills
-from pepsicode.tooling import ToolRegistry
+from pepsicode.tooling import ToolCapability, ToolRegistry
 from pepsicode.tools.api_tester import api_tester_tool
 from pepsicode.tools.ask_user import ask_user_tool
 from pepsicode.tools.code_nav import find_references_tool, find_symbols_tool, get_ast_info_tool
@@ -12,6 +12,7 @@ from pepsicode.tools.db_explorer import db_explorer_tool
 from pepsicode.tools.diff_viewer import diff_viewer_tool
 from pepsicode.tools.docker_helper import docker_helper_tool
 from pepsicode.tools.edit_file import edit_file_tool
+from pepsicode.tools.exit_plan_mode import exit_plan_mode_tool
 from pepsicode.tools.file_tree import file_tree_tool
 from pepsicode.tools.git import git_tool
 from pepsicode.tools.governance_audit_tool import governance_audit_tool
@@ -34,6 +35,23 @@ from pepsicode.tools.web_search import web_search_tool
 from pepsicode.tools.worktree import worktree_tool
 from pepsicode.tools.write_file import write_file_tool
 
+_READ_ONLY_TOOLS = (
+    list_files_tool,
+    grep_files_tool,
+    read_file_tool,
+    web_fetch_tool,
+    web_search_tool,
+    find_symbols_tool,
+    find_references_tool,
+    get_ast_info_tool,
+    code_review_tool,
+    file_tree_tool,
+    diff_viewer_tool,
+    governance_audit_tool,
+)
+for _tool in _READ_ONLY_TOOLS:
+    _tool.capabilities.add(ToolCapability.READ_ONLY)
+
 
 def create_default_tool_registry(
     cwd: str,
@@ -48,6 +66,7 @@ def create_default_tool_registry(
         [
             # User interaction
             ask_user_tool,
+            exit_plan_mode_tool,
             # File operations
             list_files_tool,
             grep_files_tool,

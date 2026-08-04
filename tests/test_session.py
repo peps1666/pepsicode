@@ -53,6 +53,8 @@ def test_save_and_load_session(temp_session_dir):
         {"id": 1, "kind": "user", "body": "Hello"},
         {"id": 2, "kind": "assistant", "body": "Hi there!"},
     ]
+    session.permission_mode = "plan"
+    session.plan_file_path = "/tmp/test/.pepsi-code/plans/example.md"
 
     save_session(session)
 
@@ -67,6 +69,8 @@ def test_save_and_load_session(temp_session_dir):
     assert len(loaded.messages) == 2
     assert len(loaded.transcript_entries) == 2
     assert loaded.workspace == "/tmp/test"
+    assert loaded.permission_mode == "plan"
+    assert loaded.plan_file_path == "/tmp/test/.pepsi-code/plans/example.md"
 
 
 def test_load_nonexistent_session(temp_session_dir):
