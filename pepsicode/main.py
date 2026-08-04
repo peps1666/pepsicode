@@ -391,6 +391,7 @@ def main() -> None:
 
                 # Log context usage after turn
                 if context_mgr:
+                    context_mgr.messages = [dict(message) for message in messages]
                     stats = context_mgr.get_stats()
                     logger.debug("After turn: %d tokens (%.0f%%)", stats.total_tokens, stats.usage_percentage)
                     save_context_state(context_mgr)

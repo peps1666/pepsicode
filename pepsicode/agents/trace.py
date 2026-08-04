@@ -163,8 +163,7 @@ class TraceManager:
         """Render a one-line summary suitable for appending to tool output."""
         totals = self.get_total(trace_id)
         return (
-            f"[trace: in={totals['input_tokens']} out={totals['output_tokens']} "
-            f"tool_calls={totals['tool_call_count']}]"
+            f"[trace: in={totals['input_tokens']} out={totals['output_tokens']} tool_calls={totals['tool_call_count']}]"
         )
 
 

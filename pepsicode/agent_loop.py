@@ -5,6 +5,7 @@ from concurrent.futures import ThreadPoolExecutor
 from typing import Any, cast
 
 from pepsicode.anthropic_adapter import ContextOverflowError
+from pepsicode.context_artifacts import ContextArtifactStore, prepare_tool_result
 from pepsicode.context_manager import ContextManager
 from pepsicode.cost_tracker import BudgetExceededError, CostTracker
 from pepsicode.logging_config import get_logger
@@ -267,8 +268,10 @@ def run_agent_turn(
     overflow_retry_count = 0
     tool_error_count = 0
     step = 0
+    artifact_store = ContextArtifactStore.for_workspace(cwd)
 
     if context_manager:
+        context_manager.update_runtime_state(cwd, permissions)
         context_manager.messages = cast(list[dict[str, Any]], current_messages)
         stats = context_manager.get_stats()
         logger.info(
@@ -304,6 +307,18 @@ def run_agent_turn(
                 )
                 context_manager.messages = cast(list[dict[str, Any]], current_messages)
                 current_messages = cast(list[ChatMessage], context_manager.compact_messages(force=True))
+                if not context_manager.last_compaction_changed:
+                    if overflow_retry_count == 1:
+                        logger.warning("Compaction made no change; allowing one direct retry before circuit break")
+                        step -= 1
+                        continue
+                    reason = context_manager.last_compaction_error or "no safe reduction was available"
+                    fallback = f"Context too large and safe compaction made no progress ({reason}): {error}"
+                    logger.error("Context overflow, compaction circuit stopped retries: %s", reason)
+                    if on_assistant_message:
+                        on_assistant_message(fallback)
+                    current_messages.append({"role": "assistant", "content": fallback})
+                    return current_messages
                 if on_progress_message:
                     on_progress_message(context_manager.get_context_summary())
                 step -= 1  # don't consume a step on a pure retry
@@ -501,15 +516,29 @@ def run_agent_turn(
             saw_tool_result = True
             if not result.ok:
                 tool_error_count += 1
+            tool = tools.find(call["toolName"])
+            bounded_output = prepare_tool_result(
+                tool_name=call["toolName"],
+                output=result.output,
+                budget_chars=tool.max_result_size_chars if tool is not None else 10_000,
+                artifact_store=artifact_store,
+            )
             current_messages.append(
                 {
                     "role": "tool_result",
                     "toolUseId": call["id"],
                     "toolName": call["toolName"],
-                    "content": result.output,
+                    "content": bounded_output,
                     "isError": not result.ok,
                 }
             )
+            if context_manager is not None:
+                context_manager.observe_tool_result(
+                    call["toolName"],
+                    call.get("input") or {},
+                    bounded_output,
+                    result.ok,
+                )
             if result.awaitUser and await_user_result is None:
                 await_user_result = result
 
@@ -636,8 +665,10 @@ def run_agent_turn_stream(
     overflow_retry_count = 0
     tool_error_count = 0
     step = 0
+    artifact_store = ContextArtifactStore.for_workspace(cwd)
 
     if context_manager:
+        context_manager.update_runtime_state(cwd, permissions)
         context_manager.messages = cast(list[dict[str, Any]], current_messages)
         stats = context_manager.get_stats()
         logger.info(
@@ -692,6 +723,18 @@ def run_agent_turn_stream(
                 )
                 context_manager.messages = cast(list[dict[str, Any]], current_messages)
                 current_messages = cast(list[ChatMessage], context_manager.compact_messages(force=True))
+                if not context_manager.last_compaction_changed:
+                    if overflow_retry_count == 1:
+                        logger.warning("Compaction made no change; allowing one direct retry before circuit break")
+                        step -= 1
+                        continue
+                    reason = context_manager.last_compaction_error or "no safe reduction was available"
+                    fallback = f"Context too large and safe compaction made no progress ({reason}): {error}"
+                    logger.error("Context overflow, compaction circuit stopped retries: %s", reason)
+                    if on_assistant_message:
+                        on_assistant_message(fallback)
+                    current_messages.append({"role": "assistant", "content": fallback})
+                    return current_messages
                 if on_progress_message:
                     on_progress_message(context_manager.get_context_summary())
                 step -= 1
@@ -792,15 +835,29 @@ def run_agent_turn_stream(
                 saw_tool_result = True
                 if not result.ok:
                     tool_error_count += 1
+                tool = tools.find(call["toolName"])
+                bounded_output = prepare_tool_result(
+                    tool_name=call["toolName"],
+                    output=result.output,
+                    budget_chars=tool.max_result_size_chars if tool is not None else 10_000,
+                    artifact_store=artifact_store,
+                )
                 current_messages.append(
                     {
                         "role": "tool_result",
                         "toolUseId": call["id"],
                         "toolName": call["toolName"],
-                        "content": result.output,
+                        "content": bounded_output,
                         "isError": not result.ok,
                     }
                 )
+                if context_manager is not None:
+                    context_manager.observe_tool_result(
+                        call["toolName"],
+                        call.get("input") or {},
+                        bounded_output,
+                        result.ok,
+                    )
                 if result.awaitUser and await_user_result is None:
                     await_user_result = result
 

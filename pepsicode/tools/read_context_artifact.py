@@ -34,7 +34,7 @@ def _run(input_data: dict, context) -> ToolResult:
     )
     return ToolResult(
         ok=True,
-        output=(f"[Artifact {input_data['artifact_id']} chars {input_data['offset']}:{end} of {total}]\n" f"{chunk}"),
+        output=(f"[Artifact {input_data['artifact_id']} chars {input_data['offset']}:{end} of {total}]\n{chunk}"),
     )
 
 

@@ -6,12 +6,14 @@ auto-compaction to prevent context overflow in long conversations.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import time
 from dataclasses import dataclass, field
 from typing import Any
 
 from pepsicode.config import PEPSI_CODE_DIR
+from pepsicode.context_artifacts import ARTIFACT_REFERENCE_PATTERN
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -40,6 +42,12 @@ MIN_MESSAGES_TO_KEEP = 10
 
 # System prompt is always kept (counts as 1 message)
 SYSTEM_PROMPT_RESERVED = 1
+COMPACT_TARGET_RATIO = 0.70
+MINIMUM_COMPACTION_REDUCTION_RATIO = 0.20
+PROTECTED_RECENT_GROUPS = 3
+MAX_COMPACTION_ATTEMPTS = 3
+MAX_ROLLING_SUMMARY_CHARS = 6_000
+MAX_ROLLING_ARTIFACT_IDS = 50
 
 
 # ---------------------------------------------------------------------------
@@ -178,6 +186,15 @@ def _heuristic_summary(messages: list[dict[str, Any]]) -> str:
     return "\n".join(lines)
 
 
+def _merge_rolling_summary(previous: str, current: str) -> str:
+    combined = "\n\n".join(part.strip() for part in (previous, current) if part.strip())
+    if len(combined) <= MAX_ROLLING_SUMMARY_CHARS:
+        return combined
+    tail_size = MAX_ROLLING_SUMMARY_CHARS // 4
+    head_size = MAX_ROLLING_SUMMARY_CHARS - tail_size - 48
+    return combined[:head_size] + "\n\n[older rolling summary truncated]\n\n" + combined[-tail_size:]
+
+
 # ---------------------------------------------------------------------------
 # Context tracking
 # ---------------------------------------------------------------------------
@@ -198,6 +215,236 @@ class ContextStats:
     should_compact: bool = False
 
 
+@dataclass(slots=True)
+class RecentFile:
+    path: str
+    operation: str
+    content_hash: str | None = None
+    reason: str = ""
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "path": self.path,
+            "operation": self.operation,
+            "content_hash": self.content_hash,
+            "reason": self.reason,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> RecentFile:
+        return cls(
+            path=str(data.get("path", "")),
+            operation=str(data.get("operation", "read")),
+            content_hash=data.get("content_hash"),
+            reason=str(data.get("reason", "")),
+        )
+
+
+@dataclass(slots=True)
+class RecoveryState:
+    recent_files: list[RecentFile] = field(default_factory=list)
+    active_skills: list[str] = field(default_factory=list)
+    active_plan_path: str | None = None
+    permission_mode: str = "default"
+    current_tasks: list[str] = field(default_factory=list)
+    last_verification: str | None = None
+    workspace: str = ""
+
+    def remember_file(self, path: str, operation: str, reason: str = "") -> None:
+        candidate = path.strip()[:500]
+        if not candidate:
+            return
+        self.recent_files = [item for item in self.recent_files if item.path != candidate]
+        self.recent_files.append(RecentFile(path=candidate, operation=operation, reason=reason))
+        self.recent_files = self.recent_files[-12:]
+
+    def render(self) -> str:
+        lines = ["Recovered working state:"]
+        if self.workspace:
+            lines.append(f"- Workspace: {self.workspace}")
+        lines.append(f"- Permission mode: {self.permission_mode}")
+        if self.active_plan_path:
+            lines.append(f"- Active plan: {self.active_plan_path}")
+        if self.active_skills:
+            lines.append("- Active skills: " + ", ".join(item[:100] for item in self.active_skills[-8:]))
+        if self.recent_files:
+            lines.append("- Recent files:")
+            lines.extend(f"  - {item.path[:500]} ({item.operation[:40]})" for item in self.recent_files[-8:])
+        if self.current_tasks:
+            lines.append("- Current tasks:")
+            lines.extend(f"  - {task[:500]}" for task in self.current_tasks[-8:])
+        if self.last_verification:
+            lines.append(f"- Last verification: {self.last_verification[:500]}")
+        return "\n".join(lines)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "recent_files": [item.to_dict() for item in self.recent_files],
+            "active_skills": list(self.active_skills),
+            "active_plan_path": self.active_plan_path,
+            "permission_mode": self.permission_mode,
+            "current_tasks": list(self.current_tasks),
+            "last_verification": self.last_verification,
+            "workspace": self.workspace,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any] | None) -> RecoveryState:
+        data = data or {}
+        return cls(
+            recent_files=[
+                RecentFile.from_dict(item) for item in data.get("recent_files", []) if isinstance(item, dict)
+            ],
+            active_skills=[str(item) for item in data.get("active_skills", [])],
+            active_plan_path=data.get("active_plan_path"),
+            permission_mode=str(data.get("permission_mode", "default")),
+            current_tasks=[str(item) for item in data.get("current_tasks", [])],
+            last_verification=data.get("last_verification"),
+            workspace=str(data.get("workspace", "")),
+        )
+
+
+@dataclass(slots=True)
+class CompactBoundary:
+    version: int
+    summary: str
+    compacted_message_count: int
+    before_tokens: int
+    after_tokens: int
+    protected_tail_count: int
+    artifact_ids: list[str]
+    created_at: float
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "version": self.version,
+            "summary": self.summary,
+            "compacted_message_count": self.compacted_message_count,
+            "before_tokens": self.before_tokens,
+            "after_tokens": self.after_tokens,
+            "protected_tail_count": self.protected_tail_count,
+            "artifact_ids": list(self.artifact_ids),
+            "created_at": self.created_at,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> CompactBoundary:
+        return cls(
+            version=int(data.get("version", 1)),
+            summary=str(data.get("summary", "")),
+            compacted_message_count=int(data.get("compacted_message_count", 0)),
+            before_tokens=int(data.get("before_tokens", 0)),
+            after_tokens=int(data.get("after_tokens", 0)),
+            protected_tail_count=int(data.get("protected_tail_count", 0)),
+            artifact_ids=[str(item) for item in data.get("artifact_ids", [])],
+            created_at=float(data.get("created_at", 0.0)),
+        )
+
+
+@dataclass(slots=True)
+class CompactCircuitBreaker:
+    attempts: int = 0
+    last_fingerprint: str = ""
+    last_before_tokens: int = 0
+    last_after_tokens: int = 0
+    max_attempts: int = MAX_COMPACTION_ATTEMPTS
+    minimum_reduction_ratio: float = MINIMUM_COMPACTION_REDUCTION_RATIO
+    blocked_reason: str = ""
+
+    def can_attempt(self, fingerprint: str) -> bool:
+        if self.attempts >= self.max_attempts:
+            self.blocked_reason = "maximum consecutive compaction attempts reached"
+            return False
+        if self.last_fingerprint == fingerprint and self.attempts > 0:
+            self.blocked_reason = "the context is unchanged since the previous compaction attempt"
+            return False
+        self.blocked_reason = ""
+        return True
+
+    def record(self, *, fingerprint: str, before_tokens: int, after_tokens: int, accepted: bool) -> None:
+        self.last_fingerprint = fingerprint
+        self.last_before_tokens = before_tokens
+        self.last_after_tokens = after_tokens
+        self.attempts = 0 if accepted else self.attempts + 1
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "attempts": self.attempts,
+            "last_fingerprint": self.last_fingerprint,
+            "last_before_tokens": self.last_before_tokens,
+            "last_after_tokens": self.last_after_tokens,
+            "max_attempts": self.max_attempts,
+            "minimum_reduction_ratio": self.minimum_reduction_ratio,
+            "blocked_reason": self.blocked_reason,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any] | None) -> CompactCircuitBreaker:
+        data = data or {}
+        return cls(
+            attempts=int(data.get("attempts", 0)),
+            last_fingerprint=str(data.get("last_fingerprint", "")),
+            last_before_tokens=int(data.get("last_before_tokens", 0)),
+            last_after_tokens=int(data.get("last_after_tokens", 0)),
+            max_attempts=int(data.get("max_attempts", MAX_COMPACTION_ATTEMPTS)),
+            minimum_reduction_ratio=float(data.get("minimum_reduction_ratio", MINIMUM_COMPACTION_REDUCTION_RATIO)),
+            blocked_reason=str(data.get("blocked_reason", "")),
+        )
+
+
+def context_fingerprint(messages: list[dict[str, Any]]) -> str:
+    payload = json.dumps(messages, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _group_atomic_messages(messages: list[dict[str, Any]]) -> list[list[dict[str, Any]]]:
+    """Group multi-tool batches and their thinking/progress prefix atomically."""
+    groups: list[list[dict[str, Any]]] = []
+    prefix: list[dict[str, Any]] = []
+    index = 0
+    while index < len(messages):
+        message = messages[index]
+        role = message.get("role")
+        if role in {"assistant_thinking", "assistant_progress"}:
+            prefix.append(message)
+            index += 1
+            continue
+        if role == "assistant_tool_call":
+            batch = list(prefix)
+            prefix.clear()
+            call_ids: set[str] = set()
+            while index < len(messages) and messages[index].get("role") == "assistant_tool_call":
+                call = messages[index]
+                batch.append(call)
+                if call.get("toolUseId"):
+                    call_ids.add(str(call.get("toolUseId")))
+                index += 1
+            while index < len(messages) and messages[index].get("role") == "tool_result":
+                result = messages[index]
+                if call_ids and str(result.get("toolUseId")) not in call_ids:
+                    break
+                batch.append(result)
+                index += 1
+            groups.append(batch)
+            continue
+        group = list(prefix)
+        prefix.clear()
+        group.append(message)
+        groups.append(group)
+        index += 1
+    if prefix:
+        groups.append(prefix)
+    return groups
+
+
+def validate_tool_pairs(messages: list[dict[str, Any]]) -> list[str]:
+    call_ids = {str(m.get("toolUseId")) for m in messages if m.get("role") == "assistant_tool_call"}
+    result_ids = {str(m.get("toolUseId")) for m in messages if m.get("role") == "tool_result"}
+    issues = [f"tool call without result: {item}" for item in sorted(call_ids - result_ids)]
+    issues.extend(f"tool result without call: {item}" for item in sorted(result_ids - call_ids))
+    return issues
+
+
 @dataclass
 class ContextManager:
     """Manages context window tracking and auto-compaction."""
@@ -206,6 +453,12 @@ class ContextManager:
     context_window: int = 0
     messages: list[dict[str, Any]] = field(default_factory=list)
     compaction_history: list[dict[str, Any]] = field(default_factory=list)
+    compact_boundaries: list[CompactBoundary] = field(default_factory=list)
+    recovery_state: RecoveryState = field(default_factory=RecoveryState)
+    circuit_breaker: CompactCircuitBreaker = field(default_factory=CompactCircuitBreaker)
+    protected_recent_groups: int = PROTECTED_RECENT_GROUPS
+    last_compaction_changed: bool = False
+    last_compaction_error: str = ""
     # Real token counts reported by the provider's API (preferred over the
     # char-heuristic estimate when available).
     actual_input_tokens: int = 0
@@ -238,7 +491,7 @@ class ContextManager:
             try:
                 summary = self.summarizer(text)
                 if isinstance(summary, str) and summary.strip():
-                    return summary.strip()
+                    return summary.strip()[:MAX_ROLLING_SUMMARY_CHARS]
             except Exception:  # noqa: BLE001 - never let summarization break compaction
                 pass
         return _heuristic_summary(dropped)
@@ -251,6 +504,56 @@ class ContextManager:
     def add_message(self, message: dict[str, Any]) -> None:
         """Add a message and update tracking."""
         self.messages.append(message)
+
+    def update_runtime_state(self, workspace: str, permissions: Any | None = None) -> None:
+        """Capture the small amount of runtime state needed after compaction."""
+        self.recovery_state.workspace = workspace
+        if permissions is None:
+            return
+        mode = getattr(permissions, "mode", None)
+        self.recovery_state.permission_mode = str(getattr(mode, "value", mode or "default"))
+        self.recovery_state.active_plan_path = (
+            getattr(permissions, "plan_file_path", None) if bool(getattr(permissions, "is_plan_mode", False)) else None
+        )
+
+    def observe_tool_result(
+        self,
+        tool_name: str,
+        arguments: dict[str, Any],
+        output: str,
+        ok: bool,
+    ) -> None:
+        """Update durable recovery hints from a completed tool call."""
+        if tool_name in {
+            "read_file",
+            "write_file",
+            "edit_file",
+            "apply_patch",
+            "grep",
+            "glob",
+        }:
+            path = arguments.get("path") or arguments.get("file_path")
+            if isinstance(path, str):
+                operation = "error" if not ok else tool_name.removesuffix("_file")
+                self.recovery_state.remember_file(path, operation)
+        elif tool_name == "load_skill" and ok:
+            name = arguments.get("name")
+            if isinstance(name, str) and name.strip():
+                skills = [item for item in self.recovery_state.active_skills if item != name.strip()]
+                skills.append(name.strip()[:100])
+                self.recovery_state.active_skills = skills[-8:]
+        elif tool_name == "todo_write" and ok:
+            todos = arguments.get("todos")
+            if isinstance(todos, list):
+                self.recovery_state.current_tasks = [
+                    str(item.get("content"))[:500]
+                    for item in todos
+                    if isinstance(item, dict) and item.get("status", "pending") != "completed" and item.get("content")
+                ][-8:]
+        elif tool_name in {"test_runner", "run_with_debug"}:
+            status = "passed" if ok else "failed"
+            first_line = next((line.strip() for line in output.splitlines() if line.strip()), "")
+            self.recovery_state.last_verification = f"{tool_name} {status}: {first_line}"[:500]
 
     def get_stats(self) -> ContextStats:
         """Calculate current context statistics."""
@@ -303,98 +606,80 @@ class ContextManager:
         return stats.should_compact
 
     def compact_messages(self, force: bool = False) -> list[dict[str, Any]]:
-        """Compact messages to fit within context window.
-
-        Strategy:
-        1. Keep system prompt (always)
-        2. Keep recent messages (last N)
-        3. Summarize/condense older tool calls
-        4. Remove old assistant progress messages
-
-        When ``force`` is True the compaction runs even if the usage threshold
-        has not been crossed (used to recover from an API context-overflow).
-        """
+        """Compact old atomic turns while protecting recent working state."""
+        self.last_compaction_changed = False
+        self.last_compaction_error = ""
         stats = self.get_stats()
         if not force and not stats.should_compact:
             return self.messages
 
-        # Calculate target: reduce to ~70% of context window
-        target_tokens = int(self.context_window * 0.70)
+        fingerprint = context_fingerprint(self.messages)
+        before_estimated = estimate_messages_tokens(self.messages)
+        if not self.circuit_breaker.can_attempt(fingerprint):
+            self.last_compaction_error = self.circuit_breaker.blocked_reason
+            return self.messages
 
-        # Always keep system prompt.  Exclude prior compaction markers from the
-        # real-system set so empty/no-op markers cannot accumulate; genuine
-        # markers (which carry summaries) are re-added below only when work is
-        # done.
+        target_tokens = int(self.context_window * COMPACT_TARGET_RATIO)
         system_messages = [m for m in self.messages if m.get("role") == "system" and not m.get("_compaction_marker")]
         prior_markers = [m for m in self.messages if m.get("role") == "system" and m.get("_compaction_marker")]
         other_messages = [m for m in self.messages if m.get("role") != "system"]
-
-        # Remove old progress messages first
-        filtered = [m for m in other_messages if m.get("role") != "assistant_progress"]
-        progress_removed = len(other_messages) - len(filtered)
-
-        # If still too large, drop oldest messages one at a time, recording
-        # what we drop so we can summarize it.  Prefer dropping tool-call/
-        # tool-result pairs first, then plain assistant/user messages.  Always
-        # keep the most recent messages.
+        retained_markers: list[dict[str, Any]] = []
+        groups = _group_atomic_messages(other_messages)
+        protected_group_count = min(max(0, self.protected_recent_groups), len(groups))
+        droppable_count = len(groups) - protected_group_count
         dropped: list[dict[str, Any]] = []
-        while estimate_messages_tokens(filtered) > target_tokens and len(filtered) > MIN_MESSAGES_TO_KEEP:
-            removed = False
-            for i in range(len(filtered) - MIN_MESSAGES_TO_KEEP):
-                role = filtered[i].get("role")
-                # Drop tool-call + its result as a pair
-                if role == "assistant_tool_call":
-                    if i + 1 < len(filtered) and filtered[i + 1].get("role") == "tool_result":
-                        dropped.extend(filtered[i : i + 2])
-                        del filtered[i : i + 2]
-                    else:
-                        dropped.append(filtered[i])
-                        del filtered[i]
-                    removed = True
-                    break
-                # Drop standalone tool_result (orphaned)
-                if role == "tool_result":
-                    dropped.append(filtered[i])
-                    del filtered[i]
-                    removed = True
-                    break
-                # Drop plain user/assistant messages
-                if role in ("user", "assistant"):
-                    dropped.append(filtered[i])
-                    del filtered[i]
-                    removed = True
-                    break
-
-            if not removed:
+        while droppable_count > 0:
+            retained = [message for group in groups for message in group]
+            candidate = system_messages + retained_markers + retained
+            if estimate_messages_tokens(candidate) <= target_tokens:
                 break
+            first_group = groups[0]
+            if len(retained) - len(first_group) < MIN_MESSAGES_TO_KEEP:
+                break
+            dropped.extend(groups.pop(0))
+            droppable_count -= 1
 
-        # Repair tool_use/tool_result pairing.  Positional dropping above can
-        # leave a tool_result whose assistant_tool_call was dropped (or vice
-        # versa); Anthropic rejects such orphans with a 400.  Pair by id.
-        call_ids = {m.get("toolUseId") for m in filtered if m.get("role") == "assistant_tool_call"}
-        result_ids = {m.get("toolUseId") for m in filtered if m.get("role") == "tool_result"}
-        repaired = []
-        for m in filtered:
-            role = m.get("role")
-            if role == "tool_result" and m.get("toolUseId") not in call_ids:
-                dropped.append(m)
-                continue
-            if role == "assistant_tool_call" and m.get("toolUseId") not in result_ids:
-                dropped.append(m)
-                continue
-            repaired.append(m)
+        filtered = [message for group in groups for message in group]
+        call_ids = {str(m.get("toolUseId")) for m in filtered if m.get("role") == "assistant_tool_call"}
+        result_ids = {str(m.get("toolUseId")) for m in filtered if m.get("role") == "tool_result"}
+        repaired: list[dict[str, Any]] = []
+        for message in filtered:
+            role = message.get("role")
+            tool_use_id = str(message.get("toolUseId"))
+            if (
+                role == "tool_result"
+                and tool_use_id not in call_ids
+                or role == "assistant_tool_call"
+                and tool_use_id not in result_ids
+            ):
+                dropped.append(message)
+            else:
+                repaired.append(message)
         filtered = repaired
 
-        # If nothing actually changed, return unchanged rather than prepending an
-        # empty marker (which would grow the payload and accumulate over forced
-        # retries).
-        if not dropped and progress_removed == 0:
+        if not dropped:
+            self.last_compaction_error = "no eligible atomic message groups could be removed"
+            self.circuit_breaker.record(
+                fingerprint=fingerprint,
+                before_tokens=before_estimated,
+                after_tokens=before_estimated,
+                accepted=False,
+            )
             return self.messages
 
-        # Summarize what we dropped (LLM if a summarizer is set, else regex).
-        # This preserves file paths, decisions, and unresolved errors that pure
-        # truncation would lose (context-compression layers 2/3).
-        summary_text = self._summarize_dropped(dropped) if dropped else ""
+        current_summary = self._summarize_dropped(dropped)
+        previous_summary = self.compact_boundaries[-1].summary if self.compact_boundaries else ""
+        if not previous_summary and prior_markers:
+            previous_summary = _message_text(prior_markers[-1])[: MAX_ROLLING_SUMMARY_CHARS // 2]
+        summary_text = _merge_rolling_summary(previous_summary, current_summary)
+        current_artifact_ids = {
+            artifact_id
+            for message in dropped
+            for artifact_id in ARTIFACT_REFERENCE_PATTERN.findall(_message_text(message))
+        }
+        previous_artifact_ids = set(self.compact_boundaries[-1].artifact_ids) if self.compact_boundaries else set()
+        artifact_ids = sorted(previous_artifact_ids | current_artifact_ids)[-MAX_ROLLING_ARTIFACT_IDS:]
+        protected_tail_count = sum(len(group) for group in groups[-protected_group_count:])
         marker_body = (
             f"[Context compacted at {time.strftime('%H:%M:%S')}. "
             f"Previous {len(dropped)} messages summarized. "
@@ -403,26 +688,59 @@ class ContextManager:
         )
         if summary_text:
             marker_body += "\n\nSummary of earlier work:\n" + summary_text
+        marker_body += "\n\n" + self.recovery_state.render()
+        if artifact_ids:
+            marker_body += "\n- Recoverable context artifacts: " + ", ".join(artifact_ids)
         compaction_marker = {"role": "system", "content": marker_body, "_compaction_marker": True}
+        compacted = system_messages + retained_markers + [compaction_marker] + filtered
+        pairing_issues = validate_tool_pairs(compacted)
+        after_estimated = estimate_messages_tokens(compacted)
+        reduction_ratio = (before_estimated - after_estimated) / max(1, before_estimated)
+        if pairing_issues or reduction_ratio < self.circuit_breaker.minimum_reduction_ratio:
+            reason = (
+                "; ".join(pairing_issues)
+                if pairing_issues
+                else f"estimated reduction {reduction_ratio:.1%} is below the safety threshold"
+            )
+            self.last_compaction_error = reason
+            self.circuit_breaker.record(
+                fingerprint=fingerprint,
+                before_tokens=before_estimated,
+                after_tokens=after_estimated,
+                accepted=False,
+            )
+            return self.messages
 
-        # Build final message list: real system prompt(s), then prior summaries,
-        # then this compaction's marker, then the surviving recent messages.
-        compacted = system_messages + prior_markers + [compaction_marker] + filtered
-
-        # Record compaction
+        now = time.time()
+        boundary = CompactBoundary(
+            version=1,
+            summary=summary_text,
+            compacted_message_count=len(dropped),
+            before_tokens=stats.total_tokens,
+            after_tokens=after_estimated,
+            protected_tail_count=protected_tail_count,
+            artifact_ids=artifact_ids,
+            created_at=now,
+        )
+        self.compact_boundaries.append(boundary)
+        self.compact_boundaries = self.compact_boundaries[-10:]
         self.compaction_history.append(
             {
-                "timestamp": time.time(),
+                "timestamp": now,
                 "before_tokens": stats.total_tokens,
-                "after_tokens": estimate_messages_tokens(compacted),
+                "after_tokens": after_estimated,
                 "messages_removed": max(0, stats.messages_count - len(compacted)),
             }
         )
-
         self.messages = compacted
-        # The stale API token count described the pre-compaction payload; clear
-        # it so stats fall back to a fresh estimate until the next real usage.
         self.actual_input_tokens = 0
+        self.last_compaction_changed = True
+        self.circuit_breaker.record(
+            fingerprint=fingerprint,
+            before_tokens=before_estimated,
+            after_tokens=after_estimated,
+            accepted=True,
+        )
         return compacted
 
     def get_context_summary(self) -> str:
@@ -475,6 +793,17 @@ class ContextManager:
                     f"{comp['before_tokens']:,} -> {comp['after_tokens']:,} tokens"
                 )
 
+        if self.compact_boundaries:
+            latest = self.compact_boundaries[-1]
+            lines.append("")
+            lines.append(
+                f"Latest boundary: {latest.compacted_message_count} messages summarized, "
+                f"{latest.protected_tail_count} recent messages protected, "
+                f"{len(latest.artifact_ids)} artifact reference(s)"
+            )
+        if self.last_compaction_error:
+            lines.append(f"Last compaction skipped: {self.last_compaction_error}")
+
         return "\n".join(lines)
 
 
@@ -493,6 +822,9 @@ def save_context_state(manager: ContextManager) -> None:
         "context_window": manager.context_window,
         "messages": manager.messages,
         "compaction_history": manager.compaction_history[-10:],  # Keep last 10
+        "compact_boundaries": [item.to_dict() for item in manager.compact_boundaries[-10:]],
+        "recovery_state": manager.recovery_state.to_dict(),
+        "circuit_breaker": manager.circuit_breaker.to_dict(),
     }
 
     state_path.write_text(json.dumps(state, indent=2, ensure_ascii=False), encoding="utf-8")
@@ -511,6 +843,13 @@ def load_context_state() -> ContextManager | None:
             context_window=state.get("context_window", 0),
             messages=state.get("messages", []),
             compaction_history=state.get("compaction_history", []),
+            compact_boundaries=[
+                CompactBoundary.from_dict(item)
+                for item in state.get("compact_boundaries", [])
+                if isinstance(item, dict)
+            ],
+            recovery_state=RecoveryState.from_dict(state.get("recovery_state")),
+            circuit_breaker=CompactCircuitBreaker.from_dict(state.get("circuit_breaker")),
         )
     except (json.JSONDecodeError, KeyError):
         return None

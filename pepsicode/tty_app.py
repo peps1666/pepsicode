@@ -1052,7 +1052,7 @@ def _render_stream_screen(args: TtyAppArgs, state: ScreenState) -> None:
 
     cwd_name = Path(args.cwd).name or args.cwd
     mode_label = f"  {YELLOW}PLAN{RESET}" if args.permissions.is_plan_mode else ""
-    footer = f"  {SUBTLE}{cwd_name}{RESET}  {SUBTLE}{msg_count} events{RESET}" f"{mode_label}  {SUBTLE}v0.1{RESET}"
+    footer = f"  {SUBTLE}{cwd_name}{RESET}  {SUBTLE}{msg_count} events{RESET}{mode_label}  {SUBTLE}v0.1{RESET}"
 
     frame = _truncate_frame_lines(transcript_lines, cols, transcript_height) + [sep] + input_lines + [footer]
     frame = _truncate_frame_lines(frame, cols, rows)
@@ -1740,6 +1740,8 @@ def _handle_input(
                 on_progress_message=on_progress_message,
                 context_manager=args.context_manager,
             )
+            if args.context_manager:
+                args.context_manager.messages = [dict(message) for message in next_messages]
             with agent_thread_lock:
                 agent_result["messages"] = next_messages
         except Exception as e:

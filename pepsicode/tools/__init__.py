@@ -23,6 +23,7 @@ from pepsicode.tools.modify_file import modify_file_tool
 from pepsicode.tools.multi_edit import multi_edit_tool
 from pepsicode.tools.notebook_edit import notebook_edit_tool
 from pepsicode.tools.patch_file import patch_file_tool
+from pepsicode.tools.read_context_artifact import read_context_artifact_tool
 from pepsicode.tools.read_file import read_file_tool
 from pepsicode.tools.run_command import run_command_tool
 from pepsicode.tools.run_with_debug import run_with_debug_tool
@@ -71,6 +72,7 @@ def create_default_tool_registry(
             list_files_tool,
             grep_files_tool,
             read_file_tool,
+            read_context_artifact_tool,
             write_file_tool,
             modify_file_tool,
             edit_file_tool,

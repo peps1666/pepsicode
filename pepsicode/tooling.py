@@ -122,6 +122,7 @@ class ToolDefinition:
     validator: Validator
     run: Runner
     capabilities: set[ToolCapability] = field(default_factory=set)
+    max_result_size_chars: int = 10_000
     # Read-only tools with no side effects can run concurrently with each
     # other.  Tools that write files, run commands, or otherwise mutate state
     # must run exclusively (default).  See agent_loop._execute_calls.
