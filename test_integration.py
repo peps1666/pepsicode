@@ -299,34 +299,53 @@ def test_hooks_system():
 
 def test_sub_agents():
     """Test Sub-agents system."""
-    from pepsicode.sub_agents import (
-        AgentType,
-        SubAgentManager,
-        choose_agent_type,
+    from pepsicode.agents.tool_filter import GLOBAL_DISALLOWED, resolve_agent_tools
+    from pepsicode.agents.trace import TraceManager
+    from pepsicode.sub_agents import AgentDefinition, AgentType
+    from pepsicode.tooling import ToolRegistry
+
+    # Verify built-in agent definitions and their tool whitelists.
+    explore = AgentDefinition.explore_agent()
+    assert explore.type == AgentType.EXPLORE
+    assert explore.is_read_only is True
+    assert "read_file" in explore.allowed_tools
+
+    plan = AgentDefinition.plan_agent()
+    assert plan.type == AgentType.PLAN
+    assert plan.is_read_only is True
+
+    general = AgentDefinition.general_agent()
+    assert general.type == AgentType.GENERAL
+    assert general.is_read_only is False
+
+    # resolve_agent_tools applies the global disallow layer (task, ask_user)
+    # and the definition's allowed_tools whitelist.
+    pool = ToolRegistry(
+        [
+            type("T", (), {"name": "read_file"}),
+            type("T", (), {"name": "list_files"}),
+            type("T", (), {"name": "task"}),
+            type("T", (), {"name": "ask_user"}),
+            type("T", (), {"name": "write_file"}),
+        ]
     )
+    sub_registry = resolve_agent_tools(pool, explore)
+    tool_names = {t.name for t in sub_registry.list()}
+    assert "read_file" in tool_names
+    assert "task" not in tool_names  # global disallow
+    assert "ask_user" not in tool_names  # global disallow
+    assert "write_file" not in tool_names  # not in explore whitelist
 
-    # Create manager
-    mgr = SubAgentManager(parent_session_id="test-session")
-
-    # Spawn explore agent
-    agent = mgr.spawn_agent(AgentType.EXPLORE, "Search for Python files")
-    assert agent.id.startswith("agent-")
-    assert agent.status == "running"
-    assert agent.definition.is_read_only == True
-
-    # Complete agent
-    mgr.complete_agent(agent.id, "Found 10 Python files")
-    assert agent.status == "completed"
-    assert agent.result == "Found 10 Python files"
-
-    # Format status
-    status = mgr.format_agent_status()
-    assert "Sub-Agents Status" in status
-
-    # Test agent type selection
-    assert choose_agent_type("explore the codebase") == AgentType.EXPLORE
-    assert choose_agent_type("plan the architecture") == AgentType.PLAN
-    assert choose_agent_type("implement the feature") == AgentType.GENERAL
+    # TraceManager records token usage and aggregates across descendants.
+    tm = TraceManager(session_id="root")
+    node = tm.create(agent_type="explore", name="Explore", parent_id=None)
+    tm.record_tokens(node.trace_id, input_tokens=100, output_tokens=50)
+    tm.record_tool_call(node.trace_id)
+    tm.complete(node.trace_id)
+    totals = tm.get_total(node.trace_id)
+    assert totals["input_tokens"] == 100
+    assert totals["output_tokens"] == 50
+    assert totals["tool_call_count"] == 1
 
     return True
 

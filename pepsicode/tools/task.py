@@ -12,6 +12,9 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Any
 
+from pepsicode.agents.loader import get_default_loader
+from pepsicode.agents.tool_filter import resolve_agent_tools
+from pepsicode.agents.trace import TraceManager
 from pepsicode.sub_agents import AgentDefinition, AgentType
 from pepsicode.tooling import ToolContext, ToolDefinition, ToolRegistry, ToolResult
 from pepsicode.tools.code_nav import find_references_tool, find_symbols_tool, get_ast_info_tool
@@ -30,53 +33,59 @@ from pepsicode.tools.run_command import run_command_tool
 # Additional write/exec tools available to the general-purpose sub-agent.
 from pepsicode.tools.write_file import write_file_tool
 
-_READ_ONLY_TOOLS = [
-    read_file_tool,
-    list_files_tool,
-    grep_files_tool,
-    file_tree_tool,
-    find_symbols_tool,
-    find_references_tool,
-    get_ast_info_tool,
-]
-
-_GENERAL_EXTRA_TOOLS = [
-    write_file_tool,
-    edit_file_tool,
-    patch_file_tool,
-    modify_file_tool,
-    multi_edit_tool,
-    run_command_tool,
-]
+# The pool of tools a sub-agent can ever access.  Individual agents get a
+# filtered subset via :func:`resolve_agent_tools` based on their
+# ``allowed_tools`` / ``disallowed_tools`` definition.  Kept explicit (rather
+# than derived from the parent registry) so sub-agents never pick up MCP or
+# other dynamic tools unless intentionally added here.
+_SUB_AGENT_TOOL_POOL = ToolRegistry(
+    [
+        read_file_tool,
+        list_files_tool,
+        grep_files_tool,
+        file_tree_tool,
+        find_symbols_tool,
+        find_references_tool,
+        get_ast_info_tool,
+        write_file_tool,
+        edit_file_tool,
+        patch_file_tool,
+        modify_file_tool,
+        multi_edit_tool,
+        run_command_tool,
+    ]
+)
 
 _AGENT_TYPES = {
     "explore": AgentType.EXPLORE,
     "plan": AgentType.PLAN,
     "general": AgentType.GENERAL,
+    "verification": AgentType.GENERAL,  # specialized general agent
 }
-
-
-def _build_sub_registry(definition: AgentDefinition) -> ToolRegistry:
-    """Assemble a restricted tool registry for a sub-agent.
-
-    Never includes the Task tool itself, so sub-agents cannot recurse.
-    """
-    tools = list(_READ_ONLY_TOOLS)
-    if not definition.is_read_only:
-        tools += _GENERAL_EXTRA_TOOLS
-    return ToolRegistry(tools)
 
 
 def create_task_tool(
     cwd: str,
     runtime: dict[str, Any] | None,
     model_factory: Callable[[ToolRegistry], Any] | None = None,
+    *,
+    cost_tracker: Any | None = None,
+    trace_manager: TraceManager | None = None,
+    parent_trace_id: str | None = None,
+    on_tool_start: Callable[[str, dict], None] | None = None,
+    on_tool_result: Callable[[str, str, bool], None] | None = None,
 ) -> ToolDefinition:
     """Build the Task tool.
 
     ``model_factory(registry) -> ModelAdapter`` lets callers inject a model
     (tests use a mock).  When omitted and a runtime is configured, a fresh
     Anthropic adapter bound to the sub-agent's restricted registry is used.
+
+    When ``cost_tracker`` and ``trace_manager`` are provided the sub-agent's
+    token usage and tool calls are recorded -- both on the trace node and on
+    the shared cost tracker so the parent session's budget guard sees them.
+    ``on_tool_start`` / ``on_tool_result`` are forwarded to the sub-agent loop
+    so callers can surface sub-agent progress to the user.
     """
 
     def _validate(input_data: dict) -> dict:
@@ -92,14 +101,22 @@ def create_task_tool(
         # Lazy imports avoid any import cycle at module load time.
         from pepsicode.agent_loop import run_agent_turn
 
-        agent_type = _AGENT_TYPES[parsed["agent_type"]]
-        definition = {
-            AgentType.EXPLORE: AgentDefinition.explore_agent,
-            AgentType.PLAN: AgentDefinition.plan_agent,
-            AgentType.GENERAL: AgentDefinition.general_agent,
-        }[agent_type]()
+        agent_key = parsed["agent_type"]
 
-        sub_registry = _build_sub_registry(definition)
+        # Load the agent definition from markdown files (hot-reloadable).
+        # Falls back to the built-in AgentDefinition classmethods when the
+        # loader cannot find a file, so existing behavior is preserved.
+        loader = get_default_loader(context.cwd or cwd)
+        definition = loader.get(agent_key)
+        if definition is None:
+            agent_type = _AGENT_TYPES[agent_key]
+            definition = {
+                AgentType.EXPLORE: AgentDefinition.explore_agent,
+                AgentType.PLAN: AgentDefinition.plan_agent,
+                AgentType.GENERAL: AgentDefinition.general_agent,
+            }[agent_type]()
+
+        sub_registry = resolve_agent_tools(_SUB_AGENT_TOOL_POOL, definition)
 
         if model_factory is not None:
             sub_model = model_factory(sub_registry)
@@ -113,6 +130,35 @@ def create_task_tool(
                 output="Task tool requires a configured model (no runtime available).",
             )
 
+        # Register this sub-agent invocation on the trace tree so its token /
+        # tool-call usage is visible to the parent session.
+        trace_node = None
+        if trace_manager is not None:
+            trace_node = trace_manager.create(
+                agent_type=definition.type.value,
+                name=definition.name,
+                parent_id=parent_trace_id,
+            )
+
+        # Forward sub-agent tool activity to the caller while also counting it
+        # on the trace node.  Keeping these wrappers local avoids touching the
+        # agent loop signature for bookkeeping that only the Task tool needs.
+        def _wrap_tool_start(name: str, tool_input: dict) -> None:
+            if trace_manager is not None and trace_node is not None:
+                trace_manager.record_tool_call(trace_node.trace_id)
+            if on_tool_start is not None:
+                try:
+                    on_tool_start(name, tool_input)
+                except Exception:  # noqa: BLE001 -- callback must never break the loop
+                    pass
+
+        def _wrap_tool_result(name: str, output: str, ok: bool) -> None:
+            if on_tool_result is not None:
+                try:
+                    on_tool_result(name, output, ok)
+                except Exception:  # noqa: BLE001
+                    pass
+
         sub_messages = [
             {"role": "system", "content": definition.system_prompt_template},
             {"role": "user", "content": parsed["task"]},
@@ -125,16 +171,27 @@ def create_task_tool(
                 cwd=context.cwd or cwd,
                 permissions=context.permissions,
                 max_steps=definition.max_turns,
+                cost_tracker=cost_tracker,
+                on_tool_start=_wrap_tool_start,
+                on_tool_result=_wrap_tool_result,
             )
         except Exception as error:  # noqa: BLE001
+            if trace_node is not None:
+                trace_manager.complete(trace_node.trace_id, status="failed")
             return ToolResult(ok=False, output=f"Sub-agent ({definition.name}) failed: {error}")
+
+        if trace_node is not None:
+            trace_manager.complete(trace_node.trace_id, status="completed")
 
         final = next(
             (m["content"] for m in reversed(result_messages) if m.get("role") == "assistant"),
             "",
         )
         tool_calls = sum(1 for m in result_messages if m.get("role") == "assistant_tool_call")
-        summary = f"[Sub-agent {definition.name} completed | tool calls: {tool_calls}]\n\n{final}"
+        summary = f"[Sub-agent {definition.name} completed | tool calls: {tool_calls}]"
+        if trace_node is not None:
+            summary += " " + trace_manager.format_summary(trace_node.trace_id)
+        summary += f"\n\n{final}"
         return ToolResult(ok=True, output=summary)
 
     return ToolDefinition(
@@ -142,14 +199,18 @@ def create_task_tool(
         description=(
             "Delegate a scoped task to an isolated sub-agent that runs in its own "
             "context window and returns only a summary. agent_type: 'explore' "
-            "(fast read-only search), 'plan' (thorough read-only analysis), or "
-            "'general' (full read/write/exec). Use for broad codebase exploration "
-            "or self-contained subtasks to keep the main context lean."
+            "(fast read-only search), 'plan' (thorough read-only analysis), "
+            "'general' (full read/write/exec), or 'verification' (run builds, "
+            "tests, and lint to verify a change). Use for broad codebase "
+            "exploration or self-contained subtasks to keep the main context lean."
         ),
         input_schema={
             "type": "object",
             "properties": {
-                "agent_type": {"type": "string", "enum": ["explore", "plan", "general"]},
+                "agent_type": {
+                    "type": "string",
+                    "enum": ["explore", "plan", "general", "verification"],
+                },
                 "task": {"type": "string", "description": "Self-contained task description for the sub-agent"},
             },
             "required": ["task"],

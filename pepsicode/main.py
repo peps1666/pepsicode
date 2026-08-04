@@ -6,6 +6,7 @@ import sys
 from pathlib import Path
 
 from pepsicode.agent_loop import run_agent_turn
+from pepsicode.agents.trace import TraceManager
 from pepsicode.anthropic_adapter import AnthropicModelAdapter
 from pepsicode.cli_commands import try_handle_local_command
 from pepsicode.config import load_runtime_config
@@ -20,6 +21,7 @@ from pepsicode.tools import create_default_tool_registry
 from pepsicode.tty_app import run_tty_app
 from pepsicode.tui.transcript import format_transcript_text
 from pepsicode.tui.types import TranscriptEntry
+from pepsicode.types import ChatMessage
 from pepsicode.workspace import resolve_tool_path
 
 
@@ -197,8 +199,15 @@ def main() -> None:
     prompt_handler = (
         _make_cli_permission_prompt() if sys.stdin.isatty() else None
     )  # 在非 TTY 环境中使用 CLI 权限提示，否则在 TTY 环境中可以使用更丰富的交互式权限界面
+    # Shared observability objects: the cost tracker monitors API spending
+    # (including sub-agent calls via the Task tool) and the trace manager
+    # records a tree of sub-agent invocations for debugging and reporting.
+    from pepsicode.cost_tracker import CostTracker
+
+    cost_tracker = CostTracker()
+    trace_manager = TraceManager()
     tools = create_default_tool_registry(
-        cwd, runtime=runtime
+        cwd, runtime=runtime, cost_tracker=cost_tracker, trace_manager=trace_manager
     )  # 创建工具注册表，传入当前工作目录和运行时配置，工具注册表负责管理可用的技能和 MCP 服务器
     permissions = PermissionManager(cwd, prompt=prompt_handler)
     model = (
@@ -217,8 +226,9 @@ def main() -> None:
         context_mgr = ContextManager(model=runtime.get("model", "default"))
         # Let the context manager LLM-summarize old turns during compaction
         # when a real model is available (falls back to heuristics otherwise).
-        if hasattr(model, "summarize"):
-            context_mgr.summarizer = model.summarize
+        summarize = getattr(model, "summarize", None)
+        if summarize is not None:
+            context_mgr.summarizer = summarize
         logger.info("Context manager initialized for model: %s", runtime.get("model", "unknown"))
 
     # Initialize MemoryManager for cross-session knowledge retention.
@@ -254,7 +264,7 @@ def main() -> None:
     except Exception as e:  # noqa: BLE001
         logger.debug("Worktree session restore skipped: %s", e)
 
-    messages = [
+    messages: list[ChatMessage] = [
         {
             "role": "system",
             "content": build_system_prompt(
@@ -368,11 +378,12 @@ def main() -> None:
                     logger.debug("After turn: %d tokens (%.0f%%)", stats.total_tokens, stats.usage_percentage)
                     save_context_state(context_mgr)
                 last_assistant = next(
-                    (message for message in reversed(messages) if message["role"] == "assistant"), None
+                    (message for message in reversed(messages) if message.get("role") == "assistant"), None
                 )
                 if last_assistant:
-                    _append_transcript(transcript, kind="assistant", body=last_assistant["content"])
-                    print(last_assistant["content"])
+                    content = last_assistant.get("content", "")
+                    _append_transcript(transcript, kind="assistant", body=content)
+                    print(content)
             return
         # If we're in a TTY, run the full interactive app with the agent loop and rich UI
         run_tty_app(
@@ -384,6 +395,8 @@ def main() -> None:
             permissions=permissions,
             resume_session=args.resume,
             list_sessions_only=args.list_sessions,
+            cost_tracker=cost_tracker,
+            trace_manager=trace_manager,
         )
     except KeyboardInterrupt:
         if os.environ.get("PEPSI_CODE_VERBOSE", "") == "1":

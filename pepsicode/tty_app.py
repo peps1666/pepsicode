@@ -182,6 +182,12 @@ class TtyAppArgs:
     cwd: str
     permissions: PermissionManager
     context_manager: Any | None = None
+    # Shared cost tracker -- when provided by the caller the TTY app reuses it
+    # so sub-agent token usage (recorded via the Task tool) is visible to the
+    # session-level budget guard.  When ``None`` a fresh tracker is created.
+    cost_tracker: CostTracker | None = None
+    # Trace manager for sub-agent observability (token/tool-call tree).
+    trace_manager: Any | None = None
 
 
 @dataclass
@@ -1569,7 +1575,7 @@ def _handle_input(
                 progress = AggregatedEditProgress(
                     entry_id=entry_id,
                     tool_name=tool_name,
-                    path=target_path,
+                    path=target_path or "",
                     total=1,
                     completed=0,
                     errors=0,
@@ -1758,12 +1764,16 @@ def run_tty_app(
     permissions: PermissionManager,
     resume_session: str | None = None,
     list_sessions_only: bool = False,
+    cost_tracker: CostTracker | None = None,
+    trace_manager: Any | None = None,
 ) -> list[ChatMessage]:
     """Event-driven full-screen TTY application, ported from the TypeScript version.
 
     Args:
         resume_session: Session ID to resume, or "latest" for most recent
         list_sessions_only: If True, print session list and exit
+        cost_tracker: Shared cost tracker (reused for sub-agent token tracking)
+        trace_manager: Shared trace manager for sub-agent observability
     """
 
     context_manager = None
@@ -1782,6 +1792,8 @@ def run_tty_app(
         cwd=cwd,
         permissions=permissions,
         context_manager=context_manager,
+        cost_tracker=cost_tracker,
+        trace_manager=trace_manager,
     )
 
     # Session initialization
@@ -1827,8 +1839,10 @@ def run_tty_app(
         }
     )
 
-    # Initialize CostTracker
-    cost_tracker = CostTracker()
+    # Initialize CostTracker -- reuse the one provided by the caller (so
+    # sub-agent token usage recorded via the Task tool is visible) or create a
+    # fresh one for this session.
+    cost_tracker = args.cost_tracker or CostTracker()
 
     state = ScreenState(
         history=load_history_entries(),
@@ -2309,6 +2323,9 @@ def _select_pending_choice(
     """Select a permission choice and resolve."""
     pending = state.pending_approval
     decision = choice.get("decision", "allow_once")
+
+    if pending is None:
+        return
 
     if decision == "deny_with_feedback":
         pending.feedback_mode = True

@@ -1,4 +1,5 @@
 from dataclasses import asdict
+from typing import Any
 
 from pepsicode.mcp import create_mcp_backed_tools
 from pepsicode.skills import discover_skills
@@ -34,7 +35,13 @@ from pepsicode.tools.worktree import worktree_tool
 from pepsicode.tools.write_file import write_file_tool
 
 
-def create_default_tool_registry(cwd: str, runtime: dict | None = None) -> ToolRegistry:
+def create_default_tool_registry(
+    cwd: str,
+    runtime: dict | None = None,
+    *,
+    cost_tracker: Any | None = None,
+    trace_manager: Any | None = None,
+) -> ToolRegistry:
     skills = [asdict(skill) for skill in discover_skills(cwd)]
     mcp = create_mcp_backed_tools(cwd=cwd, mcp_servers=dict(runtime.get("mcpServers", {})) if runtime else {})
     return ToolRegistry(
@@ -82,8 +89,16 @@ def create_default_tool_registry(cwd: str, runtime: dict | None = None) -> ToolR
             docker_helper_tool,
             # Governance audit
             governance_audit_tool,
-            # Sub-agent delegation (isolated context)
-            create_task_tool(cwd, runtime),
+            # Sub-agent delegation (isolated context).  Passing the shared
+            # cost_tracker and trace_manager makes sub-agent token usage and
+            # tool calls visible to the parent session's budget guard and the
+            # trace tree.
+            create_task_tool(
+                cwd,
+                runtime,
+                cost_tracker=cost_tracker,
+                trace_manager=trace_manager,
+            ),
             # Skills
             create_load_skill_tool(cwd),
             # MCP tools

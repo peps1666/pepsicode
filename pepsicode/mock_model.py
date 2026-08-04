@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import time
+from collections.abc import Generator
 
-from pepsicode.types import AgentStep
+from pepsicode.types import AgentStep, StreamToken
 
 
 def _last_user_message(messages):
@@ -145,3 +146,21 @@ class MockModelAdapter:
                 ]
             ),
         )
+
+    def next_stream(self, messages: list) -> Generator[StreamToken, None, None]:
+        """Stream a response.  The mock model doesn't stream -- it yields the
+        full response as a single text token, then a done marker.
+        """
+        step = self.next(messages)
+        if step.type == "assistant" and step.content:
+            yield StreamToken(type="text", content=step.content)
+        yield StreamToken(type="done")
+
+    def summarize(self, messages: list) -> str:
+        """Heuristic summarizer for the mock model.
+
+        Used by :class:`ContextManager` during compaction.  Returns the last
+        few messages' content joined so the mock path keeps working without a
+        real LLM.
+        """
+        return "\n".join(str(m.get("content", "")) for m in messages[-6:] if m.get("content"))

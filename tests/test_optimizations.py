@@ -285,11 +285,16 @@ def test_task_tool_requires_model():
 
 
 def test_task_tool_excludes_itself_from_sub_registry():
+    from pepsicode.agents.tool_filter import resolve_agent_tools
     from pepsicode.sub_agents import AgentDefinition
-    from pepsicode.tools.task import _build_sub_registry
+    from pepsicode.tools.task import _SUB_AGENT_TOOL_POOL
 
-    reg = _build_sub_registry(AgentDefinition.general_agent())
+    # The Task tool is never in the sub-agent pool, and the global disallow
+    # layer in resolve_agent_tools removes it even if it were.
+    reg = resolve_agent_tools(_SUB_AGENT_TOOL_POOL, AgentDefinition.general_agent())
     assert "task" not in [t.name for t in reg.list()]
+    # ask_user is also globally disallowed for sub-agents.
+    assert "ask_user" not in [t.name for t in reg.list()]
 
 
 # --------------------------------------------------------------------------

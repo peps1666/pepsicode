@@ -6,9 +6,9 @@ import time
 import urllib.error
 import urllib.request
 from collections.abc import Generator
-from typing import Any
+from typing import Any, Literal
 
-from pepsicode.types import AgentStep, ChatMessage, ProviderThinkingBlock, StepDiagnostics, StreamToken
+from pepsicode.types import AgentStep, ChatMessage, ProviderThinkingBlock, StepDiagnostics, StreamToken, ToolCall
 
 DEFAULT_MAX_RETRIES = 4
 BASE_RETRY_DELAY_MS = 500
@@ -214,7 +214,7 @@ def _consume_pending_usage() -> dict[str, int] | None:
     return usage
 
 
-def _parse_assistant_text(content: str) -> tuple[str, str | None]:
+def _parse_assistant_text(content: str) -> tuple[str, Literal["final", "progress"] | None]:
     trimmed = content.strip()
     if not trimmed:
         return "", None
@@ -250,7 +250,7 @@ def _push_anthropic_message(messages: list[dict[str, Any]], role: str, block: di
         messages.append({"role": role, "content": [block]})
 
 
-def _to_anthropic_messages(messages: list[dict[str, Any]]) -> tuple[str, list[dict[str, Any]]]:
+def _to_anthropic_messages(messages: list[ChatMessage]) -> tuple[str, list[dict[str, Any]]]:
     system = "\n\n".join(message["content"] for message in messages if message["role"] == "system")
     converted: list[dict[str, Any]] = []
     for message in messages:
@@ -519,7 +519,7 @@ class AnthropicModelAdapter:
             self.last_usage = usage
         yield StreamToken(type="done")
 
-    def next(self, messages: list[dict[str, Any]]) -> AgentStep:
+    def next(self, messages: list[ChatMessage]) -> AgentStep:
         system_message, converted_messages = _to_anthropic_messages(messages)
         request = self._build_request(self.runtime["model"], system_message, converted_messages)
         data, status = self._send(request)
@@ -548,7 +548,7 @@ class AnthropicModelAdapter:
                 "output_tokens": int(usage.get("output_tokens", 0) or 0),
             }
 
-        tool_calls: list[dict[str, Any]] = []
+        tool_calls: list[ToolCall] = []
         text_parts: list[str] = []
         thinking_blocks: list[ProviderThinkingBlock] = []
         block_types: list[str] = []
