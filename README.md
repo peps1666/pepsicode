@@ -1,8 +1,8 @@
 # pepsicode v2
 
-pepsicode 是一个面向本地开发工作流的 Python 终端编程代理。第二版在原有工具、MCP、Skills、子代理、Plan 模式和上下文压缩能力之上，新增了可配置、可审计且受权限系统约束的 Hooks v2。
+pepsicode 是一个面向本地开发工作流的 Python 编程代理，提供终端 CLI 和 Electron 桌面客户端两种使用方式。第二版在原有工具、MCP、Skills、子代理、Plan 模式和上下文压缩能力之上，新增了可配置、可审计且受权限系统约束的 Hooks v2，以及基于 WebSocket 的桌面客户端架构。
 
-> English summary: pepsicode v2 is a Python terminal coding agent with permission-aware tools, Plan mode, context compaction, MCP/Skills/sub-agents, and a secure configurable hook engine.
+> English summary: pepsicode v2 is a Python coding agent with permission-aware tools, Plan mode, context compaction, MCP/Skills/sub-agents, a secure configurable hook engine, and an Electron desktop client connected via WebSocket.
 
 ## 第二版亮点
 
@@ -14,6 +14,7 @@ pepsicode 是一个面向本地开发工作流的 Python 终端编程代理。�
 - 临时上下文注入：Hook 生成的上下文只进入下一次模型请求，不写入持久会话历史。
 - 完整生命周期：主代理与子代理共用 Hook 引擎，同时保留各自的 scope。
 - 统一版本：包、TUI 和 MCP 客户端标识均为 `2.0.0`。
+- Electron 桌面客户端：基于 React + Vite 的白色主题界面，通过 WebSocket 连接后端，支持项目文件夹选择、会话管理、流式输出和权限审批。
 
 ## 环境要求
 
@@ -53,6 +54,73 @@ python -m pepsicode.main
 PEPSI_CODE_MODEL_MODE=mock python -m pepsicode.main
 ```
 
+## Electron 桌面客户端
+
+pepsicode 提供一个独立的 Electron 桌面应用，采用白色主题界面，体验类似 Codex / Claude Desktop，可以在图形界面里选择项目文件夹并与代理对话。
+
+### 架构
+
+```text
+┌─────────────────────┐     WebSocket      ┌──────────────────────┐
+│  Electron Client     │ ◄──────────────► │  Python Server        │
+│  (React + Vite)      │    ws://127.0.0.1 │  (pepsicode.server)   │
+│                      │                   │                       │
+│  - 白色主题 UI        │                   │  - Agent Loop         │
+│  - 项目文件夹选择      │                   │  - Tools / Skills     │
+│  - 会话列表           │                   │  - Permissions        │
+│  - 流式消息展示        │                   │  - Hooks v2           │
+│  - 权限审批弹窗        │                   │  - Context Manager    │
+└─────────────────────┘                   └──────────────────────┘
+```
+
+Electron 主进程在启动时自动拉起 Python WebSocket 服务端，前端通过 `ws://127.0.0.1:<port>` 连接后端，使用 JSON-RPC 信封通信，支持流式事件（`message/delta`、`tool/call`、`tool/result` 等）和权限请求。
+
+### 环境要求
+
+- Node.js 18+
+- Python 3.11+（同 CLI 要求）
+- 已安装 pepsicode 包（`pip install -e .`）
+
+### 构建与启动
+
+```bash
+cd pepsicode-client
+npm install
+npm run build      # 构建前端 (dist/) 和 Electron 主进程 (dist-electron/)
+npm start          # 启动桌面应用
+```
+
+开发模式（热重载）：
+
+```bash
+# 终端 1：启动 Vite dev server
+PEPSI_DEV_SERVER=1 npm run dev
+
+# 终端 2：启动 Electron（连热重载）
+npm start
+```
+
+### 选择项目文件夹
+
+侧边栏顶部有一个文件夹按钮，点击后弹出系统文件夹选择框。选择后，代理会在新选的项目目录里工作（工具执行、文件读写、命令运行的 cwd 都切换到新目录）。
+
+切换项目会重新创建会话，清空当前对话历史。
+
+### 模型配置
+
+桌面客户端共用同一套配置文件（`~/.pepsi-code/settings.json`），模型和 API Key 的读取优先级与 CLI 一致（见下方"模型配置"章节）。
+
+界面顶部 header 左侧显示当前模型名称，右侧显示当前工作目录。
+
+### 打包为独立 exe
+
+```bash
+cd pepsicode-client
+npm run electron:build    # 输出到 release/ 目录
+```
+
+打包后的应用内嵌 Python 解释器，可直接分发给未安装 Python 环境的用户（需配合 PyInstaller 打包 `pepsicode` 包，具体见打包脚本）。
+
 ## 模型配置
 
 用户配置文件位于 `~/.pepsi-code/settings.json`：
@@ -71,7 +139,8 @@ PEPSI_CODE_MODEL_MODE=mock python -m pepsicode.main
 
 | 变量 | 说明 |
 | --- | --- |
-| `ANTHROPIC_MODEL` | 模型名称 |
+| `PEPSI_CODE_MODEL` | 模型名称（最高优先级，覆盖配置文件） |
+| `ANTHROPIC_MODEL` | 模型名称（被 `PEPSI_CODE_MODEL` 和 `settings.json` 覆盖） |
 | `ANTHROPIC_API_KEY` | API Key |
 | `ANTHROPIC_AUTH_TOKEN` | 可替代 API Key 的认证令牌 |
 | `ANTHROPIC_BASE_URL` | Anthropic 兼容接口地址 |
@@ -312,12 +381,21 @@ python -m pytest -q tests/test_hooks_v2.py
 ```text
 pepsicode/
   agent_loop.py          主代理同步/流式循环
+  server.py              WebSocket 服务端（供桌面客户端连接）
+  protocol.py            JSON-RPC 消息信封定义
   permissions.py         权限与 Plan 模式边界
   context_manager.py     上下文压缩与恢复
   hooks/                 Hooks v2 模型、加载、信任、引擎与运行时接线
   tools/                 内置工具
   agents/                子代理定义与追踪
   tui/                   终端界面
+pepsicode-client/        Electron 桌面客户端
+  electron/              主进程（main.ts）与预加载（preload.ts）
+  src/                   React 前端源码
+    conversation/        聊天界面组件
+    sidebar/             会话列表与项目选择
+    stores/              Zustand 状态管理（session / connection）
+    theme/               白色主题设计令牌
 tests/
 ```
 
