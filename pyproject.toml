@@ -57,7 +57,6 @@ ignore = [
     "N815",    # mixed-case in class scope — common in frameworks
     "UP007",   # use X | Y — not urgent
     "UP035",   # deprecated import — still works fine
-    "UP038",   # use X | Y in isinstance — readability preference
     "UP042",   # replace str enum — not urgent
     "F841",    # unused variable — sometimes intentional
 ]

@@ -21,7 +21,6 @@ import json
 import os
 import sys
 import threading
-import time
 import uuid
 from concurrent.futures import Future, ThreadPoolExecutor
 from pathlib import Path
@@ -29,6 +28,7 @@ from typing import Any
 
 from pepsicode import protocol
 from pepsicode.agent_loop import run_agent_turn_stream
+from pepsicode.agents.trace import TraceManager
 from pepsicode.anthropic_adapter import AnthropicModelAdapter
 from pepsicode.config import load_runtime_config
 from pepsicode.context_manager import ContextManager
@@ -41,7 +41,6 @@ from pepsicode.prompt import build_system_prompt
 from pepsicode.session import SessionData, create_new_session, save_session
 from pepsicode.tools import create_default_tool_registry
 from pepsicode.types import ChatMessage
-from pepsicode.agents.trace import TraceManager
 
 logger = get_logger("server")
 
@@ -233,7 +232,9 @@ class PepsiCodeServer:
                 message = json.loads(raw)
             except json.JSONDecodeError:
                 await websocket.send(
-                    json.dumps(protocol.make_response(0, error=protocol.make_error(protocol.ERR_PARSE_ERROR, "Invalid JSON")))
+                    json.dumps(
+                        protocol.make_response(0, error=protocol.make_error(protocol.ERR_PARSE_ERROR, "Invalid JSON"))
+                    )
                 )
                 continue
 
@@ -263,9 +264,7 @@ class PepsiCodeServer:
         # turn/run is long-running: don't block the WebSocket loop.
         # Run it as a background task and send the response when done.
         if method == "turn/run":
-            asyncio.create_task(
-                self._run_turn_background(req_id, params, session, emit, websocket, loop)
-            )
+            asyncio.create_task(self._run_turn_background(req_id, params, session, emit, websocket, loop))
             return
 
         try:
@@ -292,9 +291,7 @@ class PepsiCodeServer:
         except Exception as error:  # noqa: BLE001
             logger.exception("Error in turn/run")
             await emit("turn/end", {"status": "error", "error": str(error)})
-            response = protocol.make_response(
-                req_id, error=protocol.make_error(protocol.ERR_INTERNAL, str(error))
-            )
+            response = protocol.make_response(req_id, error=protocol.make_error(protocol.ERR_INTERNAL, str(error)))
         try:
             await websocket.send(json.dumps(response, ensure_ascii=False, default=str))
         except Exception as error:  # noqa: BLE001
@@ -400,7 +397,6 @@ class PepsiCodeServer:
             if session.hook_engine is None:
                 return {"reloaded": False}
             # Re-create hook engine
-            from pepsicode.hooks import HookContext, HookEvent
 
             session.hook_engine = create_hook_engine(session.cwd, session.permissions)
             return {"reloaded": True}
@@ -576,18 +572,14 @@ class PepsiCodeServer:
 
             await emit("turn/end", {"status": "completed", "messages": len(session.messages)})
 
-            last_assistant = next(
-                (m for m in reversed(session.messages) if m.get("role") == "assistant"), None
-            )
+            last_assistant = next((m for m in reversed(session.messages) if m.get("role") == "assistant"), None)
             return {
                 "status": "completed",
                 "messages": len(session.messages),
                 "last_message": last_assistant.get("content", "") if last_assistant else "",
             }
 
-    async def _handle_local_command(
-        self, user_input: str, session: ClientSession, emit: Any
-    ) -> dict[str, Any]:
+    async def _handle_local_command(self, user_input: str, session: ClientSession, emit: Any) -> dict[str, Any]:
         """Handle slash commands like /plan, /hooks, /tools."""
         if user_input == "/plan" or user_input.startswith("/plan "):
             assert session.permissions is not None
@@ -622,9 +614,7 @@ class PepsiCodeServer:
         try:
             import websockets
         except ImportError:
-            logger.error(
-                "The 'websockets' package is required. Install it with: pip install websockets"
-            )
+            logger.error("The 'websockets' package is required. Install it with: pip install websockets")
             sys.exit(1)
 
         async def handler(websocket: Any) -> None:
