@@ -420,21 +420,35 @@ class PepsiCodeServer:
             return result
 
         if method == "cost/query":
-            if session.cost_tracker is None:
-                return {"total_cost_usd": 0, "entries": []}
-            return {
-                "total_cost_usd": session.cost_tracker.total_cost_usd,
-                "total_input_tokens": session.cost_tracker.total_input_tokens,
-                "total_output_tokens": session.cost_tracker.total_output_tokens,
-                "entries": [
+            tracker = session.cost_tracker
+            if tracker is None:
+                return {"total_cost_usd": 0, "total_tokens": 0, "total_calls": 0, "entries": []}
+            entries = []
+            total_input = 0
+            total_output = 0
+            for model, usage in tracker.model_usage.items():
+                total_input += usage.input_tokens
+                total_output += usage.output_tokens
+                entries.append(
                     {
-                        "model": e.model,
-                        "input_tokens": e.input_tokens,
-                        "output_tokens": e.output_tokens,
-                        "cost_usd": e.cost_usd,
+                        "model": model,
+                        "input_tokens": usage.input_tokens,
+                        "output_tokens": usage.output_tokens,
+                        "cache_read_tokens": usage.cache_read_tokens,
+                        "cache_write_tokens": usage.cache_write_tokens,
+                        "cost_usd": usage.cost_usd,
+                        "call_count": usage.call_count,
+                        "error_count": usage.error_count,
                     }
-                    for e in session.cost_tracker.entries
-                ],
+                )
+            return {
+                "total_cost_usd": tracker.total_cost_usd,
+                "total_tokens": tracker.get_total_tokens(),
+                "total_input_tokens": total_input,
+                "total_output_tokens": total_output,
+                "total_calls": tracker.get_total_calls(),
+                "total_errors": tracker.get_total_errors(),
+                "entries": entries,
             }
 
         if method == "context/query":
@@ -446,7 +460,11 @@ class PepsiCodeServer:
                 "total_tokens": stats.total_tokens,
                 "usage_percentage": stats.usage_percentage,
                 "messages_count": stats.messages_count,
-                "max_tokens": stats.max_tokens,
+                "max_tokens": stats.context_window,
+                "context_window": stats.context_window,
+                "tool_calls_count": stats.tool_calls_count,
+                "is_near_limit": stats.is_near_limit,
+                "should_compact": stats.should_compact,
             }
 
         if method == "tools/list":

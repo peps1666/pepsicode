@@ -54,10 +54,30 @@ async function startPythonServer(port: number): Promise<void> {
 
   console.log(`[electron] Starting Python server: ${pythonCmd} ${args.join(" ")} (cwd: ${cwd})`);
 
+  // Build a clean environment for the Python child. Electron injects a number
+  // of its own variables into process.env (CHROME_*, CRASHPAD pipe names,
+  // ELECTRON_*, etc.) that have been observed to destabilise native code in
+  // grandchild processes spawned by the Python server (MCP stdio servers via
+  // cmd.exe/node), leading to 0xC0000005 access violations that kill the
+  // whole server. Pass through only what the Python process actually needs.
+  const cleanEnv: NodeJS.ProcessEnv = {};
+  const passthrough = [
+    "PATH", "PATHEXT", "SystemRoot", "SystemDrive", "TEMP", "TMP",
+    "USERPROFILE", "APPDATA", "LOCALAPPDATA", "HOME", "USERNAME",
+    "PYTHONPATH", "PYTHONHOME", "PYTHONIOENCODING", "PYTHONUTF8",
+    "PEPSI_PYTHON", "PEPSI_CODE_MODEL_MODE", "LANG", "LC_ALL",
+    "PROGRAMDATA", "PROGRAMFILES", "PROGRAMFILES(X86)",
+  ];
+  for (const key of passthrough) {
+    if (process.env[key] !== undefined) {
+      cleanEnv[key] = process.env[key];
+    }
+  }
+
   serverProcess = spawn(pythonCmd, args, {
     cwd,
     stdio: ["ignore", "pipe", "pipe"],
-    env: { ...process.env },
+    env: cleanEnv,
     windowsHide: true,
   });
 

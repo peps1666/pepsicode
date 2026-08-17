@@ -337,14 +337,43 @@ class StdioMcpClient:
         for key, value in dict(self.config.get("env", {}) or {}).items():
             env[str(key)] = str(value)
 
+        args = list(self.config.get("args", []) or [])
         popen_kwargs: dict = {}
+        argv: list[str]
         if os.name == "nt":
-            # Prevent a console window from popping up for the child process
-            CREATE_NO_WINDOW = 0x08000000
-            popen_kwargs["creationflags"] = CREATE_NO_WINDOW
+            # On Windows the Electron host spawns us with no real console
+            # (windowsHide). Launching grandchild commands like ``npx`` (a
+            # ``.cmd`` batch wrapper that itself spawns node) under the
+            # inherited no-console state has been observed to crash the
+            # parent Python process with 0xC0000005 (access violation) via
+            # cmd.exe handle/console inheritance.
+            #
+            # Mitigation: detach the child into its own process + console so
+            # it does NOT share the Python process's (console-less, Electron-
+            # spawned) environment. DETACHED_PROCESS gives the child a brand
+            # new console that we then hide via STARTUPINFO. This is the
+            # strongest isolation available and avoids the 0xC0000005 access
+            # violation that occurs when cmd.exe/node grandchild processes
+            # try to inherit console state from a console-less parent.
+            CREATE_NEW_PROCESS_GROUP = 0x00000200
+            DETACHED_PROCESS = 0x00000008
+            popen_kwargs["creationflags"] = DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP
+
+            startupinfo = subprocess.STARTUPINFO()
+            startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+            startupinfo.wShowWindow = subprocess.SW_HIDE
+            popen_kwargs["startupinfo"] = startupinfo
+
+            # Route commands through cmd.exe /c so batch wrappers (npx.cmd,
+            # etc.) resolve and run in the child's own context instead of
+            # relying on Python's implicit PATHEXT extension resolution.
+            argv = ["cmd.exe", "/c", command, *args]
+        else:
+            argv = [command, *args]
+
         try:
             self.process = subprocess.Popen(  # noqa: S603
-                [command, *list(self.config.get("args", []) or [])],
+                argv,
                 cwd=str(process_cwd),
                 env=env,
                 stdin=subprocess.PIPE,
