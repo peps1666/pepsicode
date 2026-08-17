@@ -14,6 +14,12 @@ venv/
 env/
 ENV/
 
+# Node / pepsicode-client
+node_modules/
+pepsicode-client/dist/
+pepsicode-client/dist-electron/
+pepsicode-client/release/
+
 # IDE
 .vscode/
 .idea/
@@ -35,6 +41,11 @@ Thumbs.db
 # Temporary files
 *.tmp
 *.bak
+
+# Runtime logs / debug output
+final_err.txt
+final_out.txt
+server_log.txt
 
 # External platform configs (not part of this project)
 .claude/

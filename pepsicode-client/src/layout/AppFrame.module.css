@@ -1,0 +1,61 @@
+.frame {
+  display: flex;
+  height: 100%;
+  width: 100%;
+  background-color: var(--dsw-alias-bg-base);
+  overflow: hidden;
+}
+
+.sidebar {
+  flex-shrink: 0;
+  background-color: var(--dsw-specific-sidebar-fill);
+  border-right: 1px solid var(--dsw-alias-border-l2);
+  overflow: hidden;
+  transition: width var(--ds-transition-duration) var(--ds-ease-in-out);
+  display: flex;
+  flex-direction: column;
+}
+
+.center {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  background-color: var(--dsw-alias-bg-base);
+  overflow: hidden;
+}
+
+.details {
+  flex-shrink: 0;
+  background-color: var(--dsw-alias-bg-layer-1);
+  border-left: 1px solid var(--dsw-alias-border-l2);
+  overflow: hidden;
+  transition: width var(--ds-transition-duration) var(--ds-ease-in-out);
+  display: flex;
+  flex-direction: column;
+}
+
+.dragHandle {
+  width: 5px;
+  flex-shrink: 0;
+  cursor: col-resize;
+  background-color: transparent;
+  position: relative;
+  z-index: 10;
+  transition: background-color var(--ds-transition-duration-fast) ease;
+}
+
+.dragHandle:hover {
+  background-color: var(--dsw-alias-border-l3);
+}
+
+.dragHandle:active {
+  background-color: var(--dsw-alias-state-business-primary);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sidebar,
+  .details {
+    transition: none;
+  }
+}

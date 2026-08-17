@@ -1,0 +1,72 @@
+.container {
+  padding: 12px 24px 16px;
+  border-top: 1px solid var(--dsw-alias-border-l2);
+  background-color: var(--dsw-alias-bg-base);
+  flex-shrink: 0;
+}
+
+.inputWrapper {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+  background-color: var(--dsw-specific-input-major);
+  border: 1px solid var(--dsw-alias-border-l3);
+  border-radius: 8px;
+  padding: 8px 12px;
+  transition: border-color var(--ds-transition-duration-fast) ease;
+}
+
+.inputWrapper:focus-within {
+  border-color: var(--dsw-alias-state-business-primary);
+}
+
+.textarea {
+  flex: 1;
+  border: none;
+  background: transparent;
+  color: var(--dsw-alias-label-primary);
+  resize: none;
+  outline: none;
+  font-size: 14px;
+  line-height: 1.5;
+  max-height: 200px;
+  min-height: 24px;
+  user-select: text;
+}
+
+.textarea::placeholder {
+  color: var(--dsw-alias-label-dimmed);
+}
+
+.textarea:disabled {
+  opacity: 0.5;
+}
+
+.sendButton {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 6px;
+  background-color: var(--dsw-alias-button-primary-fill);
+  color: var(--dsw-alias-label-primary-foreground);
+  flex-shrink: 0;
+  transition: background-color var(--ds-transition-duration-fast) ease, opacity var(--ds-transition-duration-fast) ease;
+}
+
+.sendButton:hover:not(:disabled) {
+  background-color: var(--dsw-alias-button-primary-hover);
+}
+
+.sendButton:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.hint {
+  text-align: center;
+  font-size: 11px;
+  color: var(--dsw-alias-label-dimmed);
+  margin-top: 6px;
+}
