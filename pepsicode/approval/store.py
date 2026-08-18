@@ -119,9 +119,7 @@ class ApprovalStore:
         if _is_within_directory(self.workspace_root, normalized):
             return ApprovalOutcome(decision=ApprovalDecision.ALLOW_ONCE)
 
-        scope_dir = (
-            normalized if intent in {"list", "command_cwd"} else str(Path(normalized).parent)
-        )
+        scope_dir = normalized if intent in {"list", "command_cwd"} else str(Path(normalized).parent)
 
         if normalized in self.session_denied_paths or _matches_directory_prefix(
             normalized, self.denied_directory_prefixes
@@ -225,20 +223,12 @@ class ApprovalStore:
 
     def _load(self) -> None:
         store = _read_permission_store()
-        self.allowed_directory_prefixes |= {
-            _normalize_path(item) for item in store.get("allowedDirectoryPrefixes", [])
-        }
-        self.denied_directory_prefixes |= {
-            _normalize_path(item) for item in store.get("deniedDirectoryPrefixes", [])
-        }
+        self.allowed_directory_prefixes |= {_normalize_path(item) for item in store.get("allowedDirectoryPrefixes", [])}
+        self.denied_directory_prefixes |= {_normalize_path(item) for item in store.get("deniedDirectoryPrefixes", [])}
         self.allowed_command_patterns |= set(store.get("allowedCommandPatterns", []))
         self.denied_command_patterns |= set(store.get("deniedCommandPatterns", []))
-        self.allowed_edit_patterns |= {
-            _normalize_path(item) for item in store.get("allowedEditPatterns", [])
-        }
-        self.denied_edit_patterns |= {
-            _normalize_path(item) for item in store.get("deniedEditPatterns", [])
-        }
+        self.allowed_edit_patterns |= {_normalize_path(item) for item in store.get("allowedEditPatterns", [])}
+        self.denied_edit_patterns |= {_normalize_path(item) for item in store.get("deniedEditPatterns", [])}
 
     def _persist(self) -> None:
         _write_permission_store(
@@ -271,11 +261,7 @@ class ApprovalStore:
         return [
             "extra allowed dirs: " + _preview(self.allowed_directory_prefixes, 3),
             "dangerous allowlist: " + _preview(self.allowed_command_patterns, 2, max_chars=48),
-        ] + (
-            ["trusted edit targets: " + _preview(self.allowed_edit_patterns, 2)]
-            if self.allowed_edit_patterns
-            else []
-        )
+        ] + (["trusted edit targets: " + _preview(self.allowed_edit_patterns, 2)] if self.allowed_edit_patterns else [])
 
 
 # ---------------------------------------------------------------------- #

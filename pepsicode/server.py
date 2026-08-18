@@ -30,11 +30,11 @@ from pepsicode import protocol
 from pepsicode.agent_loop import run_agent_turn_stream
 from pepsicode.agents.trace import TraceManager
 from pepsicode.anthropic_adapter import AnthropicModelAdapter
+from pepsicode.approval import ApprovalBackend, ApprovalDecision, ApprovalOutcome, ApprovalRequest
 from pepsicode.config import load_runtime_config
 from pepsicode.context_manager import ContextManager
 from pepsicode.cost_tracker import CostTracker
 from pepsicode.hooks import HookContext, HookEvent, create_hook_engine
-from pepsicode.approval import ApprovalBackend, ApprovalDecision, ApprovalOutcome, ApprovalRequest
 from pepsicode.logging_config import get_logger, setup_logging
 from pepsicode.mock_model import MockModelAdapter
 from pepsicode.permissions import PermissionManager, PermissionMode

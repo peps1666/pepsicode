@@ -11,7 +11,6 @@ import pytest
 from pepsicode.approval import ApprovalDecision, ApprovalOutcome
 from pepsicode.permissions import PermissionManager
 
-
 # ---------------------------------------------------------------------------
 # Legacy ensure_* API (backward compatibility)
 # ---------------------------------------------------------------------------

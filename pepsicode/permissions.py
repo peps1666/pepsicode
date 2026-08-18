@@ -184,9 +184,7 @@ class PermissionManager:
             return False
         import os
 
-        return os.path.normcase(_normalize_path(target_path)) == os.path.normcase(
-            _normalize_path(self.plan_file_path)
-        )
+        return os.path.normcase(_normalize_path(target_path)) == os.path.normcase(_normalize_path(self.plan_file_path))
 
     def ensure_tool_allowed(self, tool: Any, parsed: Any) -> None:
         """Apply the non-bypassable Plan-mode capability boundary."""
@@ -322,9 +320,7 @@ class PermissionManager:
         elif self.prompt is None:
             return ApprovalOutcome(decision=ApprovalDecision.UNAVAILABLE)
 
-        scope_directory = (
-            normalized if intent in {"list", "command_cwd"} else str(Path(normalized).parent)
-        )
+        scope_directory = normalized if intent in {"list", "command_cwd"} else str(Path(normalized).parent)
         req = ApprovalRequest(
             kind=ApprovalKind.PATH,
             summary=f"pepsicode wants {intent.replace('_', ' ')} access outside the current cwd",

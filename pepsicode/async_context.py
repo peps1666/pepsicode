@@ -173,8 +173,6 @@ class AsyncContextCollector:
     async def _get_branch(self) -> str:
         """Get current git branch."""
         try:
-            import subprocess
-
             from pepsicode.subprocess_utils import run as _run
 
             result = _run(
@@ -193,8 +191,6 @@ class AsyncContextCollector:
     async def _get_status(self) -> str:
         """Get git status output."""
         try:
-            import subprocess
-
             from pepsicode.subprocess_utils import run as _run
 
             result = _run(
@@ -213,8 +209,6 @@ class AsyncContextCollector:
     async def _get_log(self) -> str:
         """Get recent git log."""
         try:
-            import subprocess
-
             from pepsicode.subprocess_utils import run as _run
 
             result = _run(
