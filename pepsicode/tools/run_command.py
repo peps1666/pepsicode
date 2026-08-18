@@ -205,11 +205,20 @@ def _run(input_data: dict, context) -> ToolResult:
 
     if context.permissions is not None:
         if force_prompt_reason:
-            context.permissions.ensure_command(command, args, effective_cwd, force_prompt_reason=force_prompt_reason)
+            outcome = context.permissions.check_command(
+                command, args, effective_cwd, force_prompt_reason=force_prompt_reason
+            )
         elif use_shell or not _is_read_only_command(normalized_command):
-            context.permissions.ensure_command(command, args, effective_cwd)
+            outcome = context.permissions.check_command(command, args, effective_cwd)
+        else:
+            outcome = None
+        if outcome is not None and (outcome.is_denied or outcome.is_unavailable):
+            signature = f"{command} {' '.join(args)}".strip()
+            return ToolResult(ok=False, output=outcome.denial_message(scope=signature))
 
     if use_shell and background_shell:
+        from pepsicode.subprocess_utils import hide_window_kwargs
+
         # Platform-specific process isolation flags
         popen_kwargs: dict = {}
         if os.name == "nt":
@@ -218,6 +227,8 @@ def _run(input_data: dict, context) -> ToolResult:
             # On Unix, start the background process in its own session so
             # it is not killed when the parent terminal closes.
             popen_kwargs["start_new_session"] = True
+        # Merge in CREATE_NO_WINDOW + STARTUPINFO on Windows.
+        popen_kwargs.update(hide_window_kwargs(popen_kwargs))
 
         child = subprocess.Popen(  # noqa: S603
             [command, *args],
@@ -258,6 +269,8 @@ def _run(input_data: dict, context) -> ToolResult:
         )
 
     try:
+        from pepsicode.subprocess_utils import hide_window_kwargs
+
         completed = subprocess.run(  # noqa: S603
             [command, *args],
             cwd=effective_cwd,
@@ -268,6 +281,7 @@ def _run(input_data: dict, context) -> ToolResult:
             errors="replace",  # replace undecodable characters instead of raising
             check=False,
             timeout=timeout,
+            **hide_window_kwargs(),
         )
         output = "\n".join(part for part in [completed.stdout.strip(), completed.stderr.strip()] if part).strip()
         return ToolResult(ok=completed.returncode == 0, output=output)
@@ -287,6 +301,8 @@ def _run_cancellable_command(
     cancellation_event,
     display_command: str,
 ) -> ToolResult:
+    from pepsicode.subprocess_utils import hide_window_kwargs
+
     process = subprocess.Popen(  # noqa: S603
         [command, *args],
         cwd=cwd,
@@ -297,6 +313,7 @@ def _run_cancellable_command(
         text=True,
         encoding="utf-8",
         errors="replace",
+        **hide_window_kwargs(),
     )
     deadline = time.monotonic() + timeout
     while True:

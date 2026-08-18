@@ -11,6 +11,8 @@ GIT_ENV = {"GIT_TERMINAL_PROMPT": "0", "GIT_ASKPASS": ""}
 
 
 def _run_git(args: list[str], cwd: str, timeout: int = 30) -> subprocess.CompletedProcess[str]:
+    from pepsicode.subprocess_utils import hide_window_kwargs
+
     env = {**os.environ, **GIT_ENV}
     return subprocess.run(
         ["git"] + args,
@@ -18,6 +20,7 @@ def _run_git(args: list[str], cwd: str, timeout: int = 30) -> subprocess.Complet
         capture_output=True,
         text=True,
         timeout=timeout,
+        **hide_window_kwargs(),
         env=env,
     )
 

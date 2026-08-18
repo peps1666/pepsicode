@@ -1,29 +1,59 @@
+"""Permission manager — Plan-mode boundary + approval/sandbox composition.
+
+Responsibilities retained here:
+  * Plan mode state machine (enter/restore/approve/exit).
+  * Plan-mode tool & local-command gating (non-bypassable capability boundary).
+  * Composition of :class:`ApprovalBackend`, :class:`SandboxBackend`, and
+    :class:`ApprovalStore` into a single facade used by tools and the agent
+    loop.
+
+Approval policy state (allow_always / deny_always caches) has been extracted
+to :mod:`pepsicode.approval.store`.  Dangerous-command classification lives
+in :mod:`pepsicode.sandbox.classifier`.  This module is now a thin orchestrator.
+
+Backward compatibility:
+  * ``ensure_command`` / ``ensure_edit`` / ``ensure_path_access`` are kept as
+    thin wrappers that call the new ``check_*`` methods and raise
+    ``RuntimeError`` on denial.  Existing callers continue to work; new code
+    should prefer the ``check_*`` methods which return ``ApprovalOutcome``.
+"""
+
 from __future__ import annotations
 
-import json
-import os
-import sys
 import time
 import uuid
-from collections.abc import Callable
 from enum import Enum
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any
 
-from pepsicode.config import PEPSI_CODE_PERMISSIONS_PATH
+from pepsicode.approval import (
+    ApprovalBackend,
+    ApprovalDecision,
+    ApprovalKind,
+    ApprovalOutcome,
+    ApprovalRequest,
+    ApprovalStore,
+    LocalApprovalBackend,
+)
+from pepsicode.approval.local_backend import PromptHandler
+from pepsicode.sandbox import (
+    LocalSandboxBackend,
+    SandboxBackend,
+    classify_dangerous_command,
+    format_command_signature,
+)
 
-# Permission decision type - mirrors the TS PermissionDecision type
-PermissionDecision = Literal[
-    "allow_once",
-    "allow_always",
-    "allow_turn",
-    "allow_all_turn",
-    "deny_once",
-    "deny_always",
-    "deny_with_feedback",
+# Kept for backward compatibility — many modules import these names from here.
+__all__ = [
+    "PermissionDecision",
+    "PermissionManager",
+    "PermissionMode",
+    "PromptHandler",
 ]
 
-PromptHandler = Callable[[dict[str, Any]], dict[str, Any]]
+
+# Legacy type alias (mirrors the TS PermissionDecision type).
+PermissionDecision = str  # one of ApprovalDecision values
 
 
 class PermissionMode(str, Enum):
@@ -40,16 +70,14 @@ def _normalize_path(target_path: str) -> str:
 
 
 def _is_within_directory(root: str, target: str) -> bool:
-    """Check if target is within root directory.
+    """Check if target is within root directory (case-insensitive on Windows)."""
+    import os
+    import sys
 
-    On Windows, uses case-insensitive comparison since NTFS paths are
-    case-insensitive by default.
-    """
     try:
         resolved_target = Path(target).resolve()
         resolved_root = Path(root).resolve()
         if sys.platform == "win32":
-            # Windows: case-insensitive path comparison
             target_str = str(resolved_target).lower()
             root_str = str(resolved_root).lower()
             return target_str == root_str or target_str.startswith(root_str + os.sep)
@@ -59,143 +87,66 @@ def _is_within_directory(root: str, target: str) -> bool:
         return False
 
 
-def _matches_directory_prefix(target_path: str, directories: set[str]) -> bool:
-    return any(_is_within_directory(directory, target_path) for directory in directories)
-
-
-def _format_command_signature(command: str, args: list[str]) -> str:
-    return " ".join([command, *args]).strip()
-
-
-def _classify_dangerous_command(command: str, args: list[str]) -> str | None:
-    normalized_args = [arg.strip() for arg in args if arg.strip()]
-    signature = _format_command_signature(command, normalized_args)
-
-    if command == "git":
-        if "reset" in normalized_args and "--hard" in normalized_args:
-            return f"git reset --hard can discard local changes ({signature})"
-        if "clean" in normalized_args:
-            return f"git clean can delete untracked files ({signature})"
-        if "checkout" in normalized_args and "--" in normalized_args:
-            return f"git checkout -- can overwrite working tree files ({signature})"
-        if "push" in normalized_args and any(arg in {"--force", "-f"} for arg in normalized_args):
-            return f"git push --force rewrites remote history ({signature})"
-        if "restore" in normalized_args and any(arg.startswith("--source") for arg in normalized_args):
-            return f"git restore --source can overwrite local files ({signature})"
-
-    if command == "npm" and "publish" in normalized_args:
-        return f"npm publish affects a registry outside this machine ({signature})"
-
-    if command == "rm":
-        # Combine all flags (supports -rf, -fr, -Rf, -r -f, etc.)
-        combined_flags = "".join(arg for arg in normalized_args if arg.startswith("-")).lower()
-        # Check whether both the recursive and force flags are present
-        if "r" in combined_flags and "f" in combined_flags:
-            # Check whether it targets the root directory or uses --no-preserve-root
-            if any(arg in {"/", "/*"} for arg in normalized_args) or "--no-preserve-root" in normalized_args:
-                return f"rm -rf can cause catastrophic data loss ({signature})"
-            # Even when not targeting root, still flag it as dangerous
-            return f"rm -rf can cause catastrophic data loss ({signature})"
-
-    if command in {"dd", "mkfs", "mkfs.ext4", "mkfs.vfat", "fdisk", "format"}:
-        return f"{command} can modify or destroy disk partitions ({signature})"
-
-    if command == "chmod":
-        if "777" in normalized_args or any(arg.endswith("777") for arg in normalized_args):
-            return f"chmod 777 opens permissions to all users ({signature})"
-
-    if command in {
-        "node",
-        "python",
-        "python3",
-        "pythonw",
-        "bun",
-        "bash",
-        "sh",
-        "zsh",
-        "fish",
-        "powershell",
-        "pwsh",
-    }:
-        return f"{command} can execute arbitrary local code ({signature})"
-
-    # macOS-specific dangerous commands
-    if command == "diskutil":
-        return f"diskutil can erase or partition disks ({signature})"
-    if command == "csrutil":
-        return f"csrutil modifies System Integrity Protection ({signature})"
-    if command == "defaults" and "write" in normalized_args:
-        return f"defaults write modifies system preferences ({signature})"
-    if command == "launchctl" and any(arg in {"unload", "bootout", "disable"} for arg in normalized_args):
-        return f"launchctl can disable system services ({signature})"
-    if command == "dscl":
-        return f"dscl can modify directory services and user accounts ({signature})"
-
-    return None
-
-
-def _read_permission_store() -> dict[str, Any]:
-    if not PEPSI_CODE_PERMISSIONS_PATH.exists():
-        return {}
-    try:
-        data = json.loads(PEPSI_CODE_PERMISSIONS_PATH.read_text(encoding="utf-8"))
-        if not isinstance(data, dict):
-            return {}
-        return data
-    except (json.JSONDecodeError, OSError) as e:
-        # Corrupted file - return an empty store and log a warning
-        import warnings
-
-        warnings.warn(f"Corrupted permissions file, resetting: {e}")
-        return {}
-
-
-def _write_permission_store(store: dict[str, Any]) -> None:
-    """Persist the permission store atomically to avoid race conditions."""
-    import tempfile
-
-    PEPSI_CODE_PERMISSIONS_PATH.parent.mkdir(parents=True, exist_ok=True)
-
-    # Write to a temporary file first
-    fd, tmp_path = tempfile.mkstemp(dir=PEPSI_CODE_PERMISSIONS_PATH.parent, suffix=".tmp")
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            json.dump(store, f, indent=2)
-            f.write("\n")
-        # Atomic replace
-        os.replace(tmp_path, PEPSI_CODE_PERMISSIONS_PATH)
-    except Exception:
-        # Clean up the temporary file
-        try:
-            os.unlink(tmp_path)
-        except OSError:
-            pass
-        raise
-
-
 class PermissionManager:
-    def __init__(self, workspace_root: str, prompt: PromptHandler | None = None) -> None:
+    """Facade combining approval, sandbox, and Plan-mode boundary control.
+
+    The manager owns:
+      * ``self.approval``  — an :class:`ApprovalBackend` (who decides).
+      * ``self.sandbox``   — a :class:`SandboxBackend` (how to confine).
+      * ``self.store``     — an :class:`ApprovalStore` (what's already decided).
+      * Plan-mode state (``self.mode``, ``self.plan_file_path``, ...).
+    """
+
+    # ------------------------------------------------------------------ #
+    # Construction
+    # ------------------------------------------------------------------ #
+
+    def __init__(
+        self,
+        workspace_root: str,
+        prompt: PromptHandler | None = None,
+        *,
+        approval: ApprovalBackend | None = None,
+        sandbox: SandboxBackend | None = None,
+    ) -> None:
         self.workspace_root = _normalize_path(workspace_root)
-        self.prompt = prompt
-        self.allowed_directory_prefixes: set[str] = set()
-        self.denied_directory_prefixes: set[str] = set()
-        self.session_allowed_paths: set[str] = set()
-        self.session_denied_paths: set[str] = set()
-        self.allowed_command_patterns: set[str] = set()
-        self.denied_command_patterns: set[str] = set()
-        self.session_allowed_commands: set[str] = set()
-        self.session_denied_commands: set[str] = set()
-        self.allowed_edit_patterns: set[str] = set()
-        self.denied_edit_patterns: set[str] = set()
-        self.session_allowed_edits: set[str] = set()
-        self.session_denied_edits: set[str] = set()
-        self.turn_allowed_edits: set[str] = set()
-        self.turn_allow_all_edits = False
+        self.approval: ApprovalBackend = approval or LocalApprovalBackend(prompt)
+        self.sandbox: SandboxBackend = sandbox or LocalSandboxBackend()
+        self.store = ApprovalStore(workspace_root)
+
+        # Plan-mode state
         self.mode = PermissionMode.DEFAULT
         self.previous_mode = PermissionMode.DEFAULT
         self.plan_file_path: str | None = None
         self._plan_followup: str | None = None
-        self._initialize()
+
+    # ------------------------------------------------------------------ #
+    # Backward-compatible prompt property (delegates to LocalApprovalBackend)
+    # ------------------------------------------------------------------ #
+
+    @property
+    def prompt(self) -> PromptHandler | None:
+        """Legacy accessor for the underlying prompt handler.
+
+        Returns the handler if the approval backend is a
+        :class:`LocalApprovalBackend`, otherwise ``None``.
+        """
+        if isinstance(self.approval, LocalApprovalBackend):
+            return self.approval.prompt
+        return None
+
+    @prompt.setter
+    def prompt(self, value: PromptHandler | None) -> None:
+        if isinstance(self.approval, LocalApprovalBackend):
+            self.approval.prompt = value
+        elif value is not None:
+            # Replace the backend with a local one carrying the new handler.
+            self.approval = LocalApprovalBackend(value)
+        # If value is None and backend is not LocalApprovalBackend, no-op.
+
+    # ------------------------------------------------------------------ #
+    # Plan mode (unchanged behaviour, preserved verbatim)
+    # ------------------------------------------------------------------ #
 
     @property
     def is_plan_mode(self) -> bool:
@@ -231,7 +182,11 @@ class PermissionManager:
     def _is_exact_plan_file(self, target_path: str) -> bool:
         if not self.plan_file_path or not target_path:
             return False
-        return os.path.normcase(_normalize_path(target_path)) == os.path.normcase(_normalize_path(self.plan_file_path))
+        import os
+
+        return os.path.normcase(_normalize_path(target_path)) == os.path.normcase(
+            _normalize_path(self.plan_file_path)
+        )
 
     def ensure_tool_allowed(self, tool: Any, parsed: Any) -> None:
         """Apply the non-bypassable Plan-mode capability boundary."""
@@ -291,32 +246,31 @@ class PermissionManager:
         content = plan_path.read_text(encoding="utf-8").strip()
         if not content:
             return {"status": "error", "message": "The plan file is empty."}
-        if self.prompt is None:
+
+        req = ApprovalRequest(
+            kind=ApprovalKind.PLAN,
+            summary="Review the implementation plan",
+            details=[f"plan: {self.plan_file_path}", "", content],
+            scope=self.plan_file_path,
+            choices=[
+                {"key": "1", "label": "approve and execute", "decision": "allow_once"},
+                {"key": "2", "label": "request changes", "decision": "deny_with_feedback"},
+                {"key": "3", "label": "keep planning", "decision": "deny_once"},
+            ],
+        )
+        outcome = self.approval.request(req)
+
+        if outcome.is_unavailable:
             return {
                 "status": "error",
                 "message": "Plan approval requires an interactive terminal; Plan mode remains active.",
             }
-
-        result = self.prompt(
-            {
-                "kind": "plan",
-                "summary": "Review the implementation plan",
-                "details": [f"plan: {self.plan_file_path}", "", content],
-                "scope": self.plan_file_path,
-                "choices": [
-                    {"key": "1", "label": "approve and execute", "decision": "allow_once"},
-                    {"key": "2", "label": "request changes", "decision": "deny_with_feedback"},
-                    {"key": "3", "label": "keep planning", "decision": "deny_once"},
-                ],
-            }
-        )
-        decision = result.get("decision")
-        if decision == "allow_once":
+        if outcome.decision == ApprovalDecision.ALLOW_ONCE:
             self.mode = self.previous_mode
             self._plan_followup = f"The plan has been approved. Execute it now:\n\n{content}"
             return {"status": "approved", "message": "Plan approved. Exiting Plan mode."}
-        if decision == "deny_with_feedback":
-            feedback = str(result.get("feedback", "")).strip()
+        if outcome.decision == ApprovalDecision.DENY_WITH_FEEDBACK:
+            feedback = outcome.feedback
             if feedback:
                 self._plan_followup = f"Revise the plan using this feedback:\n\n{feedback}"
                 return {"status": "feedback", "message": "Plan changes requested."}
@@ -327,107 +281,167 @@ class PermissionManager:
         self._plan_followup = None
         return followup
 
-    def _initialize(self) -> None:
-        store = _read_permission_store()
-        self.allowed_directory_prefixes |= {_normalize_path(item) for item in store.get("allowedDirectoryPrefixes", [])}
-        self.denied_directory_prefixes |= {_normalize_path(item) for item in store.get("deniedDirectoryPrefixes", [])}
-        self.allowed_command_patterns |= set(store.get("allowedCommandPatterns", []))
-        self.denied_command_patterns |= set(store.get("deniedCommandPatterns", []))
-        self.allowed_edit_patterns |= {_normalize_path(item) for item in store.get("allowedEditPatterns", [])}
-        self.denied_edit_patterns |= {_normalize_path(item) for item in store.get("deniedEditPatterns", [])}
+    # ------------------------------------------------------------------ #
+    # Turn lifecycle (delegates to store)
+    # ------------------------------------------------------------------ #
 
     def begin_turn(self) -> None:
-        self.turn_allowed_edits.clear()
-        self.turn_allow_all_edits = False
+        self.store.begin_turn()
 
     def end_turn(self) -> None:
-        self.begin_turn()
+        self.store.end_turn()
+
+    # ------------------------------------------------------------------ #
+    # Summary
+    # ------------------------------------------------------------------ #
 
     def get_summary(self) -> list[str]:
-        def _preview(items: set[str], limit: int, max_chars: int = 64) -> str:
-            if not items:
-                return "none"
-            ordered = sorted(items)
-            shown: list[str] = []
-            for item in ordered[:limit]:
-                shown.append(item if len(item) <= max_chars else item[: max_chars - 3] + "...")
-            remaining = len(ordered) - len(shown)
-            suffix = f" (+{remaining} more)" if remaining > 0 else ""
-            return ", ".join(shown) + suffix
-
         summary = [f"cwd: {self.workspace_root}", f"mode: {self.mode.value}"]
         if self.plan_file_path:
             summary.append(f"plan: {self.plan_file_path}")
-        summary.append("extra allowed dirs: " + _preview(self.allowed_directory_prefixes, 3))
-        summary.append("dangerous allowlist: " + _preview(self.allowed_command_patterns, 2, max_chars=48))
-        if self.allowed_edit_patterns:
-            summary.append("trusted edit targets: " + _preview(self.allowed_edit_patterns, 2))
+        summary.extend(self.store.get_summary_lines())
         return summary
 
-    def _persist(self) -> None:
-        _write_permission_store(
-            {
-                "allowedDirectoryPrefixes": sorted(self.allowed_directory_prefixes),
-                "deniedDirectoryPrefixes": sorted(self.denied_directory_prefixes),
-                "allowedCommandPatterns": sorted(self.allowed_command_patterns),
-                "deniedCommandPatterns": sorted(self.denied_command_patterns),
-                "allowedEditPatterns": sorted(self.allowed_edit_patterns),
-                "deniedEditPatterns": sorted(self.denied_edit_patterns),
-            }
-        )
+    # ------------------------------------------------------------------ #
+    # New typed check_* methods (return ApprovalOutcome)
+    # ------------------------------------------------------------------ #
 
-    def ensure_path_access(self, target_path: str, intent: str) -> None:
-        normalized_target = _normalize_path(target_path)
-        if _is_within_directory(self.workspace_root, normalized_target):
-            return
-        if normalized_target in self.session_denied_paths or _matches_directory_prefix(
-            normalized_target, self.denied_directory_prefixes
-        ):
-            raise RuntimeError(f"Access denied for path outside cwd: {normalized_target}")
-        if normalized_target in self.session_allowed_paths or _matches_directory_prefix(
-            normalized_target, self.allowed_directory_prefixes
-        ):
-            return
-        if self.prompt is None:
-            raise RuntimeError(
-                f"Path {normalized_target} is outside cwd {self.workspace_root}. Start pepsicode in TTY mode to approve it."
-            )
+    def check_path_access(self, target_path: str, intent: str) -> ApprovalOutcome:
+        """Check whether a path can be accessed, returning a typed outcome."""
+        normalized = _normalize_path(target_path)
+
+        # 1. Check cache
+        cached = self.store.lookup(ApprovalKind.PATH, normalized, intent=intent)
+        if cached is not None:
+            return cached
+
+        # 2. No cached decision — need to prompt
+        if self.prompt is None and not isinstance(self.approval, LocalApprovalBackend):
+            # Non-local backend: still try it (may be remote/automated)
+            pass
+        elif self.prompt is None:
+            return ApprovalOutcome(decision=ApprovalDecision.UNAVAILABLE)
 
         scope_directory = (
-            normalized_target if intent in {"list", "command_cwd"} else str(Path(normalized_target).parent)
+            normalized if intent in {"list", "command_cwd"} else str(Path(normalized).parent)
         )
-        result = self.prompt(
-            {
-                "kind": "path",
-                "summary": f"pepsicode wants {intent.replace('_', ' ')} access outside the current cwd",
-                "details": [
-                    f"cwd: {self.workspace_root}",
-                    f"target: {normalized_target}",
-                    f"scope directory: {scope_directory}",
-                ],
-                "scope": scope_directory,
-                "choices": [
-                    {"key": "y", "label": "allow once", "decision": "allow_once"},
-                    {"key": "a", "label": "allow this directory", "decision": "allow_always"},
-                    {"key": "n", "label": "deny once", "decision": "deny_once"},
-                    {"key": "d", "label": "deny this directory", "decision": "deny_always"},
-                ],
-            }
+        req = ApprovalRequest(
+            kind=ApprovalKind.PATH,
+            summary=f"pepsicode wants {intent.replace('_', ' ')} access outside the current cwd",
+            details=[
+                f"cwd: {self.workspace_root}",
+                f"target: {normalized}",
+                f"scope directory: {scope_directory}",
+            ],
+            scope=scope_directory,
+            choices=[
+                {"key": "y", "label": "allow once", "decision": "allow_once"},
+                {"key": "a", "label": "allow this directory", "decision": "allow_always"},
+                {"key": "n", "label": "deny once", "decision": "deny_once"},
+                {"key": "d", "label": "deny this directory", "decision": "deny_always"},
+            ],
+            metadata={"intent": intent, "target": normalized},
         )
-        decision = result.get("decision")
-        if decision == "allow_once":
-            self.session_allowed_paths.add(normalized_target)
-            return
-        if decision == "allow_always":
-            self.allowed_directory_prefixes.add(scope_directory)
-            self._persist()
-            return
-        if decision == "deny_always":
-            self.denied_directory_prefixes.add(scope_directory)
-            self._persist()
-        else:
-            self.session_denied_paths.add(normalized_target)
-        raise RuntimeError(f"Access denied for path outside cwd: {normalized_target}")
+        outcome = self.approval.request(req)
+        self.store.record(ApprovalKind.PATH, normalized, outcome)
+        return outcome
+
+    def check_command(
+        self,
+        command: str,
+        args: list[str],
+        command_cwd: str,
+        force_prompt_reason: str | None = None,
+    ) -> ApprovalOutcome:
+        """Check whether a command can run, returning a typed outcome."""
+        # 1. Path check on cwd
+        path_outcome = self.check_path_access(command_cwd, "command_cwd")
+        if path_outcome.is_denied or path_outcome.is_unavailable:
+            return path_outcome
+
+        # 2. Dangerous-command classification
+        reason = force_prompt_reason or classify_dangerous_command(command, args)
+        if not reason:
+            return ApprovalOutcome(decision=ApprovalDecision.ALLOW_ONCE)
+
+        # 3. Check cache
+        signature = format_command_signature(command, args)
+        cached = self.store.lookup(ApprovalKind.COMMAND, signature)
+        if cached is not None:
+            return cached
+
+        # 4. Prompt
+        if self.prompt is None and isinstance(self.approval, LocalApprovalBackend):
+            return ApprovalOutcome(decision=ApprovalDecision.UNAVAILABLE)
+
+        summary = (
+            "pepsicode wants to run a dangerous command"
+            if not force_prompt_reason
+            else "pepsicode wants approval for this command"
+        )
+        req = ApprovalRequest(
+            kind=ApprovalKind.COMMAND,
+            summary=summary,
+            details=[f"cwd: {command_cwd}", f"command: {signature}", f"reason: {reason}"],
+            scope=signature,
+            choices=[
+                {"key": "y", "label": "allow once", "decision": "allow_once"},
+                {"key": "a", "label": "always allow this command", "decision": "allow_always"},
+                {"key": "n", "label": "deny once", "decision": "deny_once"},
+                {"key": "d", "label": "always deny this command", "decision": "deny_always"},
+            ],
+            metadata={"cwd": command_cwd, "reason": reason},
+        )
+        outcome = self.approval.request(req)
+        self.store.record(ApprovalKind.COMMAND, signature, outcome)
+        return outcome
+
+    def check_edit(self, target_path: str, diff_preview: str) -> ApprovalOutcome:
+        """Check whether an edit can be applied, returning a typed outcome."""
+        normalized = _normalize_path(target_path)
+
+        # Plan-file writes bypass approval
+        if self.is_plan_mode and self._is_exact_plan_file(normalized):
+            return ApprovalOutcome(decision=ApprovalDecision.ALLOW_ONCE)
+
+        # 1. Check cache
+        cached = self.store.lookup(ApprovalKind.EDIT, normalized)
+        if cached is not None:
+            return cached
+
+        # 2. Prompt
+        if self.prompt is None and isinstance(self.approval, LocalApprovalBackend):
+            return ApprovalOutcome(decision=ApprovalDecision.UNAVAILABLE)
+
+        req = ApprovalRequest(
+            kind=ApprovalKind.EDIT,
+            summary="pepsicode wants to apply a file modification",
+            details=[f"target: {normalized}", "", diff_preview],
+            scope=normalized,
+            choices=[
+                {"key": "1", "label": "apply once", "decision": "allow_once"},
+                {"key": "2", "label": "allow this file in this turn", "decision": "allow_turn"},
+                {"key": "3", "label": "allow all edits in this turn", "decision": "allow_all_turn"},
+                {"key": "4", "label": "always allow this file", "decision": "allow_always"},
+                {"key": "5", "label": "reject once", "decision": "deny_once"},
+                {"key": "6", "label": "reject and send guidance to model", "decision": "deny_with_feedback"},
+                {"key": "7", "label": "always reject this file", "decision": "deny_always"},
+            ],
+            metadata={"target": normalized},
+        )
+        outcome = self.approval.request(req)
+        self.store.record(ApprovalKind.EDIT, normalized, outcome)
+        return outcome
+
+    # ------------------------------------------------------------------ #
+    # Legacy ensure_* wrappers (raise RuntimeError on denial)
+    # ------------------------------------------------------------------ #
+
+    def ensure_path_access(self, target_path: str, intent: str) -> None:
+        """Legacy wrapper: raises ``RuntimeError`` on denial."""
+        outcome = self.check_path_access(target_path, intent)
+        if outcome.is_denied or outcome.is_unavailable:
+            raise RuntimeError(outcome.denial_message(scope=target_path))
 
     def ensure_command(
         self,
@@ -436,107 +450,14 @@ class PermissionManager:
         command_cwd: str,
         force_prompt_reason: str | None = None,
     ) -> None:
-        self.ensure_path_access(command_cwd, "command_cwd")
-        reason = force_prompt_reason or _classify_dangerous_command(command, args)
-        if not reason:
-            return
-        signature = _format_command_signature(command, args)
-        if signature in self.session_denied_commands or signature in self.denied_command_patterns:
-            raise RuntimeError(f"Command denied: {signature}")
-        if signature in self.session_allowed_commands or signature in self.allowed_command_patterns:
-            return
-        if self.prompt is None:
-            raise RuntimeError(f"Command requires approval: {signature}. Start pepsicode in TTY mode to approve it.")
-        # Distinguish forced prompts (external trigger) from dangerous commands
-        summary = (
-            "pepsicode wants to run a dangerous command"
-            if not force_prompt_reason
-            else "pepsicode wants approval for this command"
-        )
-        result = self.prompt(
-            {
-                "kind": "command",
-                "summary": summary,
-                "details": [f"cwd: {command_cwd}", f"command: {signature}", f"reason: {reason}"],
-                "scope": signature,
-                "choices": [
-                    {"key": "y", "label": "allow once", "decision": "allow_once"},
-                    {"key": "a", "label": "always allow this command", "decision": "allow_always"},
-                    {"key": "n", "label": "deny once", "decision": "deny_once"},
-                    {"key": "d", "label": "always deny this command", "decision": "deny_always"},
-                ],
-            }
-        )
-        decision = result.get("decision")
-        if decision == "allow_once":
-            self.session_allowed_commands.add(signature)
-            return
-        if decision == "allow_always":
-            self.allowed_command_patterns.add(signature)
-            self._persist()
-            return
-        if decision == "deny_always":
-            self.denied_command_patterns.add(signature)
-            self._persist()
-        else:
-            self.session_denied_commands.add(signature)
-        raise RuntimeError(f"Command denied: {signature}")
+        """Legacy wrapper: raises ``RuntimeError`` on denial."""
+        outcome = self.check_command(command, args, command_cwd, force_prompt_reason)
+        if outcome.is_denied or outcome.is_unavailable:
+            signature = format_command_signature(command, args)
+            raise RuntimeError(outcome.denial_message(scope=signature))
 
     def ensure_edit(self, target_path: str, diff_preview: str) -> None:
-        normalized_target = _normalize_path(target_path)
-        if self.is_plan_mode and self._is_exact_plan_file(normalized_target):
-            return
-        if normalized_target in self.session_denied_edits or normalized_target in self.denied_edit_patterns:
-            raise RuntimeError(f"Edit denied: {normalized_target}")
-        if (
-            normalized_target in self.session_allowed_edits
-            or normalized_target in self.turn_allowed_edits
-            or self.turn_allow_all_edits
-            or normalized_target in self.allowed_edit_patterns
-        ):
-            return
-        if self.prompt is None:
-            raise RuntimeError(
-                f"Edit requires approval: {normalized_target}. Start pepsicode in TTY mode to review it."
-            )
-        result = self.prompt(
-            {
-                "kind": "edit",
-                "summary": "pepsicode wants to apply a file modification",
-                "details": [f"target: {normalized_target}", "", diff_preview],
-                "scope": normalized_target,
-                "choices": [
-                    {"key": "1", "label": "apply once", "decision": "allow_once"},
-                    {"key": "2", "label": "allow this file in this turn", "decision": "allow_turn"},
-                    {"key": "3", "label": "allow all edits in this turn", "decision": "allow_all_turn"},
-                    {"key": "4", "label": "always allow this file", "decision": "allow_always"},
-                    {"key": "5", "label": "reject once", "decision": "deny_once"},
-                    {"key": "6", "label": "reject and send guidance to model", "decision": "deny_with_feedback"},
-                    {"key": "7", "label": "always reject this file", "decision": "deny_always"},
-                ],
-            }
-        )
-        decision = result.get("decision")
-        if decision == "allow_once":
-            self.session_allowed_edits.add(normalized_target)
-            return
-        if decision == "allow_turn":
-            self.turn_allowed_edits.add(normalized_target)
-            return
-        if decision == "allow_all_turn":
-            self.turn_allow_all_edits = True
-            return
-        if decision == "allow_always":
-            self.allowed_edit_patterns.add(normalized_target)
-            self._persist()
-            return
-        if decision == "deny_with_feedback":
-            guidance = str(result.get("feedback", "")).strip()
-            if guidance:
-                raise RuntimeError(f"Edit denied: {normalized_target}\nUser guidance: {guidance}")
-        if decision == "deny_always":
-            self.denied_edit_patterns.add(normalized_target)
-            self._persist()
-        else:
-            self.session_denied_edits.add(normalized_target)
-        raise RuntimeError(f"Edit denied: {normalized_target}")
+        """Legacy wrapper: raises ``RuntimeError`` on denial."""
+        outcome = self.check_edit(target_path, diff_preview)
+        if outcome.is_denied or outcome.is_unavailable:
+            raise RuntimeError(outcome.denial_message(scope=target_path))

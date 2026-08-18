@@ -210,12 +210,15 @@ def _run(input_data: dict, context) -> ToolResult:
         shell_cmd = ["/bin/sh", "-c", command]
 
     try:
+        from pepsicode.subprocess_utils import hide_window_kwargs
+
         result = subprocess.run(
             shell_cmd,
             cwd=str(work_dir),
             capture_output=True,
             text=True,
             timeout=timeout,
+            **hide_window_kwargs(),
         )
 
         success = result.returncode == 0

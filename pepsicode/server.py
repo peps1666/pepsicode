@@ -34,6 +34,7 @@ from pepsicode.config import load_runtime_config
 from pepsicode.context_manager import ContextManager
 from pepsicode.cost_tracker import CostTracker
 from pepsicode.hooks import HookContext, HookEvent, create_hook_engine
+from pepsicode.approval import ApprovalBackend, ApprovalDecision, ApprovalOutcome, ApprovalRequest
 from pepsicode.logging_config import get_logger, setup_logging
 from pepsicode.mock_model import MockModelAdapter
 from pepsicode.permissions import PermissionManager, PermissionMode
@@ -49,13 +50,18 @@ logger = get_logger("server")
 # ---------------------------------------------------------------------------
 
 
-class RemotePermissionBridge:
-    """Bridges synchronous ``PermissionManager.prompt`` calls to async WS.
+class RemotePermissionBridge(ApprovalBackend):
+    """Bridges synchronous approval requests to async WebSocket events.
 
-    The agent loop runs in a worker thread and calls ``prompt(request_dict)``
-    synchronously.  We stash an ``asyncio.Future`` keyed by a prompt id, emit a
-    ``permission/request`` event to the client, and block the worker thread on
-    ``future.result()`` until the client replies with ``tool/approve``.
+    The agent loop runs in a worker thread and calls :meth:`request`
+    synchronously.  We stash an ``asyncio.Future`` keyed by a prompt id,
+    emit a ``permission/request`` event to the client, and block the worker
+    thread on ``future.result()`` until the client replies with
+    ``tool/approve``.
+
+    Implements :class:`ApprovalBackend` so the server can be injected
+    directly into :class:`PermissionManager` via the ``approval=`` parameter,
+    without going through the legacy ``prompt`` callable.
     """
 
     def __init__(self, loop: asyncio.AbstractEventLoop, emit: Any) -> None:
@@ -65,7 +71,22 @@ class RemotePermissionBridge:
         self._lock = threading.Lock()
 
     def __call__(self, request: dict[str, Any]) -> dict[str, Any]:
-        """Synchronous entry point invoked from the worker thread."""
+        """Legacy callable entry point — kept for backward compatibility."""
+        return self._raw_prompt(request)
+
+    def request(self, req: ApprovalRequest) -> ApprovalOutcome:
+        """Typed entry point required by :class:`ApprovalBackend`."""
+        raw = self._raw_prompt(req.to_payload())
+        decision_str = str(raw.get("decision", "deny_once"))
+        try:
+            decision = ApprovalDecision(decision_str)
+        except ValueError:
+            decision = ApprovalDecision.DENY_ONCE
+        feedback = str(raw.get("feedback", "")).strip()
+        return ApprovalOutcome(decision=decision, feedback=feedback)
+
+    def _raw_prompt(self, request: dict[str, Any]) -> dict[str, Any]:
+        """Shared synchronous implementation used by both entry points."""
         prompt_id = uuid.uuid4().hex[:12]
         future: Future[dict[str, Any]] = Future()
         with self._lock:
@@ -186,7 +207,8 @@ class ClientSession:
 
     def set_permission_handler(self, handler: RemotePermissionBridge) -> None:
         assert self.permissions is not None
-        self.permissions.prompt = handler
+        # RemotePermissionBridge now implements ApprovalBackend directly.
+        self.permissions.approval = handler
 
 
 # ---------------------------------------------------------------------------

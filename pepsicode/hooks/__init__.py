@@ -84,12 +84,15 @@ def create_script_hook(script_path: Path) -> AsyncHookHandler:
                     prefix = ["bash", script]
             else:
                 prefix = [script]
+            from pepsicode.subprocess_utils import hide_window_kwargs
+
             process = await asyncio.create_subprocess_exec(
                 *prefix,
                 context.event.value,
                 *(str(value) for value in context.data.values()),
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
+                **hide_window_kwargs(),
             )
             stdout, stderr = await process.communicate()
             if process.returncode == 0:

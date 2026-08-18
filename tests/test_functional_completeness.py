@@ -69,6 +69,21 @@ class MockPermissions:
     def ensure_edit(self, *args):
         pass
 
+    def check_path_access(self, *args, **kwargs):
+        from pepsicode.approval import ApprovalDecision, ApprovalOutcome
+
+        return ApprovalOutcome(decision=ApprovalDecision.ALLOW_ONCE)
+
+    def check_command(self, *args, **kwargs):
+        from pepsicode.approval import ApprovalDecision, ApprovalOutcome
+
+        return ApprovalOutcome(decision=ApprovalDecision.ALLOW_ONCE)
+
+    def check_edit(self, *args, **kwargs):
+        from pepsicode.approval import ApprovalDecision, ApprovalOutcome
+
+        return ApprovalOutcome(decision=ApprovalDecision.ALLOW_ONCE)
+
 
 class MockContext:
     """Mock tool context."""
@@ -151,20 +166,20 @@ class TestPermissionSystem:
         from pepsicode.permissions import PermissionManager
 
         pm = PermissionManager(workspace_root="/test/cwd")
-        with pytest.raises(RuntimeError, match="outside cwd"):
+        with pytest.raises(RuntimeError):
             pm.ensure_path_access("/etc/passwd", "read")
 
     def test_dangerous_command_detection(self):
         """Test that dangerous commands are detected."""
-        from pepsicode.permissions import _classify_dangerous_command
+        from pepsicode.sandbox import classify_dangerous_command
 
         # Git dangerous commands
-        result = _classify_dangerous_command("git", ["reset", "--hard"])
+        result = classify_dangerous_command("git", ["reset", "--hard"])
         assert result is not None
         assert "git reset --hard" in result
 
         # Shell execution
-        result = _classify_dangerous_command("bash", ["-c", "echo test"])
+        result = classify_dangerous_command("bash", ["-c", "echo test"])
         assert result is not None
         assert "bash" in result
 

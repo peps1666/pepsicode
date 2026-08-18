@@ -3,6 +3,22 @@ import { spawn, ChildProcess } from "child_process";
 import * as path from "path";
 import * as net from "net";
 
+// On Windows, Electron helper processes briefly attach to a parent console
+// before the main loop takes over, which can show a brief black window.
+// These flags reduce the number of helper processes and the chance of
+// seeing a console window flash.
+if (process.platform === "win32") {
+  // --no-sandbox avoids spawning an extra sandbox helper process.
+  app.commandLine.appendSwitch("no-sandbox");
+  // Stable console output: write Electron logs to stderr rather than
+  // opening a log file dialog.  Pairs well with the python server's
+  // stdio: ["ignore", "pipe", "pipe"] setup.
+  app.commandLine.appendSwitch("enable-logging", "stderr");
+  // Bind the AppUserModelID so Windows shows the correct taskbar icon
+  // and doesn't fall back to a console window.
+  app.setAppUserModelId("com.pepsicode.app");
+}
+
 let mainWindow: BrowserWindow | null = null;
 let serverProcess: ChildProcess | null = null;
 let serverPort = 8765;
@@ -73,6 +89,21 @@ async function startPythonServer(port: number): Promise<void> {
       cleanEnv[key] = process.env[key];
     }
   }
+
+  // Suppress Windows GUI assertion pop-ups for the Python child and its
+  // grandchildren (MCP stdio servers, cmd.exe).  We do this via
+  // ``PYTHONFAULTHANDLER`` so that any crash prints a Python traceback to
+  // stderr (which Electron captures) rather than opening a "Python has
+  // stopped working" modal.
+  //
+  // Note: we deliberately do NOT pass ``creationFlags: CREATE_NO_WINDOW``
+  // (0x08000000) to spawn.  Combined with ``windowsHide: true`` that flag
+  // is redundant, and on some Windows builds it can cause the child's
+  // stdio pipes to be closed prematurely — the agent loop then appears
+  // to "lose" history messages because the server log lines that the
+  // session/index depends on never reach the renderer.
+  cleanEnv["PYTHONFAULTHANDLER"] = "1";
+  cleanEnv["PYTHONUNBUFFERED"] = "1";
 
   serverProcess = spawn(pythonCmd, args, {
     cwd,

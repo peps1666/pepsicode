@@ -198,10 +198,13 @@ def _run(input_data: dict, context) -> ToolResult:
     if framework == "auto":
         # Check if pytest is available
         try:
+            from pepsicode.subprocess_utils import hide_window_kwargs
+
             subprocess.run(
                 [sys.executable, "-m", "pytest", "--version"],
                 capture_output=True,
                 timeout=5,
+                **hide_window_kwargs(),
             )
             framework = "pytest"
         except Exception:
@@ -251,12 +254,15 @@ def _run(input_data: dict, context) -> ToolResult:
     ]
 
     try:
+        from pepsicode.subprocess_utils import hide_window_kwargs
+
         result = subprocess.run(
             cmd,
             cwd=str(context.cwd),
             capture_output=True,
             text=True,
             timeout=timeout,
+            **hide_window_kwargs(),
         )
 
         output = result.stdout + "\n" + result.stderr

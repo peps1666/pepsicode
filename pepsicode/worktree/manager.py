@@ -50,6 +50,8 @@ class WorktreeManager:
     # ------------------------------------------------------------------
 
     def _run_git(self, args: list[str], cwd: str | None = None, timeout: int = 60) -> subprocess.CompletedProcess[str]:
+        from pepsicode.subprocess_utils import hide_window_kwargs
+
         env = {**os.environ, **GIT_ENV}
         return subprocess.run(
             ["git"] + args,
@@ -57,6 +59,7 @@ class WorktreeManager:
             capture_output=True,
             text=True,
             timeout=timeout,
+            **hide_window_kwargs(),
             stdin=subprocess.DEVNULL,
             env=env,
         )

@@ -19,7 +19,9 @@ def _git_branch(cwd_path: Path) -> str | None:
     if not (cwd_path / ".git").exists():
         return None
     try:
-        result = subprocess.run(
+        from pepsicode.subprocess_utils import run as _run
+
+        result = _run(
             ["git", "rev-parse", "--abbrev-ref", "HEAD"],
             cwd=str(cwd_path),
             capture_output=True,

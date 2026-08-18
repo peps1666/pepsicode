@@ -17,11 +17,14 @@ def _run_docker_command(args: list[str], timeout: int = 30) -> tuple[bool, str, 
     cmd = ["docker"] + args
 
     try:
+        from pepsicode.subprocess_utils import hide_window_kwargs
+
         result = subprocess.run(
             cmd,
             capture_output=True,
             text=True,
             timeout=timeout,
+            **hide_window_kwargs(),
         )
 
         success = result.returncode == 0
@@ -40,12 +43,15 @@ def _run_compose_command(args: list[str], timeout: int = 30, project_dir: str = 
     cmd = ["docker", "compose"] + args
 
     try:
+        from pepsicode.subprocess_utils import hide_window_kwargs
+
         result = subprocess.run(
             cmd,
             capture_output=True,
             text=True,
             timeout=timeout,
             cwd=project_dir,
+            **hide_window_kwargs(),
         )
 
         success = result.returncode == 0

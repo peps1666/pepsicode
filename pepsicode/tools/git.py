@@ -49,12 +49,15 @@ def _run(input_data: dict, context) -> ToolResult:
 
 
 def _run_git(args: list[str], cwd: str) -> tuple[int, str, str]:
+    from pepsicode.subprocess_utils import hide_window_kwargs
+
     proc = subprocess.run(
         ["git"] + args,
         cwd=cwd,
         capture_output=True,
         text=True,
         timeout=30,
+        **hide_window_kwargs(),
     )
     return proc.returncode, proc.stdout.strip(), proc.stderr.strip()
 

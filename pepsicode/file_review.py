@@ -42,7 +42,9 @@ def apply_reviewed_file_change(
 
     diff = build_unified_diff(file_path, previous_content, next_content)
     if context.permissions is not None:
-        context.permissions.ensure_edit(str(target), diff)
+        outcome = context.permissions.check_edit(str(target), diff)
+        if outcome.is_denied or outcome.is_unavailable:
+            return ToolResult(ok=False, output=outcome.denial_message(scope=str(target)))
 
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(next_content, encoding="utf-8")

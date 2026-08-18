@@ -570,8 +570,13 @@ class StdioMcpClient:
             try:
                 if os.name == "nt":
                     try:
+                        from pepsicode.subprocess_utils import hide_window_kwargs
+
                         subprocess.run(
-                            ["taskkill", "/T", "/F", "/PID", str(self.process.pid)], capture_output=True, timeout=5
+                            ["taskkill", "/T", "/F", "/PID", str(self.process.pid)],
+                            capture_output=True,
+                            timeout=5,
+                            **hide_window_kwargs(),
                         )
                     except subprocess.TimeoutExpired:
                         # taskkill failed, use kill

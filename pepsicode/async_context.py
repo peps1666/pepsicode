@@ -175,7 +175,9 @@ class AsyncContextCollector:
         try:
             import subprocess
 
-            result = subprocess.run(
+            from pepsicode.subprocess_utils import run as _run
+
+            result = _run(
                 ["git", "rev-parse", "--abbrev-ref", "HEAD"],
                 cwd=str(self.cwd),
                 capture_output=True,
@@ -193,7 +195,9 @@ class AsyncContextCollector:
         try:
             import subprocess
 
-            result = subprocess.run(
+            from pepsicode.subprocess_utils import run as _run
+
+            result = _run(
                 ["git", "status", "--short"],
                 cwd=str(self.cwd),
                 capture_output=True,
@@ -211,7 +215,9 @@ class AsyncContextCollector:
         try:
             import subprocess
 
-            result = subprocess.run(
+            from pepsicode.subprocess_utils import run as _run
+
+            result = _run(
                 ["git", "log", "--oneline", "-5"],
                 cwd=str(self.cwd),
                 capture_output=True,

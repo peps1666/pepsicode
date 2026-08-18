@@ -64,11 +64,14 @@ def _setup_git_hooks(root: Path, wt: Path) -> None:
         return
 
     try:
+        from pepsicode.subprocess_utils import hide_window_kwargs
+
         subprocess.run(
             ["git", "config", "core.hooksPath", hooks_path],
             cwd=str(wt),
             capture_output=True,
             timeout=10,
+            **hide_window_kwargs(),
         )
         log.debug("Set core.hooksPath to %s in worktree", hooks_path)
     except (subprocess.SubprocessError, OSError) as e:
@@ -118,6 +121,8 @@ def _copy_ignored_files(root: Path, wt: Path) -> None:
         return
 
     try:
+        from pepsicode.subprocess_utils import hide_window_kwargs
+
         result = subprocess.run(
             [
                 "git",
@@ -131,6 +136,7 @@ def _copy_ignored_files(root: Path, wt: Path) -> None:
             capture_output=True,
             text=True,
             timeout=30,
+            **hide_window_kwargs(),
         )
         if result.returncode != 0:
             return

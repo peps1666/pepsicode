@@ -11,7 +11,9 @@ def resolve_tool_path(context: ToolContext, input_path: str, intent: str) -> Pat
     normalized = target.resolve()
 
     if context.permissions is not None:
-        context.permissions.ensure_path_access(str(normalized), intent)
+        outcome = context.permissions.check_path_access(str(normalized), intent)
+        if outcome.is_denied or outcome.is_unavailable:
+            raise PermissionError(outcome.denial_message(scope=str(normalized)))
     else:
         # Fallback: block paths that escape the workspace when no permissions manager
         workspace_root = Path(context.cwd).resolve()
