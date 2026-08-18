@@ -1,7 +1,9 @@
+/* Tool call card: quiet bordered block inside the centered chat column
+   (dsh DisclosureRow chrome — header answers on hover, no strong fill). */
+
 .card {
-  margin: 4px 24px;
-  border: 1px solid var(--dsw-alias-border-l2);
-  border-radius: 6px;
+  border: 1px solid var(--dsw-alias-border-l1);
+  border-radius: 10px;
   overflow: hidden;
   background-color: var(--dsw-alias-bg-layer-1);
 }
@@ -11,10 +13,11 @@
   align-items: center;
   gap: 8px;
   padding: 6px 12px;
-  background-color: var(--dsw-alias-bg-overlay);
   cursor: pointer;
   font-size: 12px;
+  border-radius: 6px;
   user-select: none;
+  transition: background-color var(--ds-transition-duration-fast) ease;
 }
 
 .header:hover {
@@ -45,7 +48,8 @@
 }
 
 .inputBlock {
-  padding: 8px 12px;
+  padding: 4px 12px 10px;
+  border-top: 1px solid var(--dsw-alias-border-l1);
 }
 
 .inputLabel {
@@ -62,7 +66,7 @@
   color: var(--dsw-alias-label-secondary);
   background-color: var(--dsw-alias-markdown-code-block);
   padding: 8px;
-  border-radius: 4px;
+  border-radius: 6px;
   overflow-x: auto;
   white-space: pre-wrap;
   word-break: break-word;

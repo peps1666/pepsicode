@@ -1,53 +1,61 @@
+/* Sidebar (dsh SidebarRoot): vertical stack on the sidebar fill, 12px inline
+   padding; rows are rounded fills — hover/active paint the nav-item pair, no
+   accent borders. */
+
 .container {
   display: flex;
   flex-direction: column;
   height: 100%;
   overflow: hidden;
+  padding: 6px 12px;
+  box-sizing: border-box;
+  background: var(--dsw-specific-sidebar-fill);
+  color: var(--dsw-alias-label-primary);
 }
 
 .header {
+  flex: none;
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 12px 16px;
-  border-bottom: 1px solid var(--dsw-alias-border-l2);
+  height: 44px;
+  padding: 8px 4px;
+  box-sizing: border-box;
 }
 
 .title {
   font-size: 13px;
   font-weight: 600;
-  color: var(--dsw-alias-label-primary);
+  color: var(--dsw-alias-label-secondary);
   text-transform: uppercase;
   letter-spacing: 0.5px;
 }
 
+/* dsh icon button: 28px circle, transparent, hover paints the interactive
+   hover wash. */
 .newBtn {
-  width: 24px;
-  height: 24px;
-  border-radius: 4px;
-  display: flex;
+  flex: none;
+  display: inline-flex;
   align-items: center;
   justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
   font-size: 16px;
+  line-height: 1;
   color: var(--dsw-alias-label-secondary);
-  background-color: transparent;
-  border: 1px solid var(--dsw-alias-border-l3);
+  background: transparent;
+  transition: background-color var(--ds-transition-duration-fast) ease;
 }
 
 .newBtn:hover {
-  background-color: var(--dsw-alias-interactive-bg-hover);
+  background: var(--dsw-alias-interactive-bg-hover);
   color: var(--dsw-alias-label-primary);
 }
 
-.list {
-  flex: 1;
-  overflow-y: auto;
-  padding: 4px 0;
-}
-
 .projectBar {
-  padding: 8px 12px;
-  border-bottom: 1px solid var(--dsw-alias-border-l2);
+  flex: none;
+  padding: 4px 0 10px;
 }
 
 .folderBtn {
@@ -55,19 +63,20 @@
   align-items: center;
   gap: 8px;
   width: 100%;
-  padding: 8px 10px;
-  border-radius: 6px;
-  border: 1px solid var(--dsw-alias-border-l3);
-  background-color: var(--dsw-alias-bg-layer-1);
-  color: var(--dsw-alias-label-secondary);
-  font-size: 12px;
+  height: 38px;
+  padding: 8px 12px;
+  box-sizing: border-box;
+  border-radius: 12px;
+  border: 1px solid var(--dsw-alias-border-l2);
+  background-color: var(--dsw-alias-button-elevated-fill);
+  color: var(--dsw-alias-label-primary);
+  font-size: 13px;
   text-align: left;
   transition: background-color var(--ds-transition-duration-fast) ease;
 }
 
 .folderBtn:hover:not(:disabled) {
-  background-color: var(--dsw-alias-interactive-bg-hover);
-  color: var(--dsw-alias-label-primary);
+  background-color: var(--dsw-alias-button-floating-hover);
 }
 
 .folderBtn:disabled {
@@ -81,6 +90,14 @@
   text-overflow: ellipsis;
   white-space: nowrap;
   font-family: var(--ds-font-family-code);
+  font-size: 12px;
+}
+
+.list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 4px 0;
 }
 
 .loading, .empty {
@@ -91,9 +108,10 @@
 }
 
 .item {
-  padding: 8px 16px;
+  padding: 8px 10px;
+  margin: 1px 0;
+  border-radius: 8px;
   cursor: pointer;
-  border-left: 2px solid transparent;
   transition: background-color var(--ds-transition-duration-fast) ease;
 }
 
@@ -103,16 +121,16 @@
 
 .item.active {
   background-color: var(--dsw-specific-sidebar-nav-item-active);
-  border-left-color: var(--dsw-alias-state-business-primary);
 }
 
 .itemFirst {
   font-size: 13px;
+  line-height: 20px;
   color: var(--dsw-alias-label-primary);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  margin-bottom: 4px;
+  margin-bottom: 2px;
 }
 
 .itemMeta {

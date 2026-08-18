@@ -1,3 +1,7 @@
+/* Chat flow: 16px rhythm through the column gap; the transcript rides the
+   shared centered chat width (dsh ConversationRoot --dsh-chat-content-width),
+   the scroller itself stays full-bleed. */
+
 .container {
   display: flex;
   flex-direction: column;
@@ -10,7 +14,7 @@
   justify-content: space-between;
   align-items: center;
   padding: 10px 20px;
-  border-bottom: 1px solid var(--dsw-alias-border-l2);
+  border-bottom: 1px solid var(--dsw-alias-border-l1);
   background-color: var(--dsw-alias-bg-layer-1);
   flex-shrink: 0;
 }
@@ -28,10 +32,10 @@
 }
 
 .planBadge {
-  background-color: var(--dsw-alias-state-warn-tertiary, var(--dsw-static-amber-100));
-  color: var(--dsw-alias-state-warn-label, var(--dsw-static-amber-600));
+  background-color: var(--dsw-alias-state-warn-tertiary);
+  color: var(--dsw-alias-state-warn-label);
   padding: 2px 8px;
-  border-radius: 4px;
+  border-radius: 6px;
   font-size: 11px;
   font-weight: 600;
   letter-spacing: 0.5px;
@@ -56,7 +60,20 @@
 .messageList {
   flex: 1;
   overflow-y: auto;
-  padding: 16px 0;
+  /* Sides = composer clearance + 16px: the transcript stays exactly 32px
+     narrower than the input card (the shared width rule). */
+  padding: 16px calc(var(--dsh-composer-side-clearance) + 16px);
+}
+
+/* Message column: shared chat width, centered on the same axis as the input
+   card; items flow on a 16px gap. */
+.column {
+  max-width: var(--dsh-chat-content-width);
+  width: 100%;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
 }
 
 .emptyState {

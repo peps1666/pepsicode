@@ -40,7 +40,9 @@ export default function ChatView({ onSend }: { onSend: (input: string) => void }
             <p>Ask anything, or type / for commands</p>
           </div>
         ) : (
-          messages.map((msg) => <MessageItem key={msg.id} message={msg} />)
+          <div className={styles.column}>
+            {messages.map((msg) => <MessageItem key={msg.id} message={msg} />)}
+          </div>
         )}
       </div>
       <Composer onSend={onSend} disabled={isRunning} />

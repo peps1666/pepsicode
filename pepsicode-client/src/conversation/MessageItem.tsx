@@ -31,19 +31,21 @@ export default function MessageItem({ message }: { message: ChatMessage }) {
   }
 
   const isUser = message.role === "user";
-  const className = isUser ? styles.userMessage : styles.assistantMessage;
+
+  if (isUser) {
+    return (
+      <div className={styles.userRow}>
+        <div className={styles.bubble}>
+          <p className={styles.userText}>{message.content}</p>
+        </div>
+      </div>
+    );
+  }
 
   return (
-    <div className={className}>
-      <div className={styles.roleLabel}>{isUser ? "You" : "Assistant"}</div>
-      <div className={styles.content}>
-        {isUser ? (
-          <p className={styles.userText}>{message.content}</p>
-        ) : (
-          <div className={styles.markdown}>
-            <ReactMarkdown remarkPlugins={[remarkGfm]}>{message.content || (message.isStreaming ? "▋" : "")}</ReactMarkdown>
-          </div>
-        )}
+    <div className={styles.assistantMessage}>
+      <div className={styles.markdown}>
+        <ReactMarkdown remarkPlugins={[remarkGfm]}>{message.content || (message.isStreaming ? "▋" : "")}</ReactMarkdown>
       </div>
     </div>
   );

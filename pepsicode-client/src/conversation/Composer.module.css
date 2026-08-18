@@ -1,70 +1,96 @@
+/* Floating capsule composer (dsh ui-conversation InputBar): the card floats
+   above the viewport bottom inside the centered chat column; textarea on top,
+   action row below, primary send bottom-right. */
+
 .container {
-  padding: 12px 24px 16px;
-  border-top: 1px solid var(--dsw-alias-border-l2);
-  background-color: var(--dsw-alias-bg-base);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
   flex-shrink: 0;
+  padding: 0 var(--dsh-composer-side-clearance) 8px;
+  background-color: var(--dsw-alias-bg-base);
 }
 
-.inputWrapper {
+.card {
+  box-sizing: border-box;
   display: flex;
-  align-items: flex-end;
-  gap: 8px;
-  background-color: var(--dsw-specific-input-major);
-  border: 1px solid var(--dsw-alias-border-l3);
-  border-radius: 8px;
-  padding: 8px 12px;
+  flex-direction: column;
+  gap: 12px;
+  width: 100%;
+  max-width: var(--dsh-composer-card-max-width);
+  padding-top: 10px;
+  border: 1px solid var(--dsw-alias-border-l2-darkmode-thin);
+  border-radius: 22px;
+  background: var(--dsw-specific-input-major);
+  box-shadow: var(--dsw-shadow-lv2);
   transition: border-color var(--ds-transition-duration-fast) ease;
 }
 
-.inputWrapper:focus-within {
+.card:focus-within {
   border-color: var(--dsw-alias-state-business-primary);
 }
 
 .textarea {
-  flex: 1;
+  box-sizing: border-box;
+  width: 100%;
   border: none;
   background: transparent;
   color: var(--dsw-alias-label-primary);
+  caret-color: var(--dsw-alias-state-business-primary);
   resize: none;
   outline: none;
-  font-size: 14px;
-  line-height: 1.5;
+  padding: 4px 12px 0 16px;
+  font-size: 15px;
+  line-height: 24px;
   max-height: 200px;
-  min-height: 24px;
+  min-height: 28px;
   user-select: text;
 }
 
 .textarea::placeholder {
-  color: var(--dsw-alias-label-dimmed);
+  color: var(--dsw-alias-label-caption);
 }
 
 .textarea:disabled {
-  opacity: 0.5;
+  color: var(--dsw-alias-label-tertiary);
+  cursor: not-allowed;
 }
 
-.sendButton {
+.row {
   display: flex;
   align-items: center;
-  justify-content: center;
-  width: 32px;
-  height: 32px;
-  border-radius: 6px;
-  background-color: var(--dsw-alias-button-primary-fill);
-  color: var(--dsw-alias-label-primary-foreground);
-  flex-shrink: 0;
-  transition: background-color var(--ds-transition-duration-fast) ease, opacity var(--ds-transition-duration-fast) ease;
+  justify-content: flex-end;
+  gap: 12px;
+  padding: 2px 8px 6px;
+}
+
+/* Primary send (dsh IconButton): 34px circle on the info-fill pair, white
+   glyph; empty text = 0.4 opacity. */
+.sendButton {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 34px;
+  height: 34px;
+  border-radius: 999px;
+  background: var(--dsw-alias-button-info-fill);
+  color: #fff;
+  transition: background-color var(--ds-transition-duration-fast) ease,
+    opacity var(--ds-transition-duration-fast) ease;
 }
 
 .sendButton:hover:not(:disabled) {
-  background-color: var(--dsw-alias-button-primary-hover);
+  background: var(--dsw-alias-button-info-hover);
 }
 
 .sendButton:disabled {
   opacity: 0.4;
-  cursor: not-allowed;
+  cursor: default;
 }
 
 .hint {
+  width: 100%;
+  max-width: var(--dsh-composer-card-max-width);
   text-align: center;
   font-size: 11px;
   color: var(--dsw-alias-label-dimmed);

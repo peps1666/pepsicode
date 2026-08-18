@@ -7,7 +7,7 @@
 
 .tabBar {
   display: flex;
-  border-bottom: 1px solid var(--dsw-alias-border-l2);
+  border-bottom: 1px solid var(--dsw-alias-border-l1);
   padding: 0 8px;
   flex-shrink: 0;
 }

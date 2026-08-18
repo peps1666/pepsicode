@@ -9,7 +9,7 @@
 .sidebar {
   flex-shrink: 0;
   background-color: var(--dsw-specific-sidebar-fill);
-  border-right: 1px solid var(--dsw-alias-border-l2);
+  border-right: 1px solid var(--dsw-alias-border-l1);
   overflow: hidden;
   transition: width var(--ds-transition-duration) var(--ds-ease-in-out);
   display: flex;

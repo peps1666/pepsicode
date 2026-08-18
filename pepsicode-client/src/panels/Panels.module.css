@@ -29,8 +29,8 @@
   font-size: 12px;
   color: var(--dsw-alias-label-tertiary);
   padding: 4px 10px;
-  border-radius: 4px;
-  border: 1px solid var(--dsw-alias-border-l3);
+  border-radius: 6px;
+  border: 1px solid var(--dsw-alias-border-l2);
   background-color: transparent;
 }
 
@@ -164,7 +164,7 @@
 
 .actionBtn {
   padding: 7px 14px;
-  border-radius: 6px;
+  border-radius: 8px;
   font-size: 13px;
   font-weight: 500;
   background-color: var(--dsw-alias-button-primary-fill);
@@ -208,8 +208,8 @@
 }
 
 .hookItem {
-  border: 1px solid var(--dsw-alias-border-l2);
-  border-radius: 6px;
+  border: 1px solid var(--dsw-alias-border-l1);
+  border-radius: 8px;
   padding: 8px 10px;
   background-color: var(--dsw-alias-bg-layer-1);
 }
