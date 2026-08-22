@@ -23,20 +23,17 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from pepsicode.agent_loop import run_agent_turn_stream
-from pepsicode.background_tasks import list_background_tasks
-from pepsicode.cli_commands import (
+from pepsicode.cli.cli_commands import (
     SLASH_COMMANDS,
     find_matching_slash_commands,
     try_handle_local_command,
 )
-from pepsicode.cost_tracker import CostTracker
-from pepsicode.history import load_history_entries, save_history_entries
-from pepsicode.hooks import HookContext, HookEngine, HookEvent
-from pepsicode.local_tool_shortcuts import parse_local_tool_shortcut
-from pepsicode.permissions import PermissionManager
-from pepsicode.prompt import build_system_prompt
-from pepsicode.session import (
+from pepsicode.cli.local_tool_shortcuts import parse_local_tool_shortcut
+from pepsicode.context.history import load_history_entries, save_history_entries
+from pepsicode.context.prompt import build_system_prompt
+from pepsicode.core.agent_loop import run_agent_turn_stream
+from pepsicode.core.background_tasks import list_background_tasks
+from pepsicode.core.session import (
     AutosaveManager,
     SessionData,
     SessionMetadata,
@@ -49,7 +46,10 @@ from pepsicode.session import (
     load_session,
     save_session,
 )
-from pepsicode.state import AppState, Store, create_app_store
+from pepsicode.core.state import AppState, Store, create_app_store
+from pepsicode.hooks import HookContext, HookEngine, HookEvent
+from pepsicode.llm.cost_tracker import CostTracker
+from pepsicode.permissions import PermissionManager
 from pepsicode.tooling import ToolContext, ToolRegistry
 from pepsicode.tui.chrome import (
     ACCENT,
@@ -1540,7 +1540,7 @@ def _handle_input(
 
     # Update app state
     if state.app_state:
-        from pepsicode.state import set_busy
+        from pepsicode.core.state import set_busy
 
         state.app_state.set_state(set_busy())
 
@@ -1810,7 +1810,7 @@ def _handle_input(
             # Persist context state to disk so /context can read it
             if args.context_manager:
                 try:
-                    from pepsicode.context_manager import save_context_state
+                    from pepsicode.context.context_manager import save_context_state
 
                     save_context_state(args.context_manager)
                 except Exception:
@@ -1868,7 +1868,7 @@ def run_tty_app(
 
     context_manager = None
     if runtime:
-        from pepsicode.context_manager import ContextManager
+        from pepsicode.context.context_manager import ContextManager
 
         context_manager = ContextManager(model=runtime.get("model", "default"))
         if hasattr(model, "summarize"):

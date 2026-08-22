@@ -179,7 +179,7 @@ class MemoryFile:
 # Placed here (not at module top) so the names it needs are already bound, and
 # so the ``MemoryStore`` annotation on MemoryManager resolves for both static
 # checkers and runtime get_type_hints().
-from pepsicode.memory_store import MemoryStore  # noqa: E402
+from pepsicode.context.memory_store import MemoryStore  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Memory Manager
@@ -225,7 +225,7 @@ class MemoryManager:
         }
         # Lazily build the default file store to avoid an import cycle:
         # memory_store imports names from this module at module load time.
-        from pepsicode.memory_store import FileMemoryStore  # noqa: F401
+        from pepsicode.context.memory_store import FileMemoryStore  # noqa: F401
 
         self.store: MemoryStore = store if store is not None else FileMemoryStore(workspace)
         # File store is always kept around for mirroring / fallback, even when
@@ -320,7 +320,7 @@ class MemoryManager:
         Returns formatted MEMORY.md content from all scopes,
         respecting token limits.
         """
-        from pepsicode.context_manager import estimate_tokens
+        from pepsicode.context.context_manager import estimate_tokens
 
         parts = []
         total_tokens = 0
@@ -398,7 +398,7 @@ def create_memory_manager(workspace: str) -> MemoryManager:
     agent always has working memory - just stored locally instead of in the
     database.
     """
-    from pepsicode.memory_store import (
+    from pepsicode.context.memory_store import (
         PG_DBNAME,
         PG_HOST,
         PG_PORT,

@@ -1,15 +1,15 @@
-"""Tests for the loop-engineering orchestration layer (pepsicode.loop_engine)."""
+"""Tests for the loop-engineering orchestration layer (pepsicode.core.loop_engine)."""
 
 import pytest
 
-from pepsicode.cost_tracker import BudgetExceededError, CostTracker
-from pepsicode.loop_engine import (
+from pepsicode.core.loop_engine import (
     LoopResult,
     TestRunnerVerifier,
     VerificationResult,
     run_loop,
 )
-from pepsicode.task_tracker import Task, TaskStatus
+from pepsicode.core.task_tracker import Task, TaskStatus
+from pepsicode.llm.cost_tracker import BudgetExceededError, CostTracker
 from pepsicode.tooling import ToolRegistry
 from pepsicode.tools.test_runner import test_runner_tool
 from pepsicode.types import AgentStep, ChatMessage, ModelAdapter

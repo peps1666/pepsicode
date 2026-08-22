@@ -1,4 +1,4 @@
-from pepsicode.mock_model import MockModelAdapter
+from pepsicode.llm.mock_model import MockModelAdapter
 
 
 def test_mock_model_turns_ls_into_tool_call() -> None:

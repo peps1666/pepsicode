@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from pepsicode.skills import load_skill
+from pepsicode.context.skills import load_skill
 from pepsicode.tooling import ToolDefinition, ToolResult
 
 

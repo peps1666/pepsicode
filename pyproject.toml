@@ -62,7 +62,7 @@ ignore = [
 ]
 
 [tool.ruff.lint.per-file-ignores]
-"test_integration.py" = ["F401"]
+"scripts/integration_check.py" = ["F401"]
 
 [tool.ruff.format]
 quote-style = "double"
@@ -88,3 +88,4 @@ pepsicode = ["agents/builtins/*.md"]
 
 [tool.setuptools.packages.find]
 where = ["."]
+include = ["pepsicode*"]

@@ -1,6 +1,10 @@
 """Smoke test for TUI performance optimizations."""
 
-from pepsicode.tty_app import _get_terminal_size, _ThrottledRenderer
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).parent.parent))
+from pepsicode.tui.app import _get_terminal_size, _ThrottledRenderer
 from pepsicode.tui.chrome import (
     _ANSI_RE,
     _cached_terminal_size,

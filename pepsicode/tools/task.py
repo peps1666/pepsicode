@@ -1,6 +1,6 @@
 """Task tool: delegate a scoped task to an isolated sub-agent.
 
-Exposes the existing :mod:`pepsicode.sub_agents` definitions (Explore / Plan /
+Exposes the existing :mod:`pepsicode.core.sub_agents` definitions (Explore / Plan /
 General) as a tool the model can call.  Each invocation runs in its own
 context window with a restricted tool set, then returns only a compact summary
 to the parent -- keeping the main conversation lean (Claude Code's AgentTool
@@ -15,7 +15,7 @@ from typing import Any
 from pepsicode.agents.loader import get_default_loader
 from pepsicode.agents.tool_filter import resolve_agent_tools
 from pepsicode.agents.trace import TraceManager
-from pepsicode.sub_agents import AgentDefinition, AgentType
+from pepsicode.core.sub_agents import AgentDefinition, AgentType
 from pepsicode.tooling import ToolContext, ToolDefinition, ToolRegistry, ToolResult
 from pepsicode.tools.code_nav import find_references_tool, find_symbols_tool, get_ast_info_tool
 from pepsicode.tools.edit_file import edit_file_tool
@@ -127,7 +127,7 @@ def create_task_tool(
 
     def _run(parsed: dict, context: ToolContext) -> ToolResult:
         # Lazy imports avoid any import cycle at module load time.
-        from pepsicode.agent_loop import run_agent_turn
+        from pepsicode.core.agent_loop import run_agent_turn
 
         agent_key = parsed["agent_type"]
 
@@ -144,7 +144,7 @@ def create_task_tool(
         if model_factory is not None:
             sub_model = model_factory(sub_registry)
         elif runtime is not None:
-            from pepsicode.anthropic_adapter import AnthropicModelAdapter
+            from pepsicode.llm.anthropic_adapter import AnthropicModelAdapter
 
             sub_model = AnthropicModelAdapter(_runtime_for_agent(runtime, definition), sub_registry)
         else:

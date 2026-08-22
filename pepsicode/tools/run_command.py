@@ -6,7 +6,7 @@ import subprocess
 import time
 from collections.abc import Sequence
 
-from pepsicode.background_tasks import register_background_shell_task
+from pepsicode.core.background_tasks import register_background_shell_task
 from pepsicode.tooling import ToolDefinition, ToolResult
 from pepsicode.workspace import resolve_tool_path
 

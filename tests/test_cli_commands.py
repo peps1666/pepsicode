@@ -1,5 +1,5 @@
-from pepsicode.cli_commands import find_matching_slash_commands, format_slash_commands
-from pepsicode.local_tool_shortcuts import parse_local_tool_shortcut
+from pepsicode.cli.cli_commands import find_matching_slash_commands, format_slash_commands
+from pepsicode.cli.local_tool_shortcuts import parse_local_tool_shortcut
 
 
 def test_find_matching_slash_commands_returns_help_variants() -> None:

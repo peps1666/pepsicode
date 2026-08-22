@@ -7,7 +7,7 @@ This tests the core input parsing without needing an actual terminal.
 import os
 import sys
 
-sys.path.insert(0, os.path.dirname(__file__))
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from pepsicode.tui.chrome import string_display_width
 from pepsicode.tui.input import render_input_prompt
@@ -35,7 +35,7 @@ def test_chinese_input():
     for i, event in enumerate(text_events):
         char = event.text
         width = string_display_width(char)
-        print(f"   Event {i+1}: '{char}' (width: {width})")
+        print(f"   Event {i + 1}: '{char}' (width: {width})")
 
     # Test 2: Render with cursor
     print("\n2. Rendering with cursor:")

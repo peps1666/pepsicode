@@ -1,8 +1,8 @@
 from dataclasses import asdict
 from typing import Any
 
+from pepsicode.context.skills import discover_skills
 from pepsicode.mcp import create_mcp_backed_tools
-from pepsicode.skills import discover_skills
 from pepsicode.tooling import ToolCapability, ToolRegistry
 from pepsicode.tools.api_tester import api_tester_tool
 from pepsicode.tools.ask_user import ask_user_tool

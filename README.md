@@ -380,15 +380,22 @@ python -m pytest -q tests/test_hooks_v2.py
 
 ```text
 pepsicode/
-  agent_loop.py          主代理同步/流式循环
-  server.py              WebSocket 服务端（供桌面客户端连接）
-  protocol.py            JSON-RPC 消息信封定义
+  main.py                CLI 入口
+  config.py              配置加载
+  tooling.py             工具协议与注册表
   permissions.py         权限与 Plan 模式边界
-  context_manager.py     上下文压缩与恢复
+  core/                  代理引擎：agent_loop（主循环）、session、state、任务编排
+  llm/                   模型层：anthropic_adapter、mock_model、重试与成本统计
+  context/               上下文层：压缩恢复、记忆系统、系统提示词、skills
+  cli/                   命令层：斜杠命令、管理 CLI、安装器
+  server/                WebSocket 服务端（python -m pepsicode.server）与协议定义
   hooks/                 Hooks v2 模型、加载、信任、引擎与运行时接线
   tools/                 内置工具
   agents/                子代理定义与追踪
-  tui/                   终端界面
+  approval/              审批后端
+  sandbox/               命令沙箱分类
+  worktree/              Git worktree 会话管理
+  tui/                   终端界面（app.py 为全屏 TUI 主程序）
 pepsicode-client/        Electron 桌面客户端
   electron/              主进程（main.ts）与预加载（preload.ts）
   src/                   React 前端源码

@@ -5,21 +5,21 @@ import os
 import sys
 from pathlib import Path
 
-from pepsicode.agent_loop import run_agent_turn
 from pepsicode.agents.trace import TraceManager
-from pepsicode.anthropic_adapter import AnthropicModelAdapter
-from pepsicode.cli_commands import try_handle_local_command
+from pepsicode.cli.cli_commands import try_handle_local_command
+from pepsicode.cli.local_tool_shortcuts import parse_local_tool_shortcut
+from pepsicode.cli.manage_cli import maybe_handle_management_command
 from pepsicode.config import load_runtime_config
-from pepsicode.history import load_history_entries, save_history_entries
+from pepsicode.context.history import load_history_entries, save_history_entries
+from pepsicode.context.prompt import build_system_prompt
+from pepsicode.core.agent_loop import run_agent_turn
 from pepsicode.hooks import HookContext, HookEvent, create_hook_engine
-from pepsicode.local_tool_shortcuts import parse_local_tool_shortcut
-from pepsicode.manage_cli import maybe_handle_management_command
-from pepsicode.mock_model import MockModelAdapter
+from pepsicode.llm.anthropic_adapter import AnthropicModelAdapter
+from pepsicode.llm.mock_model import MockModelAdapter
 from pepsicode.permissions import PermissionManager
-from pepsicode.prompt import build_system_prompt
 from pepsicode.tooling import ToolContext
 from pepsicode.tools import create_default_tool_registry
-from pepsicode.tty_app import run_tty_app
+from pepsicode.tui.app import run_tty_app
 from pepsicode.tui.transcript import format_transcript_text
 from pepsicode.tui.types import TranscriptEntry
 from pepsicode.types import ChatMessage
@@ -172,7 +172,7 @@ def main() -> None:
 
     # Run installer if requested
     if args.install:
-        from pepsicode.install import main as install_main
+        from pepsicode.cli.install import main as install_main
 
         install_main()
         return
@@ -213,7 +213,7 @@ def main() -> None:
     # Shared observability objects: the cost tracker monitors API spending
     # (including sub-agent calls via the Task tool) and the trace manager
     # records a tree of sub-agent invocations for debugging and reporting.
-    from pepsicode.cost_tracker import CostTracker
+    from pepsicode.llm.cost_tracker import CostTracker
 
     cost_tracker = CostTracker()
     trace_manager = TraceManager()
@@ -237,7 +237,7 @@ def main() -> None:
     )
 
     # Initialize ContextManager for context window management
-    from pepsicode.context_manager import ContextManager, save_context_state
+    from pepsicode.context.context_manager import ContextManager, save_context_state
     from pepsicode.logging_config import get_logger
 
     logger = get_logger("main")
@@ -254,7 +254,7 @@ def main() -> None:
     # Initialize MemoryManager for cross-session knowledge retention.
     # The factory prefers PostgreSQL and falls back to the file store, so the
     # chosen backend is detected automatically without changing call sites.
-    from pepsicode.memory import create_memory_manager
+    from pepsicode.context.memory import create_memory_manager
 
     memory_mgr = create_memory_manager(cwd)
     logger.info("Memory manager initialized")

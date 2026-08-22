@@ -9,7 +9,7 @@ from collections.abc import Callable
 from concurrent.futures import Future, ThreadPoolExecutor, wait
 from typing import Any
 
-from pepsicode.context_artifacts import ContextArtifactStore, prepare_tool_result
+from pepsicode.context.context_artifacts import ContextArtifactStore, prepare_tool_result
 from pepsicode.hooks.models import (
     HookActionResult,
     HookActionType,

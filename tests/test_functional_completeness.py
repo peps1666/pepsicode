@@ -194,7 +194,7 @@ class TestContextManagement:
 
     def test_token_estimation_ascii(self):
         """Test token estimation for ASCII text."""
-        from pepsicode.context_manager import estimate_tokens
+        from pepsicode.context.context_manager import estimate_tokens
 
         text = "Hello World " * 100
         tokens = estimate_tokens(text)
@@ -204,7 +204,7 @@ class TestContextManagement:
 
     def test_token_estimation_chinese(self):
         """Test token estimation for Chinese text."""
-        from pepsicode.context_manager import estimate_tokens
+        from pepsicode.context.context_manager import estimate_tokens
 
         text = "浣犲ソ涓栫晫" * 100
         tokens = estimate_tokens(text)
@@ -214,7 +214,7 @@ class TestContextManagement:
 
     def test_context_manager_stats(self):
         """Test context manager statistics."""
-        from pepsicode.context_manager import ContextManager
+        from pepsicode.context.context_manager import ContextManager
 
         ctx = ContextManager(model="claude-sonnet-4-20250514")
         ctx.messages = [{"role": "user", "content": "Hello " * 100}]
@@ -224,7 +224,7 @@ class TestContextManagement:
 
     def test_context_compaction(self):
         """Test context compaction reduces message count."""
-        from pepsicode.context_manager import ContextManager
+        from pepsicode.context.context_manager import ContextManager
 
         ctx = ContextManager(model="claude-sonnet-4-20250514", context_window=1000)
         # Add many messages to trigger compaction
@@ -245,13 +245,13 @@ class TestMemorySystem:
     @pytest.fixture
     def memory_mgr(self, tmp_path):
         """Create a temporary memory manager."""
-        from pepsicode.memory import MemoryManager
+        from pepsicode.context.memory import MemoryManager
 
         return MemoryManager(workspace=str(tmp_path))
 
     def test_add_memory_entry(self, memory_mgr):
         """Test adding a memory entry."""
-        from pepsicode.memory import MemoryScope
+        from pepsicode.context.memory import MemoryScope
 
         entry = memory_mgr.add_entry(
             scope=MemoryScope.PROJECT,
@@ -264,7 +264,7 @@ class TestMemorySystem:
 
     def test_search_memory(self, memory_mgr):
         """Test searching memory entries."""
-        from pepsicode.memory import MemoryScope
+        from pepsicode.context.memory import MemoryScope
 
         memory_mgr.add_entry(MemoryScope.PROJECT, "test", "Python is great for coding")
         memory_mgr.add_entry(MemoryScope.PROJECT, "test", "JavaScript runs in browsers")
@@ -274,7 +274,7 @@ class TestMemorySystem:
 
     def test_memory_context_injection(self, memory_mgr):
         """Test memory context injection for system prompt."""
-        from pepsicode.memory import MemoryScope
+        from pepsicode.context.memory import MemoryScope
 
         memory_mgr.add_entry(MemoryScope.PROJECT, "convention", "Always write tests")
         context = memory_mgr.get_relevant_context(max_entries=10, max_tokens=8000)
@@ -283,7 +283,7 @@ class TestMemorySystem:
 
     def test_memory_persistence(self, memory_mgr):
         """Test memory persists to disk."""
-        from pepsicode.memory import MemoryManager, MemoryScope
+        from pepsicode.context.memory import MemoryManager, MemoryScope
 
         memory_mgr.add_entry(MemoryScope.PROJECT, "test", "Persistent memory entry")
         # Reload and check
@@ -310,7 +310,7 @@ class TestHelpSystem:
 
     def test_context_details_format(self):
         """Test /context command output format."""
-        from pepsicode.context_manager import ContextManager
+        from pepsicode.context.context_manager import ContextManager
 
         ctx = ContextManager(model="claude-sonnet-4-20250514")
         result = ctx.format_context_details()
@@ -319,7 +319,7 @@ class TestHelpSystem:
 
     def test_memory_summary_format(self):
         """Test /memory command output format."""
-        from pepsicode.memory import MemoryManager
+        from pepsicode.context.memory import MemoryManager
 
         with tempfile.TemporaryDirectory() as tmp:
             mem = MemoryManager(workspace=tmp)
@@ -330,7 +330,7 @@ class TestHelpSystem:
 
     def test_slash_commands_available(self):
         """Test that all slash commands are available."""
-        from pepsicode.cli_commands import SLASH_COMMANDS
+        from pepsicode.cli.cli_commands import SLASH_COMMANDS
 
         command_names = {cmd.name for cmd in SLASH_COMMANDS}
         expected = {"/help", "/tools", "/status", "/config", "/context", "/memory", "/mcp", "/skills", "/exit"}

@@ -9,7 +9,7 @@ from pepsicode.config import (
     save_mcp_tokens,
     save_scoped_mcp_servers,
 )
-from pepsicode.skills import discover_skills, install_skill, remove_managed_skill
+from pepsicode.context.skills import discover_skills, install_skill, remove_managed_skill
 
 
 def _print_usage() -> None:

@@ -20,13 +20,13 @@ import pytest
 # Ensure py-src is on path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from pepsicode.agent_loop import run_agent_turn
 from pepsicode.config import PEPSI_CODE_DIR, load_effective_settings
-from pepsicode.context_manager import ContextManager
-from pepsicode.mock_model import MockModelAdapter
+from pepsicode.context.context_manager import ContextManager
+from pepsicode.context.prompt import build_system_prompt
+from pepsicode.core.agent_loop import run_agent_turn
+from pepsicode.core.session import SessionData, list_sessions, load_session, save_session
+from pepsicode.llm.mock_model import MockModelAdapter
 from pepsicode.permissions import PermissionManager
-from pepsicode.prompt import build_system_prompt
-from pepsicode.session import SessionData, list_sessions, load_session, save_session
 from pepsicode.tooling import ToolRegistry
 from pepsicode.tools import create_default_tool_registry
 from pepsicode.tui.types import _create_transcript_entry, _recycle_transcript_entry
@@ -695,7 +695,7 @@ class TestLiveAPI:
 
     def test_simple_question(self, tools, tmp_workspace, auto_allow_permissions):
         """Send a simple question to the real API and verify response."""
-        from pepsicode.anthropic_adapter import AnthropicModelAdapter
+        from pepsicode.llm.anthropic_adapter import AnthropicModelAdapter
 
         runtime = {
             "model": os.environ.get("ANTHROPIC_MODEL", "claude-sonnet-4-20250514"),
@@ -726,7 +726,7 @@ class TestLiveAPI:
 
     def test_tool_use_via_api(self, tools, tmp_workspace, auto_allow_permissions):
         """Real API triggers tool use (list_files) and processes result."""
-        from pepsicode.anthropic_adapter import AnthropicModelAdapter
+        from pepsicode.llm.anthropic_adapter import AnthropicModelAdapter
 
         runtime = {
             "model": os.environ.get("ANTHROPIC_MODEL", "claude-sonnet-4-20250514"),

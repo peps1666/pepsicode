@@ -23,8 +23,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from pepsicode.context_manager import estimate_tokens
-from pepsicode.cost_tracker import CostTracker
+from pepsicode.context.context_manager import estimate_tokens
+from pepsicode.llm.cost_tracker import CostTracker
 from pepsicode.tooling import ToolContext
 from pepsicode.tools.grep_files import grep_files_tool
 from pepsicode.tools.list_files import list_files_tool
@@ -262,7 +262,7 @@ def benchmark_context_manager() -> list[BenchmarkResult]:
     """Benchmark context management operations."""
     results = []
 
-    from pepsicode.context_manager import ContextManager
+    from pepsicode.context.context_manager import ContextManager
 
     # Create messages for testing
     messages = []
@@ -397,7 +397,7 @@ def profile_key_functions():
     profiler.enable()
 
     # Run some operations
-    from pepsicode.context_manager import estimate_tokens
+    from pepsicode.context.context_manager import estimate_tokens
 
     large_text = "Hello 浣犲ソ " * 10000
     for _ in range(1000):

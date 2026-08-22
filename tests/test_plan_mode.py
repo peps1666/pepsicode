@@ -4,9 +4,9 @@ from pathlib import Path
 
 import pytest
 
-from pepsicode.agent_loop import _execute_calls_in_order
+from pepsicode.context.prompt import build_system_prompt
+from pepsicode.core.agent_loop import _execute_calls_in_order
 from pepsicode.permissions import PermissionManager, PermissionMode
-from pepsicode.prompt import build_system_prompt
 from pepsicode.tooling import ToolCapability, ToolContext, ToolDefinition, ToolRegistry, ToolResult
 from pepsicode.tools import create_default_tool_registry
 

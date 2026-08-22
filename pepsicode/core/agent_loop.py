@@ -5,11 +5,11 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from typing import Any, cast
 
-from pepsicode.anthropic_adapter import ContextOverflowError
-from pepsicode.context_artifacts import ContextArtifactStore, prepare_tool_result
-from pepsicode.context_manager import ContextManager
-from pepsicode.cost_tracker import BudgetExceededError, CostTracker
+from pepsicode.context.context_artifacts import ContextArtifactStore, prepare_tool_result
+from pepsicode.context.context_manager import ContextManager
 from pepsicode.hooks import HookContext, HookEngine, HookEvent
+from pepsicode.llm.anthropic_adapter import ContextOverflowError
+from pepsicode.llm.cost_tracker import BudgetExceededError, CostTracker
 from pepsicode.logging_config import get_logger
 from pepsicode.permissions import PermissionManager
 from pepsicode.tooling import ToolContext, ToolRegistry, ToolResult

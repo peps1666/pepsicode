@@ -1,6 +1,6 @@
 """Hot-reloadable markdown-driven agent definitions.
 
-Mirrors the three-level discovery pattern used by :mod:`pepsicode.skills`:
+Mirrors the three-level discovery pattern used by :mod:`pepsicode.context.skills`:
 
 1. **Project** -- ``<cwd>/.pepsi-code/agents/*.md``  (highest priority)
 2. **User** -- ``~/.pepsi-code/agents/*.md``
@@ -25,7 +25,7 @@ from pathlib import Path
 from typing import Any
 
 from pepsicode.agents.parser import parse_frontmatter
-from pepsicode.sub_agents import AgentDefinition, AgentType
+from pepsicode.core.sub_agents import AgentDefinition, AgentType
 
 # Mapping from agent file name (without .md) to the built-in AgentType enum.
 # Custom agents (not in this map) get ``AgentType.GENERAL`` so they run with

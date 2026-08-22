@@ -1,5 +1,5 @@
 from pepsicode.permissions import PermissionManager
-from pepsicode.tty_app import (
+from pepsicode.tui.app import (
     _apply_tool_result_visual_state,
     _format_history,
     _mark_unfinished_tools,

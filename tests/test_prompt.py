@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from pepsicode.prompt import build_system_prompt
+from pepsicode.context.prompt import build_system_prompt
 
 
 def test_build_system_prompt_includes_skills_and_mcp(tmp_path: Path) -> None:

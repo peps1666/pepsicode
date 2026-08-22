@@ -1,4 +1,4 @@
-from pepsicode.agent_loop import run_agent_turn
+from pepsicode.core.agent_loop import run_agent_turn
 from pepsicode.tooling import ToolDefinition, ToolRegistry, ToolResult
 from pepsicode.types import AgentStep, ChatMessage, ModelAdapter, StepDiagnostics
 

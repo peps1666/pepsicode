@@ -194,7 +194,7 @@ def try_handle_local_command(user_input: str, tools=None, permissions=None) -> s
         try:
             import os
 
-            from pepsicode.memory import MemoryManager, MemoryScope
+            from pepsicode.context.memory import MemoryManager, MemoryScope
 
             memory_mgr = MemoryManager(workspace=os.getcwd())
 
@@ -240,7 +240,7 @@ def try_handle_local_command(user_input: str, tools=None, permissions=None) -> s
     if user_input == "/context":
         # Context usage display
         try:
-            from pepsicode.context_manager import load_context_state
+            from pepsicode.context.context_manager import load_context_state
 
             ctx_mgr = load_context_state()
             if ctx_mgr:

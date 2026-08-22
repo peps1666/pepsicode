@@ -13,7 +13,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from pepsicode.config import PEPSI_CODE_DIR
-from pepsicode.context_artifacts import ARTIFACT_REFERENCE_PATTERN
+from pepsicode.context.context_artifacts import ARTIFACT_REFERENCE_PATTERN
 
 # ---------------------------------------------------------------------------
 # Constants

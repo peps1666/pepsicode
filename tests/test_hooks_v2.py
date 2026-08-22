@@ -6,7 +6,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-from pepsicode.agent_loop import run_agent_turn
+from pepsicode.core.agent_loop import run_agent_turn
 from pepsicode.hooks import (
     HookAction,
     HookActionResult,

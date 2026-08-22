@@ -10,7 +10,7 @@ Usage::
     python -m pepsicode.server --port 8765
 
 The server listens on ``ws://127.0.0.1:<port>`` and speaks the JSON-RPC
-envelope defined in :mod:`pepsicode.protocol`.
+envelope defined in :mod:`pepsicode.server.app.protocol`.
 """
 
 from __future__ import annotations
@@ -26,20 +26,20 @@ from concurrent.futures import Future, ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
-from pepsicode import protocol
-from pepsicode.agent_loop import run_agent_turn_stream
 from pepsicode.agents.trace import TraceManager
-from pepsicode.anthropic_adapter import AnthropicModelAdapter
 from pepsicode.approval import ApprovalBackend, ApprovalDecision, ApprovalOutcome, ApprovalRequest
 from pepsicode.config import load_runtime_config
-from pepsicode.context_manager import ContextManager
-from pepsicode.cost_tracker import CostTracker
+from pepsicode.context.context_manager import ContextManager
+from pepsicode.context.prompt import build_system_prompt
+from pepsicode.core.agent_loop import run_agent_turn_stream
+from pepsicode.core.session import SessionData, create_new_session, save_session
 from pepsicode.hooks import HookContext, HookEvent, create_hook_engine
+from pepsicode.llm.anthropic_adapter import AnthropicModelAdapter
+from pepsicode.llm.cost_tracker import CostTracker
+from pepsicode.llm.mock_model import MockModelAdapter
 from pepsicode.logging_config import get_logger, setup_logging
-from pepsicode.mock_model import MockModelAdapter
 from pepsicode.permissions import PermissionManager, PermissionMode
-from pepsicode.prompt import build_system_prompt
-from pepsicode.session import SessionData, create_new_session, save_session
+from pepsicode.server import protocol
 from pepsicode.tools import create_default_tool_registry
 from pepsicode.types import ChatMessage
 
@@ -346,7 +346,7 @@ class PepsiCodeServer:
             }
 
         if method == "session/list":
-            from pepsicode.session import list_sessions
+            from pepsicode.core.session import list_sessions
 
             sessions = list_sessions()
             return {
@@ -364,7 +364,7 @@ class PepsiCodeServer:
             }
 
         if method == "session/resume":
-            from pepsicode.session import load_session
+            from pepsicode.core.session import load_session
 
             session_id = params.get("session_id", "")
             loaded = load_session(session_id)
@@ -385,7 +385,7 @@ class PepsiCodeServer:
             }
 
         if method == "session/delete":
-            from pepsicode.session import delete_session
+            from pepsicode.core.session import delete_session
 
             session_id = params.get("session_id", "")
             deleted = delete_session(session_id)
@@ -639,7 +639,7 @@ class PepsiCodeServer:
 
         # Fall through: try cli_commands
         try:
-            from pepsicode.cli_commands import try_handle_local_command
+            from pepsicode.cli.cli_commands import try_handle_local_command
 
             result = try_handle_local_command(user_input, tools=session.tools, permissions=session.permissions)
             if result is not None:

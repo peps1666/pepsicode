@@ -4,7 +4,7 @@ import sys
 from pathlib import Path
 
 # Ensure we can import pepsicode
-sys.path.insert(0, str(Path(__file__).parent))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 print("=" * 70)
 print("  pepsicode Python - Integration Test")
@@ -47,7 +47,9 @@ def test(name: str, func):
 def test_import_core():
     """Test core module imports."""
     try:
-        from pepsicode import agent_loop, config, history, mcp, permissions, prompt, skills, tooling, workspace
+        from pepsicode import config, mcp, permissions, tooling, workspace
+        from pepsicode.context import history, prompt, skills
+        from pepsicode.core import agent_loop
 
         return True
     except ImportError as e:
@@ -57,21 +59,18 @@ def test_import_core():
 def test_import_new_features():
     """Test new feature imports."""
     try:
-        from pepsicode import (
-            api_retry,
+        from pepsicode import hooks
+        from pepsicode.cli import install, poly_commands
+        from pepsicode.context import context_manager, memory
+        from pepsicode.core import (
             async_context,
             auto_mode,
-            context_manager,
-            cost_tracker,
-            hooks,
-            install,
-            memory,
-            poly_commands,
             session,
             state,
             sub_agents,
             task_tracker,
         )
+        from pepsicode.llm import api_retry, cost_tracker
 
         return True
     except ImportError as e:
@@ -80,7 +79,7 @@ def test_import_new_features():
 
 def test_store_state():
     """Test Store state management."""
-    from pepsicode.state import create_app_store
+    from pepsicode.core.state import create_app_store
 
     # Create store
     store = create_app_store({"model": "test-model"})
@@ -90,7 +89,7 @@ def test_store_state():
     assert state.model == "test-model"
 
     # Update state
-    from pepsicode.state import set_busy, set_idle, update_context_usage
+    from pepsicode.core.state import set_busy, set_idle, update_context_usage
 
     store.set_state(set_busy("read_file"))
     state = store.get_state()
@@ -113,7 +112,7 @@ def test_store_state():
 
 def test_cost_tracker():
     """Test cost tracking."""
-    from pepsicode.cost_tracker import CostTracker
+    from pepsicode.llm.cost_tracker import CostTracker
 
     tracker = CostTracker()
 
@@ -141,7 +140,7 @@ def test_cost_tracker():
 
 def test_context_manager():
     """Test context window management."""
-    from pepsicode.context_manager import ContextManager
+    from pepsicode.context.context_manager import ContextManager
 
     manager = ContextManager(model="default", context_window=100000)
 
@@ -164,7 +163,7 @@ def test_context_manager():
 
 def test_task_tracker():
     """Test task tracking."""
-    from pepsicode.task_tracker import TaskManager
+    from pepsicode.core.task_tracker import TaskManager
 
     tm = TaskManager()
     tm.create_list("Test Tasks")
@@ -191,7 +190,7 @@ def test_memory_system():
     import tempfile
     from pathlib import Path
 
-    from pepsicode.memory import MemoryManager, MemoryScope
+    from pepsicode.context.memory import MemoryManager, MemoryScope
 
     # Create temp workspace
     with tempfile.TemporaryDirectory() as tmpdir:
@@ -218,9 +217,9 @@ def test_memory_system():
 
 def test_poly_commands():
     """Test polyorphic command system."""
-    from pepsicode.cost_tracker import CostTracker
-    from pepsicode.poly_commands import CommandRegistry, create_builtin_commands
-    from pepsicode.state import create_app_store
+    from pepsicode.cli.poly_commands import CommandRegistry, create_builtin_commands
+    from pepsicode.core.state import create_app_store
+    from pepsicode.llm.cost_tracker import CostTracker
 
     # Create registry
     registry = CommandRegistry()
@@ -249,7 +248,7 @@ def test_poly_commands():
 
 def test_auto_mode():
     """Test Auto Mode permission system."""
-    from pepsicode.auto_mode import AutoModeChecker, PermissionMode, RiskLevel
+    from pepsicode.core.auto_mode import AutoModeChecker, PermissionMode, RiskLevel
 
     checker = AutoModeChecker(mode=PermissionMode.AUTO)
 
@@ -301,7 +300,7 @@ def test_sub_agents():
     """Test Sub-agents system."""
     from pepsicode.agents.tool_filter import GLOBAL_DISALLOWED, resolve_agent_tools
     from pepsicode.agents.trace import TraceManager
-    from pepsicode.sub_agents import AgentDefinition, AgentType
+    from pepsicode.core.sub_agents import AgentDefinition, AgentType
     from pepsicode.tooling import ToolRegistry
 
     # Verify built-in agent definitions and their tool whitelists.
@@ -352,7 +351,7 @@ def test_sub_agents():
 
 def test_api_retry():
     """Test API retry mechanism."""
-    from pepsicode.api_retry import HTTPError, calculate_backoff, retry_with_backoff
+    from pepsicode.llm.api_retry import HTTPError, calculate_backoff, retry_with_backoff
 
     # Test backoff calculation
     backoff = calculate_backoff(0, base=1.0, max_wait=60.0, jitter=0.0)
@@ -384,7 +383,7 @@ def test_session_persistence():
     from pathlib import Path
     from unittest.mock import patch
 
-    from pepsicode.session import (
+    from pepsicode.core.session import (
         create_new_session,
         delete_session,
         list_sessions,
@@ -396,8 +395,8 @@ def test_session_persistence():
         tmp_path = Path(tmpdir)
 
         with (
-            patch("pepsicode.session.SESSIONS_DIR", tmp_path / "sessions"),
-            patch("pepsicode.session.PEPSI_CODE_DIR", tmp_path),
+            patch("pepsicode.core.session.SESSIONS_DIR", tmp_path / "sessions"),
+            patch("pepsicode.core.session.PEPSI_CODE_DIR", tmp_path),
         ):
             # Create session
             session = create_new_session(workspace="/tmp/test")
@@ -427,7 +426,7 @@ def test_async_context():
     """Test async context collector."""
     import asyncio
 
-    from pepsicode.async_context import AsyncContextCollector
+    from pepsicode.core.async_context import AsyncContextCollector
 
     async def run_test():
         collector = AsyncContextCollector(str(Path.cwd()))

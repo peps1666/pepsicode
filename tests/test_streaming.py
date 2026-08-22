@@ -2,8 +2,8 @@
 
 import sys
 
-from pepsicode.agent_loop import _accumulate_stream_tokens, run_agent_turn_stream
-from pepsicode.anthropic_adapter import (
+from pepsicode.core.agent_loop import _accumulate_stream_tokens, run_agent_turn_stream
+from pepsicode.llm.anthropic_adapter import (
     _consume_pending_usage,
     _parse_sse_event,
     _process_sse_event,

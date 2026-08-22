@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from pepsicode.context_manager import (
+from pepsicode.context.context_manager import (
     CompactBoundary,
     ContextManager,
     RecoveryState,
@@ -132,7 +132,7 @@ def test_compaction_circuit_breaks_on_unchanged_noop_context():
 
 
 def test_context_recovery_metadata_persists(monkeypatch, tmp_path):
-    import pepsicode.context_manager as context_module
+    import pepsicode.context.context_manager as context_module
 
     monkeypatch.setattr(context_module, "PEPSI_CODE_DIR", tmp_path)
     manager = ContextManager()

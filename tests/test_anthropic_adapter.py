@@ -1,6 +1,6 @@
 import json
 
-from pepsicode.anthropic_adapter import AnthropicModelAdapter
+from pepsicode.llm.anthropic_adapter import AnthropicModelAdapter
 from pepsicode.tooling import ToolDefinition, ToolRegistry
 
 

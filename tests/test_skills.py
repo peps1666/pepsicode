@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from pepsicode.skills import discover_skills, load_skill
+from pepsicode.context.skills import discover_skills, load_skill
 
 
 def test_discover_skills_prefers_project_root(tmp_path: Path, monkeypatch) -> None:

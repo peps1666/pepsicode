@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from pepsicode.file_review import apply_reviewed_file_change
+from pepsicode.core.file_review import apply_reviewed_file_change
 from pepsicode.tooling import ToolDefinition
 from pepsicode.workspace import resolve_tool_path
 

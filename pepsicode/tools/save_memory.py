@@ -26,7 +26,7 @@ def _validate(input_data: dict) -> dict:
 
 
 def _run(input_data: dict, context) -> ToolResult:
-    from pepsicode.memory import MemoryScope
+    from pepsicode.context.memory import MemoryScope
 
     scope_map = {
         "user": MemoryScope.USER,
@@ -37,7 +37,7 @@ def _run(input_data: dict, context) -> ToolResult:
 
     # Reuse create_memory_manager so the same backend selection (PostgreSQL
     # preferred, file fallback) applies as in the main session.
-    from pepsicode.memory import create_memory_manager
+    from pepsicode.context.memory import create_memory_manager
 
     memory_mgr = create_memory_manager(context.cwd)
 

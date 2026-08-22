@@ -1,6 +1,6 @@
 """Loop-engineering orchestration layer.
 
-Wraps :func:`pepsicode.agent_loop.run_agent_turn` with the three "connectors"
+Wraps :func:`pepsicode.core.agent_loop.run_agent_turn` with the three "connectors"
 that turn a single agent turn into a self-closing loop:
 
 * **Verifier** — independently checks whether the agent's output actually
@@ -24,10 +24,10 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Protocol
 
-from pepsicode.agent_loop import run_agent_turn
-from pepsicode.cost_tracker import BudgetExceededError, CostTracker
+from pepsicode.core.agent_loop import run_agent_turn
+from pepsicode.core.task_tracker import Task, TaskManager
+from pepsicode.llm.cost_tracker import BudgetExceededError, CostTracker
 from pepsicode.permissions import PermissionManager
-from pepsicode.task_tracker import Task, TaskManager
 from pepsicode.tooling import ToolContext, ToolRegistry
 from pepsicode.types import ChatMessage, ModelAdapter
 

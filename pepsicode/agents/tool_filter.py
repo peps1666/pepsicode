@@ -22,7 +22,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from pepsicode.sub_agents import AgentDefinition
+    from pepsicode.core.sub_agents import AgentDefinition
     from pepsicode.tooling import ToolDefinition, ToolRegistry
 
 # Tools no sub-agent may ever call.  ``task`` prevents unbounded recursion;

@@ -9,7 +9,7 @@ from pathlib import Path
 from pepsicode.agents.parser import parse_frontmatter
 from pepsicode.agents.tool_filter import resolve_agent_tools
 from pepsicode.agents.trace import TraceManager
-from pepsicode.sub_agents import AgentDefinition, AgentType
+from pepsicode.core.sub_agents import AgentDefinition, AgentType
 from pepsicode.tooling import ToolDefinition, ToolRegistry, ToolResult
 
 # ---------------------------------------------------------------------------

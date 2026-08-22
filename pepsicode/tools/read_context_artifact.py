@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from pepsicode.context_artifacts import (
+from pepsicode.context.context_artifacts import (
     DEFAULT_ARTIFACT_READ_CHARS,
     MAX_ARTIFACT_READ_CHARS,
     ContextArtifactStore,

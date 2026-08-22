@@ -4,7 +4,7 @@ from unittest.mock import patch
 
 import pytest
 
-from pepsicode.session import (
+from pepsicode.core.session import (
     AutosaveManager,
     cleanup_old_sessions,
     create_new_session,
@@ -24,7 +24,10 @@ def temp_session_dir(tmp_path):
     """Create a temporary session directory."""
     sessions_dir = tmp_path / "sessions"
     sessions_dir.mkdir()
-    with patch("pepsicode.session.SESSIONS_DIR", sessions_dir), patch("pepsicode.session.PEPSI_CODE_DIR", tmp_path):
+    with (
+        patch("pepsicode.core.session.SESSIONS_DIR", sessions_dir),
+        patch("pepsicode.core.session.PEPSI_CODE_DIR", tmp_path),
+    ):
         yield sessions_dir
 
 

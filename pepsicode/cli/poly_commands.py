@@ -17,7 +17,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
 
-from pepsicode.state import AppState, Store
+from pepsicode.core.state import AppState, Store
 
 # ---------------------------------------------------------------------------
 # Command types
@@ -323,7 +323,7 @@ def create_builtin_commands(
     # /status - Show app state summary
     def status_handler(args: str, context: dict) -> str:
         if app_state:
-            from pepsicode.state import format_app_state_summary
+            from pepsicode.core.state import format_app_state_summary
 
             return format_app_state_summary(app_state.get_state())
         return "App state not initialized."
@@ -380,7 +380,7 @@ def create_builtin_commands(
     # /memory - Show memory status
     def memory_handler(args: str, context: dict) -> str:
         try:
-            from pepsicode.memory import MemoryManager
+            from pepsicode.context.memory import MemoryManager
 
             workspace = context.get("workspace", ".")
             mm = MemoryManager(workspace)
@@ -404,7 +404,7 @@ def create_builtin_commands(
     # /tasks - Show task list
     def tasks_handler(args: str, context: dict) -> str:
         try:
-            from pepsicode.task_tracker import TaskManager
+            from pepsicode.core.task_tracker import TaskManager
 
             tm = TaskManager()
             if tm.active_list:

@@ -6,9 +6,9 @@ usage, LLM/heuristic summarization, opt-in governance, and the Task tool.
 import threading
 import time
 
-from pepsicode.agent_loop import _execute_calls_in_order, _snip_tool_outputs, run_agent_turn
-from pepsicode.anthropic_adapter import ContextOverflowError
-from pepsicode.context_manager import ContextManager, _heuristic_summary
+from pepsicode.context.context_manager import ContextManager, _heuristic_summary
+from pepsicode.core.agent_loop import _execute_calls_in_order, _snip_tool_outputs, run_agent_turn
+from pepsicode.llm.anthropic_adapter import ContextOverflowError
 from pepsicode.tooling import ToolContext, ToolDefinition, ToolRegistry, ToolResult
 from pepsicode.types import AgentStep, ModelAdapter
 
@@ -223,7 +223,7 @@ def test_compaction_uses_summarizer_callback():
 
 
 def test_governance_block_off_by_default(tmp_path):
-    from pepsicode.prompt import build_system_prompt
+    from pepsicode.context.prompt import build_system_prompt
 
     prompt = build_system_prompt(str(tmp_path), [], {"skills": [], "mcpServers": []})
     assert "Iron Laws" not in prompt
@@ -231,14 +231,14 @@ def test_governance_block_off_by_default(tmp_path):
 
 
 def test_governance_block_on_when_enabled(tmp_path):
-    from pepsicode.prompt import build_system_prompt
+    from pepsicode.context.prompt import build_system_prompt
 
     prompt = build_system_prompt(str(tmp_path), [], {"skills": [], "mcpServers": [], "governance": True})
     assert "Iron Laws" in prompt
 
 
 def test_environment_section_reports_python_and_cwd(tmp_path):
-    from pepsicode.prompt import build_system_prompt
+    from pepsicode.context.prompt import build_system_prompt
 
     prompt = build_system_prompt(str(tmp_path), [], {})
     assert "Python:" in prompt
@@ -325,7 +325,7 @@ def test_task_tool_records_model_usage_on_trace():
 
 
 def test_agent_model_override_updates_child_runtime():
-    from pepsicode.sub_agents import AgentDefinition
+    from pepsicode.core.sub_agents import AgentDefinition
     from pepsicode.tools.task import _runtime_for_agent
 
     definition = AgentDefinition.general_agent()
@@ -350,7 +350,7 @@ def test_task_tool_requires_model():
 
 def test_task_tool_excludes_itself_from_sub_registry():
     from pepsicode.agents.tool_filter import resolve_agent_tools
-    from pepsicode.sub_agents import AgentDefinition
+    from pepsicode.core.sub_agents import AgentDefinition
     from pepsicode.tools.task import _SUB_AGENT_TOOL_POOL
 
     # The Task tool is never in the sub-agent pool, and the global disallow
@@ -416,7 +416,7 @@ def test_compaction_resets_stale_actual_tokens():
 
 
 def test_529_not_retried_in_send():
-    from pepsicode.anthropic_adapter import _should_retry_status
+    from pepsicode.llm.anthropic_adapter import _should_retry_status
 
     assert _should_retry_status(529) is False
     assert _should_retry_status(429) is True

@@ -4,16 +4,7 @@ from unittest.mock import patch
 
 import pytest
 
-from pepsicode.api_retry import (
-    APIRetryExhaustedError,
-    HTTPError,
-    RetryState,
-    calculate_backoff,
-    format_retry_state,
-    is_retryable_error,
-    retry_with_backoff,
-)
-from pepsicode.context_manager import (
+from pepsicode.context.context_manager import (
     ContextManager,
     estimate_message_tokens,
     estimate_messages_tokens,
@@ -21,20 +12,29 @@ from pepsicode.context_manager import (
     load_context_state,
     save_context_state,
 )
-from pepsicode.memory import (
+from pepsicode.context.memory import (
     MemoryEntry,
     MemoryFile,
     MemoryManager,
     MemoryScope,
     inject_memory_into_prompt,
 )
-from pepsicode.task_tracker import (
+from pepsicode.core.task_tracker import (
     Task,
     TaskList,
     TaskManager,
     TaskStatus,
     format_task_progress_bar,
     format_task_update,
+)
+from pepsicode.llm.api_retry import (
+    APIRetryExhaustedError,
+    HTTPError,
+    RetryState,
+    calculate_backoff,
+    format_retry_state,
+    is_retryable_error,
+    retry_with_backoff,
 )
 
 # ---------------------------------------------------------------------------
@@ -131,7 +131,7 @@ def test_context_manager_format_summary():
 
 def test_context_manager_persistence(tmp_path):
     """Test saving and loading context state."""
-    with patch("pepsicode.context_manager.PEPSI_CODE_DIR", tmp_path):
+    with patch("pepsicode.context.context_manager.PEPSI_CODE_DIR", tmp_path):
         manager = ContextManager(model="claude-sonnet-4-20250514")
         manager.add_message({"role": "user", "content": "Test"})
 

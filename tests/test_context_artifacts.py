@@ -5,9 +5,9 @@ import time
 
 import pytest
 
-from pepsicode.agent_loop import run_agent_turn
-from pepsicode.context_artifacts import ContextArtifactStore, prepare_tool_result
-from pepsicode.context_manager import ContextManager
+from pepsicode.context.context_artifacts import ContextArtifactStore, prepare_tool_result
+from pepsicode.context.context_manager import ContextManager
+from pepsicode.core.agent_loop import run_agent_turn
 from pepsicode.permissions import PermissionManager
 from pepsicode.tooling import ToolContext, ToolDefinition, ToolRegistry, ToolResult
 from pepsicode.tools import create_default_tool_registry

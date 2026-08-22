@@ -8,13 +8,13 @@ from pathlib import Path
 os.environ["PEPSI_CODE_MODEL_MODE"] = "mock"
 
 # Add project to path
-sys.path.insert(0, str(Path(__file__).parent))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from pepsicode.config import load_runtime_config
+from pepsicode.context.prompt import build_system_prompt
 from pepsicode.permissions import PermissionManager
-from pepsicode.prompt import build_system_prompt
 from pepsicode.tools import create_default_tool_registry
-from pepsicode.tty_app import run_tty_app
+from pepsicode.tui.app import run_tty_app
 
 
 def main():

@@ -2,8 +2,8 @@
 
 import pytest
 
-from pepsicode.agent_loop import run_agent_turn
-from pepsicode.cost_tracker import BudgetExceededError, CostTracker
+from pepsicode.core.agent_loop import run_agent_turn
+from pepsicode.llm.cost_tracker import BudgetExceededError, CostTracker
 from pepsicode.tooling import ToolRegistry
 from pepsicode.types import AgentStep, ChatMessage, ModelAdapter
 

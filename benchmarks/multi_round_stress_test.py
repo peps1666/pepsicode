@@ -6,7 +6,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from pepsicode.context_manager import estimate_tokens
+from pepsicode.context.context_manager import estimate_tokens
 from pepsicode.tui.chrome import (
     _cached_terminal_size,
     render_banner,

@@ -7,7 +7,7 @@ Decouples *where* memory is persisted from *how* it is read/written by the
 - ``PostgresMemoryStore`` - a PostgreSQL-backed store (single ``pepsi_memory``
                             table, one row per entry across all three scopes)
 
-``create_memory_manager`` in ``pepsicode.memory`` picks PostgreSQL when it can
+``create_memory_manager`` in ``pepsicode.context.memory`` picks PostgreSQL when it can
 connect and transparently falls back to the file store otherwise, so the rest
 of the codebase never has to know which backend is live.
 """
@@ -22,7 +22,7 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from pepsicode.config import PEPSI_CODE_DIR
-from pepsicode.memory import MemoryEntry, MemoryFile, MemoryScope
+from pepsicode.context.memory import MemoryEntry, MemoryFile, MemoryScope
 
 logger = logging.getLogger(__name__)
 
