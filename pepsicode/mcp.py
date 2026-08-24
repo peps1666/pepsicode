@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import subprocess
@@ -46,6 +47,46 @@ ALLOWED_COMMANDS = {
 
 
 JsonRpcProtocol = str  # "content-length" | "newline-json" | "streamable-http"
+
+# MCP protocol revision advertised during the initialize handshake.
+MCP_PROTOCOL_VERSION = "2024-11-05"
+
+# Anthropic caps tool names at 64 characters (``^[a-zA-Z0-9_-]{1,64}$``).
+MAX_TOOL_NAME_LENGTH = 64
+
+# Timeout defaults, in seconds.  These are deliberately generous: ``npx``
+# alone costs ~1.7s to start on Windows, and a cold package fetch costs
+# several seconds more, so a tight handshake budget makes stdio servers
+# fail to connect at all.
+DEFAULT_INIT_TIMEOUT = 30.0
+DEFAULT_LIST_TIMEOUT = 30.0
+DEFAULT_CALL_TIMEOUT = 120.0
+
+
+@dataclass(slots=True, frozen=True)
+class McpTimeouts:
+    """Per-server timeout budget, resolved from config with defaults."""
+
+    init: float = DEFAULT_INIT_TIMEOUT
+    list: float = DEFAULT_LIST_TIMEOUT
+    call: float = DEFAULT_CALL_TIMEOUT
+
+
+def _positive_float(value: Any, fallback: float) -> float:
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return fallback
+    return parsed if parsed > 0 else fallback
+
+
+def _timeouts(config: dict[str, Any]) -> McpTimeouts:
+    """Read ``initTimeout`` / ``listTimeout`` / ``timeout`` from a server config."""
+    return McpTimeouts(
+        init=_positive_float(config.get("initTimeout"), DEFAULT_INIT_TIMEOUT),
+        list=_positive_float(config.get("listTimeout"), DEFAULT_LIST_TIMEOUT),
+        call=_positive_float(config.get("timeout"), DEFAULT_CALL_TIMEOUT),
+    )
 
 
 # =============================================================================
@@ -100,6 +141,9 @@ class McpServerSummary:
     protocol: str | None = None
     resourceCount: int | None = None
     promptCount: int | None = None
+    # Registered (wrapped) tool names, so callers can reference the real
+    # names instead of guessing them from the server name.
+    toolNames: list[str] | None = None
 
 
 def _sanitize_tool_segment(value: str) -> str:
@@ -107,6 +151,38 @@ def _sanitize_tool_segment(value: str) -> str:
     normalized = "".join(char.lower() if char.isalnum() or char in {"_", "-"} else "_" for char in value)
     normalized = normalized.strip("_")
     return normalized or "tool"
+
+
+def _wrapped_tool_name(server_name: str, tool_name: str, taken: set[str]) -> str:
+    """Build the ``mcp__<server>__<tool>`` alias, respecting the API name limit.
+
+    Names longer than :data:`MAX_TOOL_NAME_LENGTH` are truncated and given a
+    short stable hash suffix derived from the full name, so a long server or
+    tool name degrades into a unique alias instead of a 400 from the API.
+    ``taken`` is mutated with the returned name to guarantee uniqueness within
+    a single registry.
+    """
+    full = f"mcp__{_sanitize_tool_segment(server_name)}__{_sanitize_tool_segment(tool_name)}"
+
+    if len(full) > MAX_TOOL_NAME_LENGTH:
+        digest = hashlib.sha1(full.encode("utf-8")).hexdigest()[:6]
+        full = f"{full[: MAX_TOOL_NAME_LENGTH - len(digest) - 1]}_{digest}"
+
+    if full not in taken:
+        taken.add(full)
+        return full
+
+    # Collision (two distinct MCP tools sanitized to the same alias): append a
+    # counter, trimming from the left to stay within the limit.
+    for counter in range(2, 1000):
+        suffix = f"_{counter}"
+        candidate = full[: MAX_TOOL_NAME_LENGTH - len(suffix)] + suffix
+        if candidate not in taken:
+            taken.add(candidate)
+            return candidate
+
+    taken.add(full)
+    return full
 
 
 # =============================================================================
@@ -200,6 +276,21 @@ def _validate_mcp_args(args: list[str]) -> None:
 # =============================================================================
 
 
+def _is_declared_read_only(declaration: Any, tool_name: str) -> bool:
+    """Whether a server config declares ``tool_name`` as side-effect free.
+
+    ``readOnlyTools`` accepts ``"*"`` (the whole server is read-only) or a list
+    of tool names.  Anything else — including the field being absent — means
+    the tool is treated as potentially side-effecting and goes through the
+    approval gate.
+    """
+    if declaration == "*":
+        return True
+    if isinstance(declaration, (list, tuple, set)):
+        return tool_name in {str(item) for item in declaration}
+    return False
+
+
 def _normalize_input_schema(schema: dict[str, Any] | None) -> dict[str, Any]:
     return schema if isinstance(schema, dict) else {"type": "object", "additionalProperties": True}
 
@@ -281,6 +372,7 @@ class StdioMcpClient:
         self.server_name = server_name
         self.config = config
         self.cwd = cwd
+        self.timeouts = _timeouts(config)
         self.process: subprocess.Popen[bytes] | None = None
         self.protocol: JsonRpcProtocol | None = None
         self.next_id = 1
@@ -290,37 +382,40 @@ class StdioMcpClient:
         self._stderr_thread: threading.Thread | None = None
         self._stdout_thread: threading.Thread | None = None
 
-    def _protocol_candidates(self) -> list[JsonRpcProtocol]:
-        configured = self.config.get("protocol")
-        if configured == "content-length":
-            return ["content-length"]
-        if configured == "newline-json":
-            return ["newline-json"]
-        return ["content-length", "newline-json"]
+    def _outbound_protocol(self) -> JsonRpcProtocol:
+        """Pick the framing used for messages we send.
+
+        The MCP stdio transport is newline-delimited JSON; ``content-length``
+        framing is an LSP convention that a few servers borrow.  We therefore
+        default to newline-json and only use content-length when the server
+        config asks for it explicitly.  Unrecognised values (e.g. the legacy
+        ``"auto"``) fall back to the default rather than triggering a probe:
+        re-spawning to test a second framing costs a full ``npx`` cold start.
+
+        Inbound framing is still auto-detected in :meth:`_consume_stdout`, so
+        a content-length server remains readable either way.
+        """
+        return "content-length" if self.config.get("protocol") == "content-length" else "newline-json"
 
     def start(self) -> None:
         if self.process is not None:
             return
-        last_error: Exception | None = None
-        for protocol in self._protocol_candidates():
-            try:
-                self._spawn_process()
-                self.protocol = protocol
-                self.request(
-                    "initialize",
-                    {
-                        "protocolVersion": "2024-11-05",
-                        "capabilities": {},
-                        "clientInfo": {"name": "pepsicode", "version": VERSION},
-                    },
-                    timeout_seconds=2.0,
-                )
-                self.notify("notifications/initialized", {})
-                return
-            except Exception as error:  # noqa: BLE001
-                last_error = error
-                self.close()
-        raise RuntimeError(str(last_error or f'Failed to connect MCP server "{self.server_name}".'))
+        try:
+            self._spawn_process()
+            self.protocol = self._outbound_protocol()
+            self.request(
+                "initialize",
+                {
+                    "protocolVersion": MCP_PROTOCOL_VERSION,
+                    "capabilities": {},
+                    "clientInfo": {"name": "pepsicode", "version": VERSION},
+                },
+                timeout_seconds=self.timeouts.init,
+            )
+            self.notify("notifications/initialized", {})
+        except Exception as error:  # noqa: BLE001
+            self.close()
+            raise RuntimeError(str(error)) from error
 
     def _spawn_process(self) -> None:
         command = str(self.config.get("command", "")).strip()
@@ -348,16 +443,18 @@ class StdioMcpClient:
             # parent Python process with 0xC0000005 (access violation) via
             # cmd.exe handle/console inheritance.
             #
-            # Mitigation: detach the child into its own process + console so
-            # it does NOT share the Python process's (console-less, Electron-
-            # spawned) environment. DETACHED_PROCESS gives the child a brand
-            # new console that we then hide via STARTUPINFO. This is the
-            # strongest isolation available and avoids the 0xC0000005 access
-            # violation that occurs when cmd.exe/node grandchild processes
-            # try to inherit console state from a console-less parent.
+            # Mitigation: CREATE_NO_WINDOW gives the child its own console
+            # that is never displayed, so it neither inherits nor pops up the
+            # parent's console state.
+            #
+            # Do NOT use DETACHED_PROCESS here.  Combined with the cmd.exe
+            # wrapper below it silently severs the child's stdin/stdout
+            # redirection, so every request times out and no stdio MCP server
+            # can connect at all.  CREATE_NO_WINDOW provides the same console
+            # isolation while keeping the pipes intact.
             CREATE_NEW_PROCESS_GROUP = 0x00000200
-            DETACHED_PROCESS = 0x00000008
-            popen_kwargs["creationflags"] = DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP
+            CREATE_NO_WINDOW = 0x08000000
+            popen_kwargs["creationflags"] = CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP
 
             startupinfo = subprocess.STARTUPINFO()
             startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
@@ -512,7 +609,9 @@ class StdioMcpClient:
     def notify(self, method: str, params: Any) -> None:
         self.send({"jsonrpc": "2.0", "method": method, "params": params})
 
-    def request(self, method: str, params: Any, timeout_seconds: float = 5.0) -> Any:
+    def request(self, method: str, params: Any, timeout_seconds: float | None = None) -> Any:
+        if timeout_seconds is None:
+            timeout_seconds = self.timeouts.call
         message_id = self.next_id
         self.next_id += 1
         response_queue: Queue[Any] = Queue(maxsize=1)
@@ -535,27 +634,35 @@ class StdioMcpClient:
         return message.get("result")
 
     def list_tools(self) -> list[dict[str, Any]]:
-        result = self.request("tools/list", {})
+        result = self.request("tools/list", {}, timeout_seconds=self.timeouts.list)
         return list(result.get("tools", []) if isinstance(result, dict) else [])
 
     def list_resources(self) -> list[dict[str, Any]]:
-        result = self.request("resources/list", {}, timeout_seconds=3.0)
+        result = self.request("resources/list", {}, timeout_seconds=self.timeouts.list)
         return list(result.get("resources", []) if isinstance(result, dict) else [])
 
     def read_resource(self, uri: str) -> ToolResult:
-        return _format_read_resource_result(self.request("resources/read", {"uri": uri}, timeout_seconds=5.0))
+        return _format_read_resource_result(
+            self.request("resources/read", {"uri": uri}, timeout_seconds=self.timeouts.call)
+        )
 
     def list_prompts(self) -> list[dict[str, Any]]:
-        result = self.request("prompts/list", {}, timeout_seconds=3.0)
+        result = self.request("prompts/list", {}, timeout_seconds=self.timeouts.list)
         return list(result.get("prompts", []) if isinstance(result, dict) else [])
 
     def get_prompt(self, name: str, args: dict[str, str] | None = None) -> ToolResult:
         return _format_prompt_result(
-            self.request("prompts/get", {"name": name, "arguments": args or {}}, timeout_seconds=5.0)
+            self.request("prompts/get", {"name": name, "arguments": args or {}}, timeout_seconds=self.timeouts.call)
         )
 
     def call_tool(self, name: str, input_data: Any) -> ToolResult:
-        return _format_tool_call_result(self.request("tools/call", {"name": name, "arguments": input_data or {}}))
+        return _format_tool_call_result(
+            self.request(
+                "tools/call",
+                {"name": name, "arguments": input_data or {}},
+                timeout_seconds=self.timeouts.call,
+            )
+        )
 
     def close(self) -> None:
         with self._lock:
@@ -628,8 +735,12 @@ class HttpMcpClient:
         self.cwd = cwd
         self.url: str = str(config.get("url", ""))
         self.protocol: JsonRpcProtocol = "streamable-http"
+        self.timeouts = _timeouts(config)
         self.next_id = 1
         self._headers: dict[str, str] = {}
+        # Assigned from the initialize response; the Streamable HTTP transport
+        # requires it to be echoed on every subsequent request.
+        self._session_id: str | None = None
         self._build_headers()
 
     def _build_headers(self) -> None:
@@ -650,22 +761,44 @@ class HttpMcpClient:
             self._headers[str(key)] = _interpolate_env(str(value))
 
     def start(self) -> None:
-        """发送 initialize 握手请求。"""
+        """发送 initialize 握手请求，并记录服务器返回的会话 ID。"""
         if not self.url:
             raise RuntimeError(f'MCP server "{self.server_name}" has no url configured.')
         self._request(
             "initialize",
             {
-                "protocolVersion": "2024-11-05",
+                "protocolVersion": MCP_PROTOCOL_VERSION,
                 "capabilities": {},
                 "clientInfo": {"name": "pepsicode", "version": VERSION},
             },
-            timeout_seconds=10.0,
+            timeout_seconds=self.timeouts.init,
+            capture_session=True,
         )
         self._notify("notifications/initialized", {})
 
-    def _request(self, method: str, params: Any, timeout_seconds: float = 5.0) -> Any:
+    def _request_headers(self) -> dict[str, str]:
+        """构建每次请求的头部：基础头 + 协议版本 + 会话 ID。"""
+        headers = {
+            "Content-Type": "application/json",
+            "Accept": "application/json, text/event-stream",
+            "MCP-Protocol-Version": MCP_PROTOCOL_VERSION,
+            **self._headers,
+        }
+        if self._session_id:
+            headers["Mcp-Session-Id"] = self._session_id
+        return headers
+
+    def _request(
+        self,
+        method: str,
+        params: Any,
+        timeout_seconds: float | None = None,
+        *,
+        capture_session: bool = False,
+    ) -> Any:
         """发送 JSON-RPC 请求并等待响应。"""
+        if timeout_seconds is None:
+            timeout_seconds = self.timeouts.call
         message_id = self.next_id
         self.next_id += 1
         payload = {
@@ -675,15 +808,14 @@ class HttpMcpClient:
             "params": params,
         }
         body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
-        headers = {
-            "Content-Type": "application/json",
-            "Accept": "application/json, text/event-stream",
-            **self._headers,
-        }
-        req = urllib.request.Request(self.url, data=body, headers=headers, method="POST")
+        req = urllib.request.Request(self.url, data=body, headers=self._request_headers(), method="POST")
         try:
             with urllib.request.urlopen(req, timeout=timeout_seconds) as resp:
                 raw = resp.read().decode("utf-8")
+                if capture_session:
+                    session_id = resp.headers.get("Mcp-Session-Id")
+                    if session_id:
+                        self._session_id = str(session_id)
         except urllib.error.HTTPError as e:
             error_body = ""
             try:
@@ -730,43 +862,54 @@ class HttpMcpClient:
         """发送 JSON-RPC 通知（无 id，不等待响应）。"""
         payload = {"jsonrpc": "2.0", "method": method, "params": params}
         body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
-        headers = {
-            "Content-Type": "application/json",
-            "Accept": "application/json, text/event-stream",
-            **self._headers,
-        }
-        req = urllib.request.Request(self.url, data=body, headers=headers, method="POST")
+        req = urllib.request.Request(self.url, data=body, headers=self._request_headers(), method="POST")
         try:
-            urllib.request.urlopen(req, timeout=5.0).read()
+            urllib.request.urlopen(req, timeout=self.timeouts.list).read()
         except Exception:
             pass  # 通知不需要处理响应
 
     def list_tools(self) -> list[dict[str, Any]]:
-        result = self._request("tools/list", {})
+        result = self._request("tools/list", {}, timeout_seconds=self.timeouts.list)
         return list(result.get("tools", []) if isinstance(result, dict) else [])
 
     def list_resources(self) -> list[dict[str, Any]]:
-        result = self._request("resources/list", {}, timeout_seconds=3.0)
+        result = self._request("resources/list", {}, timeout_seconds=self.timeouts.list)
         return list(result.get("resources", []) if isinstance(result, dict) else [])
 
     def read_resource(self, uri: str) -> ToolResult:
-        return _format_read_resource_result(self._request("resources/read", {"uri": uri}, timeout_seconds=5.0))
+        return _format_read_resource_result(
+            self._request("resources/read", {"uri": uri}, timeout_seconds=self.timeouts.call)
+        )
 
     def list_prompts(self) -> list[dict[str, Any]]:
-        result = self._request("prompts/list", {}, timeout_seconds=3.0)
+        result = self._request("prompts/list", {}, timeout_seconds=self.timeouts.list)
         return list(result.get("prompts", []) if isinstance(result, dict) else [])
 
     def get_prompt(self, name: str, args: dict[str, str] | None = None) -> ToolResult:
         return _format_prompt_result(
-            self._request("prompts/get", {"name": name, "arguments": args or {}}, timeout_seconds=5.0)
+            self._request("prompts/get", {"name": name, "arguments": args or {}}, timeout_seconds=self.timeouts.call)
         )
 
     def call_tool(self, name: str, input_data: Any) -> ToolResult:
-        return _format_tool_call_result(self._request("tools/call", {"name": name, "arguments": input_data or {}}))
+        return _format_tool_call_result(
+            self._request(
+                "tools/call",
+                {"name": name, "arguments": input_data or {}},
+                timeout_seconds=self.timeouts.call,
+            )
+        )
 
     def close(self) -> None:
-        """HTTP 无状态连接，无需清理。"""
-        pass
+        """结束 Streamable HTTP 会话（若服务器分配了 session id）。"""
+        if not self._session_id or not self.url:
+            return
+        req = urllib.request.Request(self.url, headers=self._request_headers(), method="DELETE")
+        try:
+            urllib.request.urlopen(req, timeout=self.timeouts.list).read()
+        except Exception:
+            pass  # 服务器可能不支持 DELETE；断开本身不应报错
+        finally:
+            self._session_id = None
 
 
 # =============================================================================
@@ -787,6 +930,7 @@ def create_mcp_backed_tools(*, cwd: str, mcp_servers: dict[str, dict[str, Any]])
     servers: list[dict[str, Any]] = []
     resource_index: dict[str, dict[str, Any]] = {}
     prompt_index: dict[str, dict[str, Any]] = {}
+    taken_names: set[str] = set()
 
     try:
         # --- Phase 1: connect to each server, discover tools/resources/prompts ---
@@ -828,11 +972,17 @@ def create_mcp_backed_tools(*, cwd: str, mcp_servers: dict[str, dict[str, Any]])
                 for prompt in prompts:
                     prompt_index[f"{server_name}:{prompt.get('name')}"] = {"serverName": server_name, "prompt": prompt}
 
+                # Tools the server config declares side-effect free.  These get
+                # the READ_ONLY capability, which lets them run in Plan mode and
+                # skips the approval prompt.  Everything else is gated.
+                read_only_declaration = config.get("readOnlyTools")
+
                 # Wrap each MCP tool as a local ToolDefinition
                 # Naming convention: mcp__<server>__<tool>
+                server_tool_names: list[str] = []
                 for descriptor in descriptors:
-                    wrapped_name = f"mcp__{_sanitize_tool_segment(server_name)}__{_sanitize_tool_segment(str(descriptor.get('name', 'tool')))}"
                     descriptor_name = str(descriptor.get("name", "tool"))
+                    wrapped_name = _wrapped_tool_name(server_name, descriptor_name, taken_names)
                     input_schema = _normalize_input_schema(descriptor.get("inputSchema"))
 
                     def _validator(value: Any) -> Any:
@@ -841,18 +991,27 @@ def create_mcp_backed_tools(*, cwd: str, mcp_servers: dict[str, dict[str, Any]])
                     def _run(input_data: Any, _context, *, _client=client, _descriptor_name=descriptor_name):
                         return _client.call_tool(_descriptor_name, input_data)
 
+                    # Always state the true server/tool identity: the wrapped
+                    # name may have been truncated to fit the API name limit.
+                    description = f"[MCP {server_name}/{descriptor_name}] " + str(
+                        descriptor.get("description") or f"Call MCP tool {descriptor_name} from server {server_name}."
+                    )
+
+                    capabilities: set[ToolCapability] = set()
+                    if _is_declared_read_only(read_only_declaration, descriptor_name):
+                        capabilities.add(ToolCapability.READ_ONLY)
+
                     tools.append(
                         ToolDefinition(
                             name=wrapped_name,
-                            description=str(
-                                descriptor.get("description")
-                                or f"Call MCP tool {descriptor_name} from server {server_name}."
-                            ),
+                            description=description,
                             input_schema=input_schema,
                             validator=_validator,
                             run=_run,
+                            capabilities=capabilities,
                         )
                     )
+                    server_tool_names.append(wrapped_name)
 
                 servers.append(
                     asdict(
@@ -864,6 +1023,7 @@ def create_mcp_backed_tools(*, cwd: str, mcp_servers: dict[str, dict[str, Any]])
                             protocol=client.protocol,
                             resourceCount=len(resources),
                             promptCount=len(prompts),
+                            toolNames=server_tool_names,
                         )
                     )
                 )

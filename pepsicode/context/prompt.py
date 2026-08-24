@@ -269,21 +269,14 @@ Never treat ordinary edit approval as permission to bypass Plan mode."""
             "Available skills:\n"
             + "\n".join(f"- {skill['name']}: {skill['description']}" for skill in skills)
             + "\n\n"
-            + "SKILL USAGE GUIDE:\n"
-            + "- When user asks for creative brainstorming, use 'brainstorming' skill\n"
-            + "- When writing implementation plans, use 'writing-plans' skill\n"
-            + "- When debugging systematically, use 'systematic-debugging' skill\n"
-            + "- When doing TDD, use 'test-driven-development' skill\n"
-            + "- When reviewing code in Chinese, use 'chinese-code-review' skill\n"
-            + "- When user asks about workflows, check 'using-superpowers' skill first\n"
-            + "- For complex multi-step tasks, consider 'subagent-driven-development'\n"
-            + "- Before completing, ALWAYS use 'verification-before-completion'"
+            + "When a task matches one of the descriptions above, call load_skill with that skill name "
+            + "first, then follow the instructions it returns. Only these skills exist; do not invent others."
         )
     else:
         parts.append(
             "Available skills:\n"
             + "- none discovered\n"
-            + "Tip: Install skills via `npx superpowers-zh` in your project directory"
+            + "Skills are directories containing a SKILL.md, discovered under .pepsi-code/skills/ or ~/.pepsi-code/skills/."
         )
 
     mcp_servers = extras.get("mcpServers", [])
@@ -305,23 +298,25 @@ Never treat ordinary edit approval as permission to bypass Plan mode."""
             parts.append(
                 "Connected MCP tools are already exposed in the tool list with names prefixed like mcp__server__tool. Use list_mcp_resources/read_mcp_resource and list_mcp_prompts/get_mcp_prompt when a server exposes those capabilities."
             )
-        sequential_servers = [
-            server
+        # Only advertise the thinking tools we can name exactly.  The
+        # registered name is mcp__<server>__<tool> and may have been
+        # truncated, so it is read back from the server summary rather than
+        # guessed here.
+        thinking_tools = [
+            tool_name
             for server in mcp_servers
-            if "sequential" in server.get("name", "").lower()
-            or "branch-thinking" in server.get("name", "").lower()
-            or "think" in server.get("name", "").lower()
+            if server.get("status") == "connected"
+            and any(marker in server.get("name", "").lower() for marker in ("sequential", "branch-thinking", "think"))
+            for tool_name in (server.get("toolNames") or [])
+            if "think" in tool_name.lower()
         ]
-        if any(server.get("status") == "connected" for server in sequential_servers):
+        if thinking_tools:
             parts.append(
-                "\nSEQUENTIAL THINKING MCP SERVER IS CONNECTED!\n"
-                "When to use sequential_thinking tool:\n"
-                "- Breaking down complex implementation problems\n"
-                "- Multi-step debugging or investigation\n"
-                "- Architectural decisions requiring structured analysis\n"
-                "- Migration or refactoring planning\n"
-                "- Any situation requiring step-by-step reasoning\n\n"
-                "Usage: Call 'sequential_thinking' with structured thoughts before complex tool sequences"
+                "A structured-thinking MCP server is connected. Use "
+                + " or ".join(f"'{name}'" for name in thinking_tools)
+                + " to work through problems that benefit from explicit step-by-step reasoning: "
+                "breaking down complex implementations, multi-step debugging, architectural trade-offs, "
+                "and migration or refactoring planning."
             )
 
     if global_claude_md:

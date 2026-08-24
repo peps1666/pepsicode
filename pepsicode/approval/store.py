@@ -68,6 +68,8 @@ class ApprovalStore:
         self.denied_command_patterns: set[str] = set()
         self.allowed_edit_patterns: set[str] = set()
         self.denied_edit_patterns: set[str] = set()
+        self.allowed_mcp_tools: set[str] = set()
+        self.denied_mcp_tools: set[str] = set()
 
         # Session-level (allow_once / deny_once) — keyed by scope string
         self.session_allowed_paths: set[str] = set()
@@ -76,6 +78,8 @@ class ApprovalStore:
         self.session_denied_commands: set[str] = set()
         self.session_allowed_edits: set[str] = set()
         self.session_denied_edits: set[str] = set()
+        self.session_allowed_mcp: set[str] = set()
+        self.session_denied_mcp: set[str] = set()
 
         # Turn-level (allow_turn / allow_all_turn) — cleared each turn
         self.turn_allowed_edits: set[str] = set()
@@ -111,6 +115,8 @@ class ApprovalStore:
             return self._lookup_command(scope)
         if kind == ApprovalKind.EDIT:
             return self._lookup_edit(scope)
+        if kind == ApprovalKind.MCP:
+            return self._lookup_mcp(scope)
         return None
 
     def _lookup_path(self, target_path: str, intent: str) -> ApprovalOutcome | None:
@@ -151,6 +157,13 @@ class ApprovalStore:
             return ApprovalOutcome(decision=ApprovalDecision.ALLOW_ONCE)
         return None
 
+    def _lookup_mcp(self, scope: str) -> ApprovalOutcome | None:
+        if scope in self.session_denied_mcp or scope in self.denied_mcp_tools:
+            return ApprovalOutcome(decision=ApprovalDecision.DENY_ONCE)
+        if scope in self.session_allowed_mcp or scope in self.allowed_mcp_tools:
+            return ApprovalOutcome(decision=ApprovalDecision.ALLOW_ONCE)
+        return None
+
     # ------------------------------------------------------------------ #
     # Record
     # ------------------------------------------------------------------ #
@@ -170,6 +183,8 @@ class ApprovalStore:
             self._record_command(scope, decision)
         elif kind == ApprovalKind.EDIT:
             self._record_edit(scope, decision)
+        elif kind == ApprovalKind.MCP:
+            self._record_mcp(scope, decision)
 
     def _record_path(self, target_path: str, outcome: ApprovalOutcome) -> None:
         normalized = _normalize_path(target_path)
@@ -217,6 +232,18 @@ class ApprovalStore:
             self.denied_edit_patterns.add(normalized)
             self._persist()
 
+    def _record_mcp(self, scope: str, decision: ApprovalDecision) -> None:
+        if decision == ApprovalDecision.ALLOW_ONCE:
+            self.session_allowed_mcp.add(scope)
+        elif decision == ApprovalDecision.ALLOW_ALWAYS:
+            self.allowed_mcp_tools.add(scope)
+            self._persist()
+        elif decision == ApprovalDecision.DENY_ONCE:
+            self.session_denied_mcp.add(scope)
+        elif decision == ApprovalDecision.DENY_ALWAYS:
+            self.denied_mcp_tools.add(scope)
+            self._persist()
+
     # ------------------------------------------------------------------ #
     # Persistence
     # ------------------------------------------------------------------ #
@@ -229,6 +256,8 @@ class ApprovalStore:
         self.denied_command_patterns |= set(store.get("deniedCommandPatterns", []))
         self.allowed_edit_patterns |= {_normalize_path(item) for item in store.get("allowedEditPatterns", [])}
         self.denied_edit_patterns |= {_normalize_path(item) for item in store.get("deniedEditPatterns", [])}
+        self.allowed_mcp_tools |= set(store.get("allowedMcpTools", []))
+        self.denied_mcp_tools |= set(store.get("deniedMcpTools", []))
 
     def _persist(self) -> None:
         _write_permission_store(
@@ -239,6 +268,8 @@ class ApprovalStore:
                 "deniedCommandPatterns": sorted(self.denied_command_patterns),
                 "allowedEditPatterns": sorted(self.allowed_edit_patterns),
                 "deniedEditPatterns": sorted(self.denied_edit_patterns),
+                "allowedMcpTools": sorted(self.allowed_mcp_tools),
+                "deniedMcpTools": sorted(self.denied_mcp_tools),
             }
         )
 

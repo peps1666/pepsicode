@@ -19,6 +19,7 @@ class ApprovalKind(str, Enum):
     COMMAND = "command"
     EDIT = "edit"
     PLAN = "plan"
+    MCP = "mcp"
 
 
 class ApprovalDecision(str, Enum):

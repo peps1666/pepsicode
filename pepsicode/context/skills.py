@@ -18,9 +18,54 @@ class LoadedSkill(SkillSummary):
     content: str
 
 
-def extract_description(markdown: str) -> str:
+def split_frontmatter(markdown: str) -> tuple[dict[str, str], str]:
+    """Split a SKILL.md into its YAML frontmatter fields and its body.
+
+    Only the flat ``key: value`` subset of YAML is parsed — that is all the
+    SKILL.md format uses, and it avoids a PyYAML dependency.  Files without
+    frontmatter yield an empty mapping and the original text.
+    """
     normalized = markdown.replace("\r\n", "\n")
-    paragraphs = [block.strip() for block in normalized.split("\n\n") if block.strip()]
+    if not normalized.startswith("---\n"):
+        return {}, normalized
+
+    closing = normalized.find("\n---", 3)
+    if closing == -1:
+        return {}, normalized
+
+    block = normalized[4:closing]
+    body = normalized[closing + len("\n---") :].lstrip("\n")
+
+    fields: dict[str, str] = {}
+    for line in block.split("\n"):
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#") or ":" not in stripped:
+            continue
+        # Indented lines belong to a nested structure we do not model.
+        if line[:1].isspace():
+            continue
+        key, _, value = stripped.partition(":")
+        value = value.strip().strip("'\"")
+        if key.strip() and value:
+            fields[key.strip()] = value
+    return fields, body
+
+
+def extract_description(markdown: str) -> str:
+    """Best-effort one-line description for a skill.
+
+    Prefers the frontmatter ``description`` (the standard SKILL.md field),
+    then ``name``, and only then falls back to the first prose line of the
+    body.  Without the frontmatter step a standard SKILL.md yields ``"---"``,
+    which makes the skill list injected into the system prompt useless.
+    """
+    fields, body = split_frontmatter(markdown)
+    for key in ("description", "name"):
+        value = fields.get(key)
+        if value:
+            return value.replace("`", "")
+
+    paragraphs = [block.strip() for block in body.split("\n\n") if block.strip()]
     for block in paragraphs:
         if block.startswith("#"):
             continue
@@ -28,6 +73,24 @@ def extract_description(markdown: str) -> str:
             if line and not line.startswith("#"):
                 return line.replace("`", "")
     return "No description provided."
+
+
+def extract_skill_name(markdown: str, fallback: str) -> str:
+    """Frontmatter ``name`` if present and safe, else the directory name."""
+    fields, _ = split_frontmatter(markdown)
+    declared = fields.get("name", "").strip()
+    if declared and _is_safe_skill_name(declared):
+        return declared
+    return fallback
+
+
+def _is_safe_skill_name(name: str) -> bool:
+    """Reject names that could escape the skill root when joined to a path."""
+    if not name or name in {".", ".."}:
+        return False
+    if "/" in name or "\\" in name or ".." in name:
+        return False
+    return not Path(name).is_absolute()
 
 
 def _home_dir() -> Path:
@@ -58,7 +121,7 @@ def _list_skill_dirs(root: Path, source: str) -> list[LoadedSkill]:
         content = skill_path.read_text(encoding="utf-8")
         results.append(
             LoadedSkill(
-                name=entry.name,
+                name=extract_skill_name(content, entry.name),
                 description=extract_description(content),
                 path=str(skill_path),
                 source=source,
@@ -86,19 +149,28 @@ def discover_skills(cwd: str | Path) -> list[SkillSummary]:
 
 def load_skill(cwd: str | Path, name: str) -> LoadedSkill | None:
     normalized_name = name.strip()
-    if not normalized_name:
+    # The name is joined straight onto a skill root, so anything that could
+    # walk out of that root (separators, "..", drive letters) is rejected
+    # rather than sanitized.
+    if not _is_safe_skill_name(normalized_name):
         return None
     for root, source in _skill_roots(cwd):
         skill_path = root / normalized_name / "SKILL.md"
         if skill_path.exists():
             content = skill_path.read_text(encoding="utf-8")
             return LoadedSkill(
-                name=normalized_name,
+                name=extract_skill_name(content, normalized_name),
                 description=extract_description(content),
                 path=str(skill_path),
                 source=source,
                 content=content,
             )
+    # Fall back to frontmatter names, which discover_skills advertises and
+    # which need not match the directory they live in.
+    for root, source in _skill_roots(cwd):
+        for skill in _list_skill_dirs(root, source):
+            if skill.name == normalized_name:
+                return skill
     return None
 
 

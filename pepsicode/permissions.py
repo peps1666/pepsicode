@@ -64,6 +64,12 @@ class PermissionMode(str, Enum):
 _PLAN_CONTROL_TOOLS = frozenset({"ask_user", "task", "exit_plan_mode"})
 _PLAN_FILE_WRITE_TOOLS = frozenset({"write_file", "edit_file"})
 
+# Prefix applied by ``pepsicode.mcp`` to every MCP-backed tool alias.
+MCP_TOOL_PREFIX = "mcp__"
+
+# How much of an MCP tool's input to show in the approval prompt.
+_MCP_INPUT_PREVIEW_CHARS = 600
+
 
 def _normalize_path(target_path: str) -> str:
     return str(Path(target_path).resolve())
@@ -187,11 +193,22 @@ class PermissionManager:
         return os.path.normcase(_normalize_path(target_path)) == os.path.normcase(_normalize_path(self.plan_file_path))
 
     def ensure_tool_allowed(self, tool: Any, parsed: Any) -> None:
-        """Apply the non-bypassable Plan-mode capability boundary."""
+        """Gate a tool call: MCP approval first, then the Plan-mode boundary."""
+        tool_name = str(getattr(tool, "name", ""))
+        is_read_only = bool(getattr(tool, "is_read_only", False))
+
+        # MCP tools are supplied by third-party servers and can do anything the
+        # host process can.  Unless the server config declares a tool read-only
+        # (which also tags it READ_ONLY), require approval before every first
+        # use — in Plan mode *and* in the default mode.
+        if tool_name.startswith(MCP_TOOL_PREFIX) and not is_read_only:
+            outcome = self.check_mcp_tool(tool_name, parsed)
+            if outcome.is_denied or outcome.is_unavailable:
+                raise RuntimeError(outcome.denial_message(scope=tool_name))
+
         if not self.is_plan_mode:
             return
 
-        tool_name = str(getattr(tool, "name", ""))
         if tool_name in _PLAN_CONTROL_TOOLS:
             if tool_name == "task" and isinstance(parsed, dict):
                 agent_type = str(parsed.get("agent_type", "explore")).lower()
@@ -199,7 +216,7 @@ class PermissionManager:
                     raise RuntimeError("Plan mode only allows explore or plan sub-agents")
             return
 
-        if bool(getattr(tool, "is_read_only", False)):
+        if is_read_only:
             return
 
         if tool_name in _PLAN_FILE_WRITE_TOOLS and isinstance(parsed, dict):
@@ -390,6 +407,49 @@ class PermissionManager:
         )
         outcome = self.approval.request(req)
         self.store.record(ApprovalKind.COMMAND, signature, outcome)
+        return outcome
+
+    def check_mcp_tool(self, tool_name: str, tool_input: Any) -> ApprovalOutcome:
+        """Check whether an MCP-backed tool may run, returning a typed outcome.
+
+        MCP servers are third-party code, so a tool that is not declared
+        read-only in the server config needs an explicit decision.  The scope
+        is the wrapped tool name, so ``allow_always`` trusts that one tool
+        rather than the whole server.
+        """
+        # 1. Check cache
+        cached = self.store.lookup(ApprovalKind.MCP, tool_name)
+        if cached is not None:
+            return cached
+
+        # 2. Prompt
+        if self.prompt is None and isinstance(self.approval, LocalApprovalBackend):
+            return ApprovalOutcome(decision=ApprovalDecision.UNAVAILABLE)
+
+        try:
+            import json
+
+            rendered_input = json.dumps(tool_input, indent=2, ensure_ascii=False, default=str)
+        except (TypeError, ValueError):
+            rendered_input = str(tool_input)
+        if len(rendered_input) > _MCP_INPUT_PREVIEW_CHARS:
+            rendered_input = rendered_input[:_MCP_INPUT_PREVIEW_CHARS] + "\n... (truncated)"
+
+        req = ApprovalRequest(
+            kind=ApprovalKind.MCP,
+            summary="pepsicode wants to call an MCP server tool",
+            details=[f"tool: {tool_name}", "", rendered_input],
+            scope=tool_name,
+            choices=[
+                {"key": "y", "label": "allow once", "decision": "allow_once"},
+                {"key": "a", "label": "always allow this MCP tool", "decision": "allow_always"},
+                {"key": "n", "label": "deny once", "decision": "deny_once"},
+                {"key": "d", "label": "always deny this MCP tool", "decision": "deny_always"},
+            ],
+            metadata={"tool": tool_name},
+        )
+        outcome = self.approval.request(req)
+        self.store.record(ApprovalKind.MCP, tool_name, outcome)
         return outcome
 
     def check_edit(self, target_path: str, diff_preview: str) -> ApprovalOutcome:

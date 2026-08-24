@@ -10,6 +10,7 @@ import pytest
 
 from pepsicode.approval import ApprovalDecision, ApprovalOutcome
 from pepsicode.permissions import PermissionManager
+from pepsicode.tooling import ToolCapability, ToolContext, ToolDefinition, ToolRegistry, ToolResult
 
 # ---------------------------------------------------------------------------
 # Legacy ensure_* API (backward compatibility)
@@ -110,6 +111,93 @@ def test_denial_message_includes_feedback(tmp_path: Path) -> None:
     msg = outcome.denial_message(scope="rm -rf x")
     assert "rm -rf x" in msg
     assert "use safer approach" in msg
+
+
+# ---------------------------------------------------------------------------
+# MCP tool gating
+# ---------------------------------------------------------------------------
+
+
+def _mcp_tool(name: str, *, read_only: bool = False) -> ToolDefinition:
+    return ToolDefinition(
+        name=name,
+        description="wrapped MCP tool",
+        input_schema={"type": "object"},
+        validator=lambda value: value,
+        run=lambda value, context: ToolResult(ok=True, output="ran"),
+        capabilities={ToolCapability.READ_ONLY} if read_only else set(),
+    )
+
+
+def test_read_only_mcp_tool_runs_in_plan_mode(tmp_path: Path) -> None:
+    """`readOnlyTools` servers (e.g. sequential-thinking) stay usable while planning."""
+    manager = PermissionManager(str(tmp_path))
+    manager.enter_plan_mode()
+    manager.ensure_tool_allowed(_mcp_tool("mcp__thinking__think", read_only=True), {})
+
+
+def test_undeclared_mcp_tool_requires_approval(tmp_path: Path) -> None:
+    seen: list = []
+
+    def _prompt(request):
+        seen.append(request)
+        return {"decision": "allow_once"}
+
+    manager = PermissionManager(str(tmp_path), prompt=_prompt)
+    manager.ensure_tool_allowed(_mcp_tool("mcp__remote__write_file"), {"path": "x"})
+
+    assert len(seen) == 1
+    assert seen[0]["kind"] == "mcp"
+    assert seen[0]["scope"] == "mcp__remote__write_file"
+    # The prompt must show what is being sent to the third-party server.
+    assert any("path" in detail for detail in seen[0]["details"])
+
+
+def test_denied_mcp_tool_raises(tmp_path: Path) -> None:
+    manager = PermissionManager(str(tmp_path), prompt=lambda req: {"decision": "deny_once"})
+    with pytest.raises(RuntimeError, match="mcp__remote__write_file"):
+        manager.ensure_tool_allowed(_mcp_tool("mcp__remote__write_file"), {})
+
+
+def test_mcp_tool_without_prompt_is_denied(tmp_path: Path) -> None:
+    """Fail closed: no interactive prompt means no third-party tool call."""
+    manager = PermissionManager(str(tmp_path))
+    with pytest.raises(RuntimeError):
+        manager.ensure_tool_allowed(_mcp_tool("mcp__remote__write_file"), {})
+
+
+def test_mcp_approval_is_remembered_for_the_session(tmp_path: Path) -> None:
+    calls: list = []
+
+    def _prompt(request):
+        calls.append(request)
+        return {"decision": "allow_once"}
+
+    manager = PermissionManager(str(tmp_path), prompt=_prompt)
+    tool = _mcp_tool("mcp__remote__write_file")
+    manager.ensure_tool_allowed(tool, {})
+    manager.ensure_tool_allowed(tool, {})
+
+    assert len(calls) == 1
+
+
+def test_denied_mcp_tool_surfaces_as_failed_tool_result(tmp_path: Path) -> None:
+    """ToolRegistry converts the gate's RuntimeError into a failed result."""
+    registry = ToolRegistry([_mcp_tool("mcp__remote__write_file")])
+    manager = PermissionManager(str(tmp_path), prompt=lambda req: {"decision": "deny_once"})
+    context = ToolContext(cwd=str(tmp_path), permissions=manager)
+
+    result = registry.execute("mcp__remote__write_file", {}, context)
+
+    assert result.ok is False
+    assert "mcp__remote__write_file" in result.output
+
+
+def test_non_mcp_tools_are_not_gated(tmp_path: Path) -> None:
+    calls: list = []
+    manager = PermissionManager(str(tmp_path), prompt=lambda req: calls.append(req) or {"decision": "allow_once"})
+    manager.ensure_tool_allowed(_mcp_tool("write_file"), {})
+    assert calls == []
 
 
 # ---------------------------------------------------------------------------

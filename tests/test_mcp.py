@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import os
+import subprocess
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
@@ -9,13 +11,15 @@ from typing import Any
 import pytest
 
 from pepsicode.mcp import (
+    MAX_TOOL_NAME_LENGTH,
     HttpMcpClient,
     StdioMcpClient,
     _create_client,
     _interpolate_env,
+    _wrapped_tool_name,
     create_mcp_backed_tools,
 )
-from pepsicode.tooling import ToolContext
+from pepsicode.tooling import ToolCapability, ToolContext
 
 # ---------------------------------------------------------------------------
 # Stdio tests (existing)
@@ -58,6 +62,112 @@ def test_create_mcp_backed_tools_supports_newline_json(tmp_path: Path) -> None:
     mcp["dispose"]()
 
 
+def test_read_only_tools_declaration_marks_capability(tmp_path: Path) -> None:
+    """``readOnlyTools`` is what lets an MCP tool run under Plan mode."""
+    server_script = Path(__file__).parent / "fixtures" / "fake_mcp_server.py"
+    mcp = create_mcp_backed_tools(
+        cwd=str(tmp_path),
+        mcp_servers={"fake": {"command": "python", "args": [str(server_script)], "readOnlyTools": ["echo"]}},
+    )
+    try:
+        echo_tool = next(tool for tool in mcp["tools"] if tool.name == "mcp__fake__echo")
+        assert ToolCapability.READ_ONLY in echo_tool.capabilities
+    finally:
+        mcp["dispose"]()
+
+
+def test_undeclared_tools_are_not_read_only(tmp_path: Path) -> None:
+    server_script = Path(__file__).parent / "fixtures" / "fake_mcp_server.py"
+    mcp = create_mcp_backed_tools(
+        cwd=str(tmp_path),
+        mcp_servers={"fake": {"command": "python", "args": [str(server_script)]}},
+    )
+    try:
+        echo_tool = next(tool for tool in mcp["tools"] if tool.name == "mcp__fake__echo")
+        assert ToolCapability.READ_ONLY not in echo_tool.capabilities
+    finally:
+        mcp["dispose"]()
+
+
+# ---------------------------------------------------------------------------
+# Process spawning
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows-only process creation flags")
+def test_stdio_spawn_never_detaches_from_its_pipes(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """DETACHED_PROCESS + the cmd.exe wrapper silently kills stdin/stdout.
+
+    Regression guard for the bug that made every stdio MCP server time out
+    on Windows.  CREATE_NO_WINDOW gives the same console isolation without
+    breaking the pipes.
+    """
+    DETACHED_PROCESS = 0x00000008
+    CREATE_NO_WINDOW = 0x08000000
+
+    captured: dict[str, Any] = {}
+
+    class _StopSpawnError(Exception):
+        pass
+
+    def _fake_popen(argv: list[str], **kwargs: Any) -> None:
+        captured["argv"] = argv
+        captured["kwargs"] = kwargs
+        raise _StopSpawnError
+
+    monkeypatch.setattr(subprocess, "Popen", _fake_popen)
+
+    client = StdioMcpClient("fake", {"command": "python", "args": ["-V"]}, str(tmp_path))
+    with pytest.raises(_StopSpawnError):
+        client._spawn_process()
+
+    flags = captured["kwargs"]["creationflags"]
+    assert not flags & DETACHED_PROCESS
+    assert flags & CREATE_NO_WINDOW
+    assert captured["kwargs"]["stdin"] is subprocess.PIPE
+    assert captured["kwargs"]["stdout"] is subprocess.PIPE
+
+
+# ---------------------------------------------------------------------------
+# Tool name limits
+# ---------------------------------------------------------------------------
+
+
+def test_wrapped_tool_name_short_names_are_unchanged() -> None:
+    assert _wrapped_tool_name("fake", "echo", set()) == "mcp__fake__echo"
+
+
+def test_wrapped_tool_name_truncates_to_api_limit() -> None:
+    """Anthropic rejects tool names longer than 64 chars with a 400."""
+    taken: set[str] = set()
+    name = _wrapped_tool_name(
+        "github-enterprise-cloud-integration",
+        "create_or_update_pull_request_review_comment",
+        taken,
+    )
+    assert len(name) <= MAX_TOOL_NAME_LENGTH
+    assert name.startswith("mcp__github-enterprise-cloud-integration__")
+
+
+def test_wrapped_tool_name_truncation_stays_unique() -> None:
+    taken: set[str] = set()
+    server = "a-very-long-mcp-server-name-that-eats-the-budget"
+    first = _wrapped_tool_name(server, "create_or_update_something_long_a", taken)
+    second = _wrapped_tool_name(server, "create_or_update_something_long_b", taken)
+    assert first != second
+    assert len(first) <= MAX_TOOL_NAME_LENGTH
+    assert len(second) <= MAX_TOOL_NAME_LENGTH
+
+
+def test_wrapped_tool_name_deduplicates_identical_names() -> None:
+    taken: set[str] = set()
+    first = _wrapped_tool_name("fake", "echo", taken)
+    second = _wrapped_tool_name("fake", "echo", taken)
+    assert first == "mcp__fake__echo"
+    assert second != first
+    assert len(second) <= MAX_TOOL_NAME_LENGTH
+
+
 # ---------------------------------------------------------------------------
 # _interpolate_env tests
 # ---------------------------------------------------------------------------
@@ -91,9 +201,19 @@ class _FakeMcpHandler(BaseHTTPRequestHandler):
 
     # 存储最近收到的请求头（用于断言 token 等）
     last_headers: dict[str, str] = {}
+    # initialize 响应中下发的会话 ID，模拟 Streamable HTTP 规范行为
+    session_id: str = "sess-fake-123"
+    # 记录收到的 DELETE（会话终止）
+    deleted_sessions: list[str] = []
 
     def log_message(self, format: str, *args: Any) -> None:
         pass  # 禁用日志
+
+    def do_DELETE(self) -> None:
+        _FakeMcpHandler.deleted_sessions.append(self.headers.get("Mcp-Session-Id", ""))
+        self.send_response(204)
+        self.send_header("Content-Length", "0")
+        self.end_headers()
 
     def do_POST(self) -> None:
         content_length = int(self.headers.get("Content-Length", 0))
@@ -112,6 +232,8 @@ class _FakeMcpHandler(BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(response_bytes)))
+        if method == "initialize" and _FakeMcpHandler.session_id:
+            self.send_header("Mcp-Session-Id", _FakeMcpHandler.session_id)
         self.end_headers()
         self.wfile.write(response_bytes)
 
@@ -235,8 +357,27 @@ def test_http_mcp_client_get_prompt() -> None:
         server.close()
 
 
-def test_http_mcp_client_close_is_noop() -> None:
-    """HTTP 客户端 close 不应报错。"""
+def test_http_mcp_client_echoes_session_id() -> None:
+    """规范实现会在 initialize 后拒绝不带 Mcp-Session-Id 的请求。"""
+    server = _FakeMcpServer()
+    _FakeMcpHandler.deleted_sessions = []
+    try:
+        client = HttpMcpClient("test", {"url": server.url}, "/tmp")
+        client.start()
+        client.list_tools()
+        # urllib re-capitalizes header names, so compare case-insensitively.
+        sent = {key.lower(): value for key, value in _FakeMcpHandler.last_headers.items()}
+        assert sent.get("mcp-session-id") == _FakeMcpHandler.session_id
+        assert sent.get("mcp-protocol-version")
+
+        client.close()
+        assert _FakeMcpHandler.deleted_sessions == [_FakeMcpHandler.session_id]
+    finally:
+        server.close()
+
+
+def test_http_mcp_client_close_without_session_is_noop() -> None:
+    """未建立会话时 close 不应报错（也不应发 DELETE）。"""
     client = HttpMcpClient("test", {"url": "http://localhost:1"}, "/tmp")
     client.close()  # 不应抛异常
 

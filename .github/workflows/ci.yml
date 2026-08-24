@@ -8,9 +8,13 @@ on:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
     strategy:
+      fail-fast: false
       matrix:
+        # Windows is not optional: the stdio MCP transport uses Windows-only
+        # process creation flags that a Linux-only matrix cannot regress-test.
+        os: [ubuntu-latest, windows-latest]
         python-version: ["3.11", "3.12"]
 
     steps:

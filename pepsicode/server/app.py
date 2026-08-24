@@ -684,6 +684,13 @@ def main() -> None:
     except KeyboardInterrupt:
         logger.info("Server shutdown requested")
     finally:
+        # Dispose tools (closes MCP connections).  Without this the stdio MCP
+        # child processes outlive the server and leak on every restart.
+        try:
+            server.tools.dispose()
+            logger.info("Tools disposed successfully")
+        except Exception as e:  # noqa: BLE001 - shutdown must not raise
+            logger.warning("Error disposing tools: %s", e)
         logger.info("Server stopped")
 
 
