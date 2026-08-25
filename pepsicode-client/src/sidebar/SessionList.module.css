@@ -48,9 +48,14 @@
   transition: background-color var(--ds-transition-duration-fast) ease;
 }
 
-.newBtn:hover {
+.newBtn:hover:not(:disabled) {
   background: var(--dsw-alias-interactive-bg-hover);
   color: var(--dsw-alias-label-primary);
+}
+
+.newBtn:disabled {
+  opacity: 0.5;
+  cursor: default;
 }
 
 .projectBar {

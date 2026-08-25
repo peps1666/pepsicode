@@ -1,6 +1,6 @@
 import json
 
-from pepsicode.llm.anthropic_adapter import AnthropicModelAdapter
+from pepsicode.llm.anthropic_adapter import AnthropicModelAdapter, _extract_error_message
 from pepsicode.tooling import ToolDefinition, ToolRegistry
 
 
@@ -70,3 +70,16 @@ def test_anthropic_adapter_parses_final_text(monkeypatch) -> None:
     assert step.type == "assistant"
     assert step.content == "done"
     assert step.kind == "final"
+
+
+def test_extract_error_message_summarizes_html_provider_page() -> None:
+    data = {
+        "error": {
+            "message": "<!doctype html><html><head><title>Access denied | Provider</title></head><body>large page</body></html>"
+        }
+    }
+
+    message = _extract_error_message(data, 403)
+
+    assert message == "Model provider request failed (HTTP 403): Access denied | Provider"
+    assert "<!doctype" not in message

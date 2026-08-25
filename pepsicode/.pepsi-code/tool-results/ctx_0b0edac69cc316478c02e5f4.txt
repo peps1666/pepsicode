@@ -1,0 +1,224 @@
+agents/builtins/explore.md:4:model: inherit
+agents/builtins/general.md:4:model: inherit
+agents/builtins/plan.md:4:model: inherit
+agents/builtins/plan.md:18:code paths, and build a complete mental model.
+agents/builtins/verification.md:4:model: inherit
+agents/loader.py:164:        model = str(_get("model", default="inherit"))
+agents/loader.py:186:            model=model,
+agents/parser.py:12:    model: inherit
+agents/trace.py:92:        """Accumulate token usage reported by the model adapter."""
+cli/cli_commands.py:42:    SlashCommand("/model", "/model", "Show the current model.", "Status"),
+cli/cli_commands.py:43:    SlashCommand("/model", "/model <model-name>", "Persist a model override into settings.", "Status"),
+cli/cli_commands.py:97:            ("/model", "Show or change current model"),
+cli/cli_commands.py:275:            f"model: {runtime['model']}",
+cli/cli_commands.py:287:    if user_input == "/model":
+cli/cli_commands.py:292:        return f"current model: {runtime['model']}"
+cli/cli_commands.py:294:    if user_input.startswith("/model "):
+cli/cli_commands.py:295:        model = user_input[len("/model ") :].strip()
+cli/cli_commands.py:296:        if not model:
+cli/cli_commands.py:297:            return "usage: /model <model-name>"
+cli/cli_commands.py:298:        save_mini_code_settings({"model": model})
+cli/cli_commands.py:299:        return f"saved model={model} to {PEPSI_CODE_SETTINGS_PATH}"
+cli/install.py:3:Configures model, API credentials, and installs launcher script.
+cli/install.py:170:    model = _require_input(
+cli/install.py:172:        settings.get("model") or current_env.get("ANTHROPIC_MODEL", ""),
+cli/install.py:199:                "model": model,
+cli/install.py:203:                    "ANTHROPIC_MODEL": model,
+cli/poly_commands.py:351:                f"Model: {state.model}",
+config.py:30:def _suggest_model_name(typed: str) -> str:
+config.py:36:    for model in KNOWN_MODELS:
+config.py:37:        if model.startswith(typed.lower()):
+config.py:38:            return model
+config.py:41:    for model in KNOWN_MODELS:
+config.py:42:        if typed.lower() in model:
+config.py:43:            return model
+config.py:137:    model = os.environ.get("PEPSI_CODE_MODEL") or effective.get("model") or str(env.get("ANTHROPIC_MODEL", "")).strip()
+config.py:155:    if not model:
+config.py:156:        raise RuntimeError("No model configured. Set ~/.pepsi-code/settings.json or ANTHROPIC_MODEL.")
+config.py:160:    fallback_model = (
+config.py:190:        "model": model,
+config.py:191:        "fallbackModel": fallback_model,
+config.py:256:        model = config.get("model", "")
+config.py:257:        if model and not any(model.lower() == km.lower() for km in KNOWN_MODELS):
+config.py:258:            suggestion = _suggest_model_name(model)
+config.py:260:                warnings.append(f"Unknown model '{model}'. Did you mean '{suggestion}'")
+config.py:262:                warnings.append(f"Unknown model '{model}'. Known models: {', '.join(KNOWN_MODELS[:3])}...")
+config.py:276:        if "No model configured" in error_msg:
+config.py:277:            suggestion = _suggest_model_name(os.environ.get("PEPSI_CODE_MODEL", ""))
+config.py:281:                "  1. Set model name: export ANTHROPIC_MODEL=deepseek-v4-flash\n"
+config.py:283:                f'     {{"model": "deepseek-v4-flash"}}\n'
+config.py:287:            help_msg += f"\n  Known models: {', '.join(KNOWN_MODELS[:3])}..."
+config.py:333:        lines.append(f"  Model: {config.get('model', 'not set')}")
+context/context_artifacts.py:1:"""Persistent storage for oversized tool results kept outside model context."""
+context/context_manager.py:452:    model: str = "default"
+context/context_manager.py:472:            self.context_window = DEFAULT_CONTEXT_WINDOWS.get(self.model, DEFAULT_CONTEXT_WINDOWS["default"])
+context/context_manager.py:486:        still keeps file paths, errors, and decisions even with no model.
+context/context_manager.py:499:    def update_model(self, model: str) -> None:
+context/context_manager.py:500:        """Update model and adjust context window."""
+context/context_manager.py:501:        self.model = model
+context/context_manager.py:502:        self.context_window = DEFAULT_CONTEXT_WINDOWS.get(model, DEFAULT_CONTEXT_WINDOWS["default"])
+context/context_manager.py:582:        # reflects exactly what the model saw last call, including tool schemas
+context/context_manager.py:772:            f"Model: {self.model}",
+context/context_manager.py:821:        "model": manager.model,
+context/context_manager.py:842:            model=state.get("model", "default"),
+context/skills.py:44:        # Indented lines belong to a nested structure we do not model.
+core/agent_loop.py:39:    are left at full fidelity so the model sees what it just did.
+core/agent_loop.py:152:def _record_cost_usage(model: ModelAdapter, cost_tracker: CostTracker | None) -> None:
+core/agent_loop.py:156:    the same ``model.last_usage`` dict so context stats and cost stats stay in
+core/agent_loop.py:161:    usage = getattr(model, "last_usage", None)
+core/agent_loop.py:164:    model_name = usage.get("model") or getattr(model, "name", None) or "default"
+core/agent_loop.py:166:        model=model_name,
+core/agent_loop.py:174:def _notify_usage(model: ModelAdapter, on_usage: Callable[[dict], None] | None) -> None:
+core/agent_loop.py:178:    usage = getattr(model, "last_usage", None)
+core/agent_loop.py:227:def _messages_for_model(messages: list[ChatMessage], hook_engine: HookEngine | None) -> list[ChatMessage]:
+core/agent_loop.py:348:    model: ModelAdapter,
+core/agent_loop.py:413:        # model sees them.  Cheap and lossless for recent context.
+core/agent_loop.py:416:            next_step = model.next(_messages_for_model(current_messages, hook_engine))
+core/agent_loop.py:525:        # stats reflect what the model actually saw rather than an estimate.
+core/agent_loop.py:527:            usage = getattr(model, "last_usage", None)
+core/agent_loop.py:533:        _record_cost_usage(model, cost_tracker)
+core/agent_loop.py:534:        _notify_usage(model, on_usage)
+core/agent_loop.py:615:                        else f"Model returned an empty response after tool execution and the turn was stopped. Retry or ask the model to continue the remaining steps.{diagnostics_suffix}"
+core/agent_loop.py:844:    model: ModelAdapter,
+core/agent_loop.py:867:    arrive from the provider via ``model.next_stream()`` and forwards them to
+core/agent_loop.py:928:        # ------ Stream the model response ------
+core/agent_loop.py:935:                token_stream = model.next_stream(_messages_for_model(current_messages, hook_engine))
+core/agent_loop.py:942:                next_step = model.next(_messages_for_model(current_messages, hook_engine))
+core/agent_loop.py:1056:            usage = getattr(model, "last_usage", None)
+core/agent_loop.py:1062:        _record_cost_usage(model, cost_tracker)
+core/agent_loop.py:1063:        _notify_usage(model, on_usage)
+core/loop_engine.py:165:    model: ModelAdapter,
+core/loop_engine.py:207:            model=model,
+core/state.py:122:    model: str = "unknown"
+core/state.py:204:        f"  Model: {state.model}",
+core/sub_agents.py:36:    tool whitelists, and model selection.
+core/sub_agents.py:45:    model: str = "inherit"  # inherit from parent or specific model
+core/sub_agents.py:77:                "code paths, and build a complete mental model. "
+hooks/__init__.py:13:from pepsicode.hooks.models import (
+hooks/conditions.py:8:from pepsicode.hooks.models import HookContext
+hooks/engine.py:13:from pepsicode.hooks.models import (
+hooks/engine.py:173:            if action.expose_output_to_model:
+hooks/loader.py:10:from pepsicode.hooks.models import (
+hooks/loader.py:96:        expose_output_to_model=expose_output,
+hooks/models.py:173:    expose_output_to_model: bool = False
+hooks/runtime.py:8:from pepsicode.hooks.models import HookActionResult, HookContext, HookSource
+hooks/runtime.py:59:                        "Project hooks can deny tools, inject model context, or run approved commands.",
+llm/__init__.py:1:"""LLM providers: Anthropic adapter, mock model, retry and cost tracking."""
+llm/anthropic_adapter.py:19:# Status codes that indicate the request body / context exceeded the model
+llm/anthropic_adapter.py:22:# Service-overloaded: retry on the configured fallback model if one exists.
+llm/anthropic_adapter.py:34:    """Raised on a 529 overload when no fallback model handled the request."""
+llm/anthropic_adapter.py:51:    # switches to the configured fallback model instead of hammering the
+llm/anthropic_adapter.py:321:        self, model: str, system_message: str, converted_messages: list[dict[str, Any]]
+llm/anthropic_adapter.py:324:            "model": model,
+llm/anthropic_adapter.py:355:        self, model: str, system_message: str, converted_messages: list[dict[str, Any]]
+llm/anthropic_adapter.py:364:            "model": model,
+llm/anthropic_adapter.py:434:            "model": self.runtime.get("fallbackModel") or self.runtime["model"],
+llm/anthropic_adapter.py:463:        """Stream tokens from the model using Anthropic's SSE endpoint.
+llm/anthropic_adapter.py:471:        request = self._build_stream_request(self.runtime["model"], system_message, converted_messages)
+llm/anthropic_adapter.py:542:        request = self._build_request(self.runtime["model"], system_message, converted_messages)
+llm/anthropic_adapter.py:545:        # Service overloaded: try the configured fallback model once.
+llm/anthropic_adapter.py:548:            if fallback and fallback != self.runtime["model"]:
+llm/api_retry.py:1:"""API retry and exponential backoff for model adapters.
+llm/cost_tracker.py:36:    # Anthropic models (USD per 1M tokens)
+llm/cost_tracker.py:55:    # OpenAI models
+llm/cost_tracker.py:91:    """Usage statistics for a specific model."""
+llm/cost_tracker.py:129:    # Per-model usage
+llm/cost_tracker.py:130:    model_usage: dict[str, ModelUsage] = field(default_factory=dict)
+llm/cost_tracker.py:138:        model: str,
+llm/cost_tracker.py:148:            model: Model name
+llm/cost_tracker.py:159:        pricing = MODEL_PRICING.get(model, MODEL_PRICING["default"])
+llm/cost_tracker.py:169:        # Update model usage
+llm/cost_tracker.py:170:        if model not in self.model_usage:
+llm/cost_tracker.py:171:            self.model_usage[model] = ModelUsage()
+llm/cost_tracker.py:173:        usage = self.model_usage[model]
+llm/cost_tracker.py:189:    def record_error(self, model: str) -> None:
+llm/cost_tracker.py:193:            model: Model name
+llm/cost_tracker.py:195:        if model not in self.model_usage:
+llm/cost_tracker.py:196:            self.model_usage[model] = ModelUsage()
+llm/cost_tracker.py:198:        self.model_usage[model].error_count += 1
+llm/cost_tracker.py:217:    def get_model_usage(self, model: str) -> ModelUsage:
+llm/cost_tracker.py:218:        """Get usage for a specific model.
+llm/cost_tracker.py:221:            model: Model name
+llm/cost_tracker.py:226:        return self.model_usage.get(model, ModelUsage())
+llm/cost_tracker.py:229:        """Get total tokens across all models."""
+llm/cost_tracker.py:230:        return sum(u.total_tokens for u in self.model_usage.values())
+llm/cost_tracker.py:234:        return sum(u.call_count for u in self.model_usage.values())
+llm/cost_tracker.py:238:        return sum(u.error_count for u in self.model_usage.values())
+llm/cost_tracker.py:248:            detailed: Include per-model breakdown
+llm/cost_tracker.py:270:        if detailed and self.model_usage:
+llm/cost_tracker.py:279:            for model, usage in self.model_usage.items():
+llm/cost_tracker.py:283:                        f"  {model}:",
+llm/mock_model.py:151:        """Stream a response.  The mock model doesn't stream -- it yields the
+llm/mock_model.py:160:        """Heuristic summarizer for the mock model.
+logging_config.py:84:def log_api_call(model: str, tokens_in: int, tokens_out: int, cost: float, duration_ms: float) -> None:
+logging_config.py:88:        "API call: model=%s, tokens_in=%d, tokens_out=%d, cost=$%.4f, duration=%dms",
+logging_config.py:89:        model,
+main.py:18:from pepsicode.llm.mock_model import MockModelAdapter
+main.py:49:    model = runtime["model"] if runtime else "unconfigured"
+main.py:52:        lines.append(f"  Model: {model}")
+main.py:200:            "  1. Set your model name: export ANTHROPIC_MODEL=deepseek-v4-flash\n"
+main.py:203:            '     {"model": "deepseek-v4-flash", "env": {"ANTHROPIC_BASE_URL": "https://api.deepseek.com/anthropic", "ANTHROPIC_API_KEY": "<your-provider-key>"}}\n'
+main.py:206:            "   Falling back to mock model for now...\n",
+main.py:233:    model = (
+main.py:246:        context_mgr = ContextManager(model=runtime.get("model", "default"))
+main.py:248:        # when a real model is available (falls back to heuristics otherwise).
+main.py:249:        summarize = getattr(model, "summarize", None)
+main.py:252:        logger.info("Context manager initialized for model: %s", runtime.get("model", "unknown"))
+main.py:415:                    model=model,
+main.py:444:            model=model,
+permissions.py:240:            text.startswith("/model ")
+permissions.py:483:                {"key": "6", "label": "reject and send guidance to model", "decision": "deny_with_feedback"},
+server/app.py:47:from pepsicode.llm.mock_model import MockModelAdapter
+server/app.py:147:        self.model: Any = None
+server/app.py:169:        self.model = None
+server/app.py:199:            self.model = MockModelAdapter()
+server/app.py:201:            self.model = AnthropicModelAdapter(self.runtime, self.tools)
+server/app.py:204:            self.context_manager = ContextManager(model=self.runtime.get("model", "default"))
+server/app.py:205:            summarize = getattr(self.model, "summarize", None)
+server/app.py:366:                "model": session.runtime.get("model") if session.runtime else "mock",
+server/app.py:399:            # model, and tool state even when it shares the same workspace.
+server/app.py:413:                "model": session.runtime.get("model") if session.runtime else "mock",
+server/app.py:482:            for model, usage in tracker.model_usage.items():
+server/app.py:487:                        "model": model,
+server/app.py:549:        if session.model is None:
+server/app.py:616:                    model=session.model,
+tools/edit_file.py:20:    # model always match the file content (read_text uses universal newlines).
+tools/task.py:4:General) as a tool the model can call.  Each invocation runs in its own
+tools/task.py:85:    """Return an isolated runtime config honoring the agent's model override."""
+tools/task.py:87:    if definition.model and definition.model.lower() != "inherit":
+tools/task.py:88:        child_runtime["model"] = definition.model
+tools/task.py:95:    model_factory: Callable[[ToolRegistry], Any] | None = None,
+tools/task.py:105:    ``model_factory(registry) -> ModelAdapter`` lets callers inject a model
+tools/task.py:144:        if model_factory is not None:
+tools/task.py:145:            sub_model = model_factory(sub_registry)
+tools/task.py:149:            sub_model = AnthropicModelAdapter(_runtime_for_agent(runtime, definition), sub_registry)
+tools/task.py:153:                output="Task tool requires a configured model (no runtime available).",
+tools/task.py:199:                model=sub_model,
+tui/app.py:182:    model: ModelAdapter
+tui/app.py:459:    This happens when the model stops responding but tools are still active,
+tui/app.py:719:# Banner cache: the banner rarely changes (only when cwd, model, or stats change).
+tui/app.py:724:    """Render the top banner panel with model info, cwd, and session stats.
+tui/app.py:832:def _render_home_input_card(state: ScreenState, model: str, provider: str, cols: int) -> list[str]:
+tui/app.py:842:        f"  {SUBTLE}{model}{RESET}",
+tui/app.py:873:    model = runtime.get("model", "unknown")
+tui/app.py:892:    footer = f"  {SUBTLE}{cwd_text}{RESET}  {DIM}{model}{RESET}"
+tui/app.py:949:def _render_stream_input(state: ScreenState, model: str, cols: int, visible_commands: list | None = None) -> list[str]:
+tui/app.py:974:        lines.append(f"  {SUBTLE}{model}{RESET}")
+tui/app.py:1069:    model_name = args.runtime.get("model", "unknown") if args.runtime else "unknown"
+tui/app.py:1072:    input_lines = _render_stream_input(state, model_name, cols, visible_commands)
+tui/app.py:1571:        """Handle a single streaming token from the model.
+tui/app.py:1789:                model=args.model,
+tui/app.py:1850:    model: ModelAdapter,
+tui/app.py:1873:        context_manager = ContextManager(model=runtime.get("model", "default"))
+tui/app.py:1874:        if hasattr(model, "summarize"):
+tui/app.py:1875:            context_manager.summarizer = model.summarize
+tui/app.py:1880:        model=model,
+tui/app.py:1931:            "model": runtime.get("model", "unknown") if runtime else "unknown",
+tui/app.py:2208:        args: Application arguments (tools, model, permissions)
+tui/chrome.py:438:    model = runtime.get("model", "not-configured") if runtime else "not-configured"
+tui/chrome.py:453:        f"{SUBTLE}{folder_name}{RESET}  {DIM}{model}{RESET}  {SUBTLE}{provider}{RESET}",
+types.py:56:    """A single token (or event) emitted by a streaming model adapter.
+worktree/__init__.py:16:from pepsicode.worktree.models import Worktree, WorktreeSession
+worktree/manager.py:10:from pepsicode.worktree.models import Worktree, WorktreeSession
+worktree/session.py:7:from pepsicode.worktree.models import WorktreeSession
+(157 file(s) skipped)

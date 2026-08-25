@@ -7,6 +7,7 @@ to allow pepsicode to save and restore conversation state across restarts.
 from __future__ import annotations
 
 import json
+import os
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -229,10 +230,29 @@ def load_session(session_id: str) -> SessionData | None:
         return None
 
 
-def list_sessions() -> list[SessionMetadata]:
-    """List all available sessions, newest first."""
+def normalize_workspace(workspace: str) -> str:
+    """Return a stable workspace identity for path comparisons.
+
+    Session metadata keeps the original path for display.  Comparisons use a
+    resolved, platform-normalized path so trailing separators, relative paths,
+    and Windows path casing do not split one workspace into multiple groups.
+    """
+    if not workspace:
+        return ""
+    return os.path.normcase(str(Path(workspace).expanduser().resolve(strict=False)))
+
+
+def same_workspace(left: str, right: str) -> bool:
+    """Return whether two workspace paths identify the same directory."""
+    return bool(left and right) and normalize_workspace(left) == normalize_workspace(right)
+
+
+def list_sessions(workspace: str | None = None) -> list[SessionMetadata]:
+    """List available sessions, optionally scoped to one workspace."""
     index = _load_session_index()
     sessions = [meta for sid, meta in index.items() if _session_file(sid).exists()]
+    if workspace is not None:
+        sessions = [meta for meta in sessions if same_workspace(meta.workspace, workspace)]
     sessions.sort(key=lambda s: s.updated_at, reverse=True)
     return sessions
 
@@ -286,11 +306,8 @@ def create_new_session(workspace: str) -> SessionData:
 
 def get_latest_session(workspace: str | None = None) -> SessionData | None:
     """Get the most recent session, optionally filtered by workspace."""
-    sessions = list_sessions()
-    for meta in sessions:
-        if workspace is None or meta.workspace == workspace:
-            return load_session(meta.session_id)
-    return None
+    sessions = list_sessions(workspace=workspace)
+    return load_session(sessions[0].session_id) if sessions else None
 
 
 # ---------------------------------------------------------------------------

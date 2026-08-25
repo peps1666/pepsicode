@@ -357,6 +357,34 @@ def test_run_agent_turn_stream_end_to_end():
     print("test_run_agent_turn_stream_end_to_end: PASSED")
 
 
+def test_run_agent_turn_stream_emits_structured_error():
+    """Provider failures use the dedicated error callback and persisted flag."""
+
+    class FailingModel:
+        def next_stream(self, messages):
+            raise RuntimeError("provider unavailable")
+
+    class MockTools:
+        def find(self, name):
+            return None
+
+    errors: list[str] = []
+    assistants: list[str] = []
+    result = run_agent_turn_stream(
+        model=FailingModel(),
+        tools=MockTools(),
+        messages=[{"role": "user", "content": "hello"}],
+        cwd=".",
+        on_assistant_message=assistants.append,
+        on_error_message=errors.append,
+        max_steps=1,
+    )
+
+    assert errors == ["Model API error (RuntimeError): provider unavailable"]
+    assert assistants == []
+    assert result[-1]["isError"] is True
+
+
 def main() -> int:
     tests = [
         test_parse_sse_event,
@@ -373,6 +401,7 @@ def main() -> int:
         test_accumulate_with_on_token_callback,
         test_accumulate_tool_with_no_input,
         test_run_agent_turn_stream_end_to_end,
+        test_run_agent_turn_stream_emits_structured_error,
     ]
     failed = 0
     for test in tests:

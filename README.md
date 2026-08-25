@@ -170,6 +170,23 @@ python -m pepsicode.main --validate-config
 | `/worktree` | 管理 Git worktree |
 | `/exit` | 退出并保存会话 |
 
+## 项目级 Skill 与 MCP 示例
+
+仓库内置了一个可以直接验证扩展链路的示例：
+
+- `.pepsi-code/skills/pepsicode-project-health/SKILL.md`：项目健康检查 Skill。
+- `examples/mcp/workspace_inspector_server.py`：零外部依赖、只读的 stdio MCP 服务。
+- `.mcp.json` 中的 `workspace-inspector`：项目级 MCP 连接配置。
+- `.mcp.json` 中的 `openai-developer-docs`：OpenAI 官方公开、只读的远程 Streamable HTTP MCP。
+
+启动 Pepsicode 后运行 `/skills` 和 `/mcp` 应看到 `pepsicode-project-health`、本地 `workspace-inspector` 和远程 `openai-developer-docs`。在对话中要求“使用 pepsicode-project-health 检查项目”，Skill 会优先调用本地 MCP 的 `project_info` 工具获取仓库元数据；询问 OpenAI API、Codex 或插件问题时，可以调用远程文档 MCP 搜索官方资料。
+
+也可以不启动模型，直接运行定向集成测试：
+
+```bash
+python -m pytest -q tests/test_project_extensions.py
+```
+
 ## Plan 模式
 
 输入 `/plan` 或 `/plan <任务>` 后，pepsicode 进入只读规划状态：

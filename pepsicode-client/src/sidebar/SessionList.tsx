@@ -1,15 +1,6 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useCallback } from "react";
 import { useSessionStore } from "../stores/session";
 import styles from "./SessionList.module.css";
-
-interface SessionMeta {
-  session_id: string;
-  created_at: number;
-  updated_at: number;
-  first_message: string;
-  message_count: number;
-  workspace: string;
-}
 
 function shortenPath(p: string): string {
   if (!p) return "";
@@ -19,30 +10,21 @@ function shortenPath(p: string): string {
 }
 
 export default function SessionList() {
-  const { sessionId, cwd, resumeSession, switchCwd } = useSessionStore();
-  const [sessions, setSessions] = useState<SessionMeta[]>([]);
-  const [loading, setLoading] = useState(true);
+  const {
+    sessionId,
+    cwd,
+    sessions,
+    sessionsLoading,
+    isRunning,
+    createSession,
+    resumeSession,
+    switchCwd,
+  } = useSessionStore();
   const [switching, setSwitching] = useState(false);
 
-  const refresh = useCallback(async () => {
-    try {
-      const list = await useSessionStore.getState().listSessions();
-      setSessions(list);
-    } catch (e) {
-      console.error("Failed to load sessions:", e);
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    refresh();
-  }, [refresh]);
-
   const handleNew = useCallback(() => {
-    // Reload to create fresh session
-    window.location.reload();
-  }, []);
+    void createSession();
+  }, [createSession]);
 
   const handleResume = useCallback(
     (sid: string) => {
@@ -58,19 +40,18 @@ export default function SessionList() {
       const folder = await window.pepsiAPI.selectFolder();
       if (!folder) return;
       await switchCwd(folder);
-      await refresh();
     } catch (e) {
       console.error("Failed to switch project folder:", e);
     } finally {
       setSwitching(false);
     }
-  }, [switchCwd, refresh, switching]);
+  }, [switchCwd, switching]);
 
   return (
     <div className={styles.container}>
       <div className={styles.header}>
         <span className={styles.title}>Sessions</span>
-        <button className={styles.newBtn} onClick={handleNew} title="New session">
+        <button className={styles.newBtn} onClick={handleNew} disabled={isRunning} title="New session">
           +
         </button>
       </div>
@@ -79,7 +60,7 @@ export default function SessionList() {
         <button
           className={styles.folderBtn}
           onClick={handleSelectFolder}
-          disabled={switching}
+          disabled={switching || isRunning}
           title={cwd || "选择项目文件夹"}
         >
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
@@ -92,7 +73,7 @@ export default function SessionList() {
       </div>
 
       <div className={styles.list}>
-        {loading ? (
+        {sessionsLoading ? (
           <div className={styles.loading}>Loading...</div>
         ) : sessions.length === 0 ? (
           <div className={styles.empty}>No saved sessions</div>

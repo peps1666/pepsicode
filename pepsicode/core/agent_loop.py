@@ -851,6 +851,7 @@ def run_agent_turn_stream(
     on_tool_start: Callable[[str, dict], None] | None = None,
     on_tool_result: Callable[[str, str, bool], None] | None = None,
     on_assistant_message: Callable[[str], None] | None = None,
+    on_error_message: Callable[[str], None] | None = None,
     on_progress_message: Callable[[str], None] | None = None,
     context_manager: ContextManager | None = None,
     cost_tracker: CostTracker | None = None,
@@ -875,6 +876,13 @@ def run_agent_turn_stream(
     overflow_retry_count = 0
     tool_error_count = 0
     step = 0
+
+    def emit_error(message: str) -> None:
+        if on_error_message is not None:
+            on_error_message(message)
+        elif on_assistant_message is not None:
+            on_assistant_message(message)
+
     artifact_store = ContextArtifactStore.for_workspace(cwd)
     start_event = HookEvent.SUBAGENT_START if agent_scope.startswith("subagent") else HookEvent.AGENT_START
     _emit_hook(
@@ -968,9 +976,8 @@ def run_agent_turn_stream(
                     reason = context_manager.last_compaction_error or "no safe reduction was available"
                     fallback = f"Context too large and safe compaction made no progress ({reason}): {error}"
                     logger.error("Context overflow, compaction circuit stopped retries: %s", reason)
-                    if on_assistant_message:
-                        on_assistant_message(fallback)
-                    current_messages.append({"role": "assistant", "content": fallback})
+                    emit_error(fallback)
+                    current_messages.append({"role": "assistant", "content": fallback, "isError": True})
                     return _finish_hook_turn(
                         current_messages,
                         hook_engine,
@@ -986,9 +993,8 @@ def run_agent_turn_stream(
                 continue
             fallback = f"Context too large and could not be compacted further: {error}"
             logger.error("Context overflow, no recovery: %s", error)
-            if on_assistant_message:
-                on_assistant_message(fallback)
-            current_messages.append({"role": "assistant", "content": fallback})
+            emit_error(fallback)
+            current_messages.append({"role": "assistant", "content": fallback, "isError": True})
             return _finish_hook_turn(
                 current_messages,
                 hook_engine,
@@ -1002,9 +1008,8 @@ def run_agent_turn_stream(
         except ConnectionError as error:
             fallback = f"Network error (connection failed or dropped): {error}"
             logger.error("Model API connection error: %s", error)
-            if on_assistant_message:
-                on_assistant_message(fallback)
-            current_messages.append({"role": "assistant", "content": fallback})
+            emit_error(fallback)
+            current_messages.append({"role": "assistant", "content": fallback, "isError": True})
             return _finish_hook_turn(
                 current_messages,
                 hook_engine,
@@ -1018,9 +1023,8 @@ def run_agent_turn_stream(
         except TimeoutError as error:
             fallback = f"Model API timeout: {error}"
             logger.error("Model API timeout: %s", error)
-            if on_assistant_message:
-                on_assistant_message(fallback)
-            current_messages.append({"role": "assistant", "content": fallback})
+            emit_error(fallback)
+            current_messages.append({"role": "assistant", "content": fallback, "isError": True})
             return _finish_hook_turn(
                 current_messages,
                 hook_engine,
@@ -1035,9 +1039,8 @@ def run_agent_turn_stream(
             error_type = type(error).__name__
             fallback = f"Model API error ({error_type}): {error}"
             logger.error("Model API error (%s): %s", error_type, error)
-            if on_assistant_message:
-                on_assistant_message(fallback)
-            current_messages.append({"role": "assistant", "content": fallback})
+            emit_error(fallback)
+            current_messages.append({"role": "assistant", "content": fallback, "isError": True})
             return _finish_hook_turn(
                 current_messages,
                 hook_engine,
@@ -1074,9 +1077,8 @@ def run_agent_turn_stream(
 
         if is_empty:
             fallback = "Model returned an empty response and the turn was stopped."
-            if on_assistant_message:
-                on_assistant_message(fallback)
-            current_messages.append({"role": "assistant", "content": fallback})
+            emit_error(fallback)
+            current_messages.append({"role": "assistant", "content": fallback, "isError": True})
             return _finish_hook_turn(
                 current_messages,
                 hook_engine,
@@ -1180,9 +1182,8 @@ def run_agent_turn_stream(
         )
 
     fallback = "Reached the maximum tool step limit for this turn."
-    if on_assistant_message:
-        on_assistant_message(fallback)
-    current_messages.append({"role": "assistant", "content": fallback})
+    emit_error(fallback)
+    current_messages.append({"role": "assistant", "content": fallback, "isError": True})
     return _finish_hook_turn(
         current_messages,
         hook_engine,

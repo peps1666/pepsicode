@@ -15,6 +15,7 @@ from pepsicode.core.session import (
     list_sessions,
     load_session,
     resolve_session_id,
+    same_workspace,
     save_session,
 )
 
@@ -130,6 +131,27 @@ def test_list_sessions(temp_session_dir):
 
     # Should be sorted by updated_at (newest first)
     assert listed[0].updated_at >= listed[1].updated_at
+
+
+def test_list_sessions_can_filter_by_workspace(temp_session_dir, tmp_path):
+    """Workspace filtering belongs to the persistence layer, not the UI."""
+    workspace = tmp_path / "project"
+    workspace.mkdir()
+    other_workspace = tmp_path / "other"
+    other_workspace.mkdir()
+
+    first = create_new_session(workspace=str(workspace))
+    save_session(first)
+    second = create_new_session(workspace=str(workspace / "."))
+    save_session(second)
+    other = create_new_session(workspace=str(other_workspace))
+    save_session(other)
+
+    listed = list_sessions(workspace=str(workspace))
+
+    assert {session.session_id for session in listed} == {first.session_id, second.session_id}
+    assert other.session_id not in {session.session_id for session in listed}
+    assert same_workspace(str(workspace), str(workspace / "."))
 
 
 def test_get_latest_session(temp_session_dir):

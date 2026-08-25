@@ -264,8 +264,8 @@ def validate_config(cwd: str | Path | None = None) -> tuple[bool, list[str]]:
         # 检查 MCP 配置
         mcp_servers = config.get("mcpServers", {})
         for name, server in mcp_servers.items():
-            if not server.get("command"):
-                errors.append(f"MCP server '{name}' has no command configured")
+            if not server.get("command") and not server.get("url"):
+                errors.append(f"MCP server '{name}' has neither command nor url configured")
 
         return len(errors) == 0, errors + warnings
 

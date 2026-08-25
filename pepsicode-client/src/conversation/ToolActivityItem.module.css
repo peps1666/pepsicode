@@ -1,0 +1,88 @@
+.activity {
+  border-top: 1px solid var(--dsw-alias-border-l1);
+}
+
+.activity:first-child {
+  border-top: 0;
+}
+
+.activityHeader {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 34px;
+  padding: 6px 12px;
+  box-sizing: border-box;
+  font-size: 12px;
+}
+
+.activityIcon {
+  width: 14px;
+  color: var(--dsw-alias-label-tertiary);
+  text-align: center;
+}
+
+.toolName {
+  flex: 1;
+  color: var(--dsw-alias-label-secondary);
+  font-family: var(--ds-font-family-code);
+  font-weight: 600;
+}
+
+.status {
+  color: var(--dsw-alias-label-tertiary);
+  font-size: 11px;
+}
+
+.failed {
+  color: var(--dsw-alias-state-error-primary);
+}
+
+.detailsBlock {
+  padding: 0 12px 10px 34px;
+}
+
+.detailsLabel {
+  margin-bottom: 4px;
+  color: var(--dsw-alias-label-tertiary);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+}
+
+.detailsContent {
+  max-height: 260px;
+  margin: 0;
+  overflow: auto;
+  padding: 8px;
+  border-radius: 6px;
+  background-color: var(--dsw-alias-markdown-code-block);
+  color: var(--dsw-alias-label-secondary);
+  font-family: var(--ds-font-family-code);
+  font-size: 12px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.progress {
+  display: flex;
+  gap: 8px;
+  padding: 8px 12px;
+  border-top: 1px solid var(--dsw-alias-border-l1);
+  color: var(--dsw-alias-label-tertiary);
+  font-size: 12px;
+  font-style: italic;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.progress:first-child {
+  border-top: 0;
+}
+
+.progressIcon {
+  color: var(--dsw-alias-state-business-primary);
+  font-weight: 700;
+}

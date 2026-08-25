@@ -32,7 +32,15 @@ from pepsicode.config import load_runtime_config
 from pepsicode.context.context_manager import ContextManager
 from pepsicode.context.prompt import build_system_prompt
 from pepsicode.core.agent_loop import run_agent_turn_stream
-from pepsicode.core.session import SessionData, create_new_session, save_session
+from pepsicode.core.session import (
+    SessionData,
+    create_new_session,
+    list_sessions,
+    load_session,
+    normalize_workspace,
+    same_workspace,
+    save_session,
+)
 from pepsicode.hooks import HookContext, HookEvent, create_hook_engine
 from pepsicode.llm.anthropic_adapter import AnthropicModelAdapter
 from pepsicode.llm.cost_tracker import CostTracker
@@ -146,10 +154,25 @@ class ClientSession:
         self._turn_lock = asyncio.Lock()
         self._current_turn_task: asyncio.Task | None = None
 
-    def initialize(self) -> None:
-        """Lazy-initialize heavy objects on first use."""
-        if self.tools is not None:
+    def initialize(self, *, force: bool = False) -> None:
+        """Initialize workspace-bound services, rebuilding them when requested."""
+        if self.tools is not None and not force:
             return
+        if self.tools is not None:
+            try:
+                self.tools.dispose()
+            except Exception as error:  # noqa: BLE001
+                logger.warning("Failed to dispose tools while switching workspace: %s", error)
+
+        self.messages = []
+        self.runtime = None
+        self.model = None
+        self.tools = None
+        self.permissions = None
+        self.hook_engine = None
+        self.context_manager = None
+        self.cost_tracker = None
+        self.trace_manager = None
         try:
             self.runtime = load_runtime_config(self.cwd)
         except Exception as error:  # noqa: BLE001
@@ -332,9 +355,9 @@ class PepsiCodeServer:
             return {"status": "ok", "cwd": session.cwd}
 
         if method == "session/create":
-            cwd = params.get("cwd", str(Path.cwd()))
+            cwd = normalize_workspace(params.get("cwd", str(Path.cwd())))
             session.cwd = cwd
-            session.initialize()
+            session.initialize(force=session.tools is not None)
             session.set_permission_handler(bridge)
             assert session.session_data is not None
             return {
@@ -346,9 +369,8 @@ class PepsiCodeServer:
             }
 
         if method == "session/list":
-            from pepsicode.core.session import list_sessions
-
-            sessions = list_sessions()
+            workspace = params.get("workspace") or session.cwd
+            sessions = list_sessions(workspace=workspace)
             return {
                 "sessions": [
                     {
@@ -364,15 +386,20 @@ class PepsiCodeServer:
             }
 
         if method == "session/resume":
-            from pepsicode.core.session import load_session
-
             session_id = params.get("session_id", "")
             loaded = load_session(session_id)
             if loaded is None:
                 raise ValueError(f"Session not found: {session_id}")
-            session.cwd = loaded.workspace or session.cwd
-            session.initialize()
+            expected_workspace = params.get("workspace")
+            if expected_workspace and not same_workspace(loaded.workspace, expected_workspace):
+                raise ValueError("Session does not belong to the current workspace")
+            loaded_workspace = normalize_workspace(loaded.workspace or session.cwd)
+            session.cwd = loaded_workspace
+            # A resumed conversation owns independent permissions, cost, hook,
+            # model, and tool state even when it shares the same workspace.
+            session.initialize(force=session.tools is not None)
             session.set_permission_handler(bridge)
+            session.session_data = loaded
             session.messages = list(loaded.messages)
             if session.permissions and loaded.permission_mode == PermissionMode.PLAN.value:
                 session.permissions.restore_plan_state(loaded.permission_mode, loaded.plan_file_path)
@@ -380,8 +407,12 @@ class PepsiCodeServer:
             return {
                 "session_id": loaded.session_id,
                 "messages": len(session.messages),
+                "message_count": len(session.messages),
+                "history": protocol.serialize_session_history(session.messages),
                 "workspace": session.cwd,
+                "model": session.runtime.get("model") if session.runtime else "mock",
                 "permission_mode": session.permissions.mode.value if session.permissions else "default",
+                "plan_file": session.permissions.plan_file_path if session.permissions else None,
             }
 
         if method == "session/delete":
@@ -532,17 +563,16 @@ class PepsiCodeServer:
             session._rebuild_system_prompt()
 
             # Token streaming: accumulate and emit deltas
-            token_buffer: list[str] = []
             message_started = False
 
             def on_token(token: Any) -> None:
-                nonlocal message_started, token_buffer
+                nonlocal message_started
+                if token.type != "text":
+                    return
                 if not message_started:
                     message_started = True
                     asyncio.run_coroutine_threadsafe(emit("message/start", {}), loop)
-                if token.type == "text":
-                    token_buffer.append(token.content)
-                    asyncio.run_coroutine_threadsafe(emit("message/delta", {"text": token.content}), loop)
+                asyncio.run_coroutine_threadsafe(emit("message/delta", {"text": token.content}), loop)
 
             def on_tool_start(tool_name: str, tool_input: dict) -> None:
                 asyncio.run_coroutine_threadsafe(
@@ -559,10 +589,30 @@ class PepsiCodeServer:
                 )
 
             def on_assistant_message(content: str) -> None:
-                asyncio.run_coroutine_threadsafe(emit("message/end", {"content": content}), loop)
+                finish_assistant_message(content, is_error=False)
+
+            def on_error_message(content: str) -> None:
+                finish_assistant_message(content, is_error=True)
+
+            def finish_assistant_message(content: str, *, is_error: bool) -> None:
+                nonlocal message_started
+                if not message_started:
+                    message_started = True
+                    asyncio.run_coroutine_threadsafe(emit("message/start", {}), loop)
+                asyncio.run_coroutine_threadsafe(
+                    emit("message/end", {"content": content, "is_error": is_error}), loop
+                )
+                message_started = False
 
             def on_progress_message(content: str) -> None:
-                asyncio.run_coroutine_threadsafe(emit("progress/message", {"content": content}), loop)
+                nonlocal message_started
+                if message_started:
+                    asyncio.run_coroutine_threadsafe(
+                        emit("message/end", {"content": content, "role": "progress"}), loop
+                    )
+                    message_started = False
+                else:
+                    asyncio.run_coroutine_threadsafe(emit("progress/message", {"content": content}), loop)
 
             def on_usage(usage: dict) -> None:
                 asyncio.run_coroutine_threadsafe(emit("cost/update", usage), loop)
@@ -580,6 +630,7 @@ class PepsiCodeServer:
                     on_tool_start=on_tool_start,
                     on_tool_result=on_tool_result,
                     on_assistant_message=on_assistant_message,
+                    on_error_message=on_error_message,
                     on_progress_message=on_progress_message,
                     on_usage=on_usage,
                     hook_engine=session.hook_engine,

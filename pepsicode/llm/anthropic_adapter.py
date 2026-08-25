@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import html
 import json
 import random
+import re
 import time
 import urllib.error
 import urllib.request
@@ -101,7 +103,18 @@ def _extract_error_message(data: Any, status: int) -> str:
     if isinstance(data, dict):
         error = data.get("error")
         if isinstance(error, dict) and isinstance(error.get("message"), str):
-            return error["message"]
+            message = error["message"].strip()
+            if re.search(r"<!doctype\s+html|<html\b", message, flags=re.IGNORECASE):
+                title_match = re.search(r"<title[^>]*>(.*?)</title>", message, flags=re.IGNORECASE | re.DOTALL)
+                title = ""
+                if title_match:
+                    title = html.unescape(re.sub(r"<[^>]+>", "", title_match.group(1)))
+                    title = " ".join(title.split())
+                detail = title or "The provider returned an HTML error page"
+                return f"Model provider request failed (HTTP {status}): {detail}"
+            if len(message) > 1000:
+                message = message[:997].rstrip() + "..."
+            return message
     return f"Model request failed: {status}"
 
 

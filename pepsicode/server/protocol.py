@@ -115,6 +115,51 @@ def make_error(code: int, message: str, data: dict[str, Any] | None = None) -> d
     return err
 
 
+def serialize_session_history(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Convert persisted agent messages into the desktop timeline contract."""
+    history: list[dict[str, Any]] = []
+    for message in messages:
+        role = message.get("role")
+        if role == "system" or role == "assistant_thinking":
+            continue
+
+        if role in {"user", "assistant"}:
+            history.append(
+                {
+                    "role": role,
+                    "content": str(message.get("content", "")),
+                    "is_error": bool(message.get("isError", False)),
+                }
+            )
+            continue
+
+        if role == "assistant_progress":
+            history.append({"role": "progress", "content": str(message.get("content", ""))})
+            continue
+
+        if role == "assistant_tool_call":
+            history.append(
+                {
+                    "role": "tool_call",
+                    "tool_name": str(message.get("toolName", "unknown")),
+                    "tool_input": message.get("input"),
+                }
+            )
+            continue
+
+        if role == "tool_result":
+            history.append(
+                {
+                    "role": "tool_result",
+                    "content": str(message.get("content", "")),
+                    "tool_name": str(message.get("toolName", "unknown")),
+                    "is_error": bool(message.get("isError", False)),
+                }
+            )
+
+    return history
+
+
 # Standard error codes (aligned with JSON-RPC 2.0)
 ERR_PARSE_ERROR = -32700
 ERR_INVALID_REQUEST = -32600

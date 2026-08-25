@@ -6,6 +6,18 @@
       "env": {},
       "enabled": true,
       "readOnlyTools": "*"
+    },
+    "workspace-inspector": {
+      "command": "python",
+      "args": ["examples/mcp/workspace_inspector_server.py"],
+      "env": {},
+      "enabled": true,
+      "readOnlyTools": ["project_info", "list_top_level"]
+    },
+    "openai-developer-docs": {
+      "url": "https://developers.openai.com/mcp",
+      "enabled": true,
+      "readOnlyTools": "*"
     }
   }
 }

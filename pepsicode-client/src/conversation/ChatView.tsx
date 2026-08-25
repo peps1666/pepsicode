@@ -2,12 +2,50 @@ import { useEffect, useRef, useState, useCallback } from "react";
 import { useSessionStore, type ChatMessage } from "../stores/session";
 import MessageItem from "./MessageItem";
 import Composer from "./Composer";
+import ThinkingGroup, { isThinkingMessage } from "./ThinkingGroup";
 import styles from "./ChatView.module.css";
+
+type TimelineBlock =
+  | { kind: "message"; message: ChatMessage }
+  | { kind: "thinking"; messages: ChatMessage[]; endIndex: number };
+
+function buildTimeline(messages: ChatMessage[]): TimelineBlock[] {
+  const blocks: TimelineBlock[] = [];
+  let thinking: ChatMessage[] = [];
+
+  const flushThinking = (endIndex: number) => {
+    if (thinking.length === 0) return;
+    blocks.push({ kind: "thinking", messages: thinking, endIndex });
+    thinking = [];
+  };
+
+  messages.forEach((message, index) => {
+    if (isThinkingMessage(message)) {
+      thinking.push(message);
+      return;
+    }
+    flushThinking(index - 1);
+    blocks.push({ kind: "message", message });
+  });
+  flushThinking(messages.length - 1);
+  return blocks;
+}
 
 export default function ChatView({ onSend }: { onSend: (input: string) => void }) {
   const { messages, isRunning, cwd, model, planMode } = useSessionStore();
   const scrollRef = useRef<HTMLDivElement>(null);
   const [autoScroll, setAutoScroll] = useState(true);
+  const timeline = buildTimeline(messages);
+  let lastUserIndex = -1;
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    if (messages[index].role === "user") {
+      lastUserIndex = index;
+      break;
+    }
+  }
+  const currentTurnHasAnswer = messages.slice(lastUserIndex + 1).some(
+    (message) => message.role === "assistant" && !message.isStreaming && Boolean(message.content)
+  );
 
   useEffect(() => {
     if (autoScroll && scrollRef.current) {
@@ -41,7 +79,15 @@ export default function ChatView({ onSend }: { onSend: (input: string) => void }
           </div>
         ) : (
           <div className={styles.column}>
-            {messages.map((msg) => <MessageItem key={msg.id} message={msg} />)}
+            {timeline.map((block) => block.kind === "message" ? (
+              <MessageItem key={block.message.id} message={block.message} />
+            ) : (
+              <ThinkingGroup
+                key={`thinking-${block.messages[0].id}`}
+                messages={block.messages}
+                autoExpanded={isRunning && !currentTurnHasAnswer && block.endIndex > lastUserIndex}
+              />
+            ))}
           </div>
         )}
       </div>
