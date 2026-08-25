@@ -599,9 +599,7 @@ class PepsiCodeServer:
                 if not message_started:
                     message_started = True
                     asyncio.run_coroutine_threadsafe(emit("message/start", {}), loop)
-                asyncio.run_coroutine_threadsafe(
-                    emit("message/end", {"content": content, "is_error": is_error}), loop
-                )
+                asyncio.run_coroutine_threadsafe(emit("message/end", {"content": content, "is_error": is_error}), loop)
                 message_started = False
 
             def on_progress_message(content: str) -> None:
