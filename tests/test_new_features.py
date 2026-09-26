@@ -559,3 +559,96 @@ def test_save_memory_writes_the_session_manager(tmp_path):
 
     assert result.ok
     assert manager.memories[MemoryScope.PROJECT].entries[0].content == "Keep the file store"
+
+
+def _memory_context(tmp_path):
+    from pepsicode.tooling import ToolContext
+
+    workspace = str(tmp_path / "workspace")
+    (tmp_path / "workspace").mkdir()
+    manager = MemoryManager(workspace)
+    return workspace, manager, ToolContext(cwd=workspace, memory=manager)
+
+
+def test_save_memory_replaces_entry_by_id(tmp_path):
+    from pepsicode.tools.save_memory import save_memory_tool
+
+    workspace, manager, context = _memory_context(tmp_path)
+    created = save_memory_tool.run(
+        {"scope": "project", "category": "decision", "content": "Use Postgres by default", "tags": ["db"], "id": None},
+        context,
+    )
+    assert created.ok
+    entry_id = manager.memories[MemoryScope.PROJECT].entries[0].id
+
+    replaced = save_memory_tool.run(
+        {
+            "scope": "project",
+            "category": "decision",
+            "content": "File store is the default",
+            "tags": ["storage"],
+            "id": entry_id,
+        },
+        context,
+    )
+
+    assert replaced.ok
+    entries = manager.memories[MemoryScope.PROJECT].entries
+    assert len(entries) == 1
+    assert entries[0].content == "File store is the default"
+    assert entries[0].tags == ["storage"]
+    injected = manager.get_relevant_context()
+    assert injected.count("File store is the default") == 1
+    assert "Use Postgres by default" not in injected
+    assert entry_id in injected
+    memory_md = (tmp_path / "workspace" / ".pepsi-code-memory" / "MEMORY.md").read_text(encoding="utf-8")
+    assert entry_id not in memory_md
+
+
+def test_save_memory_unknown_id_does_not_create(tmp_path):
+    from pepsicode.tools.save_memory import save_memory_tool
+
+    _workspace, manager, context = _memory_context(tmp_path)
+    result = save_memory_tool.run(
+        {"scope": "local", "category": "note", "content": "should not appear", "tags": None, "id": "missing-id"},
+        context,
+    )
+
+    assert result.ok is False
+    assert manager.memories[MemoryScope.LOCAL].entries == []
+
+
+def test_forget_memory_removes_entry_from_search_and_prompt(tmp_path):
+    from pepsicode.tools.save_memory import forget_memory_tool, save_memory_tool, search_memory_tool
+
+    _workspace, manager, context = _memory_context(tmp_path)
+    save_memory_tool.run(
+        {"scope": "project", "category": "pitfall", "content": "Old save method crashed", "tags": [], "id": None},
+        context,
+    )
+    entry_id = manager.memories[MemoryScope.PROJECT].entries[0].id
+
+    forgotten = forget_memory_tool.run({"scope": "project", "id": entry_id}, context)
+    found = search_memory_tool.run({"query": "crashed", "scope": "project"}, context)
+
+    assert forgotten.ok
+    assert "No matching memory" in found.output
+    assert entry_id not in manager.get_relevant_context()
+    assert manager.memories[MemoryScope.PROJECT].entries == []
+
+
+def test_search_memory_returns_entry_id(tmp_path):
+    from pepsicode.tools.save_memory import save_memory_tool, search_memory_tool
+
+    _workspace, manager, context = _memory_context(tmp_path)
+    save_memory_tool.run(
+        {"scope": "local", "category": "convention", "content": "Run pytest for tests", "tags": [], "id": None},
+        context,
+    )
+    entry_id = manager.memories[MemoryScope.LOCAL].entries[0].id
+
+    found = search_memory_tool.run({"query": "pytest", "scope": None}, context)
+
+    assert found.ok
+    assert entry_id in found.output
+    assert "Run pytest for tests" in found.output

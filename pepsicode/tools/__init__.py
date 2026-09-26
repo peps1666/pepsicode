@@ -27,7 +27,7 @@ from pepsicode.tools.read_context_artifact import read_context_artifact_tool
 from pepsicode.tools.read_file import read_file_tool
 from pepsicode.tools.run_command import run_command_tool
 from pepsicode.tools.run_with_debug import run_with_debug_tool
-from pepsicode.tools.save_memory import save_memory_tool
+from pepsicode.tools.save_memory import forget_memory_tool, save_memory_tool, search_memory_tool
 from pepsicode.tools.task import create_task_tool
 from pepsicode.tools.test_runner import test_runner_tool
 from pepsicode.tools.todo_write import todo_write_tool
@@ -49,6 +49,7 @@ _READ_ONLY_TOOLS = (
     file_tree_tool,
     diff_viewer_tool,
     governance_audit_tool,
+    search_memory_tool,
 )
 for _tool in _READ_ONLY_TOOLS:
     _tool.capabilities.add(ToolCapability.READ_ONLY)
@@ -88,6 +89,8 @@ def create_default_tool_registry(
             todo_write_tool,
             # Memory (agent-initiated persistent memory writes)
             save_memory_tool,
+            search_memory_tool,
+            forget_memory_tool,
             # Git workflow
             git_tool,
             # Worktree isolation

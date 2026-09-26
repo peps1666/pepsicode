@@ -178,6 +178,9 @@ def _memory_strategy() -> str:
 5. **用户明确表达持久偏好时** — 这是唯一记到 user 层(跨项目)的东西。
    - 例:`[preference] 回答用中文;引用代码带 file:line`
 
+### 改正与删除
+注入的每条记忆以 `- <id> 内容` 开头。事实错了就用这个 id 调用 save_memory 替换,不要在旁边再追加一条相反的记录。这条不该再记住时调用 forget_memory。id 不在当前提示里时,先用 search_memory 找到它。
+
 ### 不记清单(防止记忆膨胀)
 - 当前任务进度 → 用 todo_write,不进记忆
 - 文件内容/函数实现 → 工具能读

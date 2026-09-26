@@ -96,11 +96,21 @@ class MemoryFile:
         self.entries.append(entry)
         self._enforce_limits()
 
-    def update_entry(self, entry_id: str, content: str) -> bool:
-        """Update existing entry."""
+    def update_entry(
+        self,
+        entry_id: str,
+        content: str,
+        category: str | None = None,
+        tags: list[str] | None = None,
+    ) -> bool:
+        """Replace an entry's content, and category or tags when those are given."""
         for entry in self.entries:
             if entry.id == entry_id:
                 entry.content = content
+                if category is not None:
+                    entry.category = category
+                if tags is not None:
+                    entry.tags = tags
                 entry.updated_at = time.time()
                 return True
         return False
@@ -140,8 +150,12 @@ class MemoryFile:
         while self.size_bytes > self.max_size_bytes and self.entries:
             self.entries.pop(0)
 
-    def format_as_markdown(self, include_header: bool = True) -> str:
-        """Format as MEMORY.md content."""
+    def format_as_markdown(self, include_header: bool = True, include_ids: bool = False) -> str:
+        """Format as MEMORY.md content.
+
+        ``include_ids`` prefixes each bullet with the entry id so a model can
+        cite it. The on-disk MEMORY.md leaves this off.
+        """
         lines = []
 
         if include_header:
@@ -167,7 +181,8 @@ class MemoryFile:
             lines.append("")
             for entry in entries:
                 tags_str = f" `{' '.join(entry.tags)}`" if entry.tags else ""
-                lines.append(f"- {entry.content}{tags_str}")
+                id_prefix = f"{entry.id} " if include_ids else ""
+                lines.append(f"- {id_prefix}{entry.content}{tags_str}")
             lines.append("")
 
         return "\n".join(lines)
@@ -295,9 +310,16 @@ class MemoryManager:
         self._save_scope(scope)
         return entry
 
-    def update_entry(self, scope: MemoryScope, entry_id: str, content: str) -> bool:
-        """Update an existing entry."""
-        if self.memories[scope].update_entry(entry_id, content):
+    def update_entry(
+        self,
+        scope: MemoryScope,
+        entry_id: str,
+        content: str,
+        category: str | None = None,
+        tags: list[str] | None = None,
+    ) -> bool:
+        """Update an existing entry. Category and tags change only when passed."""
+        if self.memories[scope].update_entry(entry_id, content, category=category, tags=tags):
             self._save_scope(scope)
             return True
         return False
@@ -351,7 +373,7 @@ class MemoryManager:
                 if not content_key or content_key in seen_content:
                     continue
                 trial = MemoryFile(scope=scope, entries=list(reversed(fitted + [entry])))
-                formatted = trial.format_as_markdown(include_header=True)
+                formatted = trial.format_as_markdown(include_header=True, include_ids=True)
                 if total_tokens + estimate_tokens(formatted) > max_tokens:
                     continue
                 fitted.append(entry)
@@ -364,7 +386,9 @@ class MemoryManager:
             ordered = list(reversed(fitted))
             for entry in ordered:
                 seen_content.add(entry.content.strip())
-            formatted = MemoryFile(scope=scope, entries=ordered).format_as_markdown(include_header=True)
+            formatted = MemoryFile(scope=scope, entries=ordered).format_as_markdown(
+                include_header=True, include_ids=True
+            )
             parts.append(formatted)
             total_tokens += estimate_tokens(formatted)
 

@@ -229,7 +229,7 @@ def try_handle_local_command(user_input: str, tools=None, permissions=None) -> s
             if recent:
                 for entry in recent:
                     tags_str = f" [{', '.join(entry.tags)}]" if entry.tags else ""
-                    lines.append(f"  - {entry.content[:80]}{tags_str}")
+                    lines.append(f"  - {entry.id} {entry.content[:80]}{tags_str}")
             else:
                 lines.append("  No entries yet")
 
