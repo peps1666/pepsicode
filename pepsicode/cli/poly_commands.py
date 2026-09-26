@@ -380,10 +380,10 @@ def create_builtin_commands(
     # /memory - Show memory status
     def memory_handler(args: str, context: dict) -> str:
         try:
-            from pepsicode.context.memory import MemoryManager
+            from pepsicode.context.memory import create_memory_manager
 
             workspace = context.get("workspace", ".")
-            mm = MemoryManager(workspace)
+            mm = create_memory_manager(workspace)
             return mm.format_stats()
         except Exception as e:
             return f"Memory system error: {e}"

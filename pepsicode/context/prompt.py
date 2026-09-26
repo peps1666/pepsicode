@@ -5,6 +5,7 @@ import platform
 import subprocess
 import sys
 from pathlib import Path
+from typing import Any
 
 
 def _maybe_read(path: Path) -> str | None:
@@ -329,3 +330,32 @@ Never treat ordinary edit approval as permission to bypass Plan mode."""
         parts.append(f"Project Memory & Context:\n{memory_context}")
 
     return "\n\n".join(parts)
+
+
+def build_session_prompt(
+    cwd: str,
+    permission_summary: list[str] | None = None,
+    *,
+    skills: list[dict[str, Any]] | None = None,
+    mcp_servers: list[dict[str, Any]] | None = None,
+    memory_manager: Any | None = None,
+    governance: bool = False,
+    plan_mode: bool = False,
+    plan_file_path: str | None = None,
+) -> str:
+    """Build the system prompt used by every session entry point.
+
+    Memory is read from the session's ``MemoryManager`` on each call, so a
+    ``save_memory`` from the previous turn is visible on the next one. CLI,
+    TUI, and the desktop server all go through this function.
+    """
+    extras: dict[str, Any] = {
+        "skills": skills or [],
+        "mcpServers": mcp_servers or [],
+        "governance": governance,
+        "planMode": plan_mode,
+        "planFilePath": plan_file_path,
+    }
+    if memory_manager is not None:
+        extras["memory_context"] = memory_manager.get_relevant_context()
+    return build_system_prompt(cwd, permission_summary, extras)

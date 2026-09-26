@@ -482,3 +482,80 @@ def test_memory_manager_format_stats(tmp_path):
 
     stats = mm.format_stats()
     assert "Memory System Status" in stats
+
+
+def test_add_entry_refreshes_duplicate(tmp_path):
+    workspace = str(tmp_path / "workspace")
+    (tmp_path / "workspace").mkdir()
+    mm = MemoryManager(workspace)
+
+    first = mm.add_entry(MemoryScope.PROJECT, "decision", "Use the file store")
+    second = mm.add_entry(MemoryScope.PROJECT, " decision ", "Use the file store")
+
+    assert second.id == first.id
+    assert len(mm.memories[MemoryScope.PROJECT].entries) == 1
+
+
+def test_relevant_context_skips_lower_priority_duplicates(tmp_path):
+    workspace = str(tmp_path / "workspace")
+    (tmp_path / "workspace").mkdir()
+    mm = MemoryManager(workspace)
+    mm.add_entry(MemoryScope.LOCAL, "convention", "Use snake_case")
+    mm.add_entry(MemoryScope.PROJECT, "convention", "Use snake_case")
+    mm.add_entry(MemoryScope.PROJECT, "convention", "Run pytest")
+
+    context = mm.get_relevant_context()
+
+    assert context.count("Use snake_case") == 1
+    assert "Run pytest" in context
+    assert context.index("Local Memory") < context.index("Project Memory")
+
+
+def test_create_memory_manager_defaults_to_file(tmp_path, monkeypatch):
+    for key in (
+        "PEPSI_MEMORY_BACKEND",
+        "PEPSI_MEMORY_PG_DBNAME",
+        "PEPSI_MEMORY_PG_USER",
+        "PEPSI_MEMORY_PG_PASSWORD",
+        "PEPSI_MEMORY_PG_HOST",
+        "PEPSI_MEMORY_PG_PORT",
+    ):
+        monkeypatch.delenv(key, raising=False)
+
+    from pepsicode.context.memory import create_memory_manager
+    from pepsicode.context.memory_store import FileMemoryStore
+
+    manager = create_memory_manager(str(tmp_path))
+    assert isinstance(manager.store, FileMemoryStore)
+
+
+def test_create_memory_manager_without_password_stays_on_file(tmp_path, monkeypatch):
+    monkeypatch.setenv("PEPSI_MEMORY_BACKEND", "postgres")
+    monkeypatch.delenv("PEPSI_MEMORY_PG_PASSWORD", raising=False)
+
+    from pepsicode.context.memory import create_memory_manager
+    from pepsicode.context.memory_store import FileMemoryStore
+
+    manager = create_memory_manager(str(tmp_path))
+    assert isinstance(manager.store, FileMemoryStore)
+
+
+def test_save_memory_writes_the_session_manager(tmp_path):
+    from pepsicode.tooling import ToolContext
+    from pepsicode.tools.save_memory import save_memory_tool
+
+    workspace = str(tmp_path / "workspace")
+    (tmp_path / "workspace").mkdir()
+    manager = MemoryManager(workspace)
+    result = save_memory_tool.run(
+        {
+            "scope": "project",
+            "category": "decision",
+            "content": "Keep the file store",
+            "tags": [],
+        },
+        ToolContext(cwd=workspace, memory=manager),
+    )
+
+    assert result.ok
+    assert manager.memories[MemoryScope.PROJECT].entries[0].content == "Keep the file store"

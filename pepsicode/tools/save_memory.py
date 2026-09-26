@@ -35,11 +35,13 @@ def _run(input_data: dict, context) -> ToolResult:
     }
     scope_enum = scope_map[input_data["scope"]]
 
-    # Reuse create_memory_manager so the same backend selection (PostgreSQL
-    # preferred, file fallback) applies as in the main session.
-    from pepsicode.context.memory import create_memory_manager
+    # Prefer the session manager so this write is visible in the next prompt.
+    # Fall back to the factory when a caller did not attach one.
+    memory_mgr = context.memory
+    if memory_mgr is None:
+        from pepsicode.context.memory import create_memory_manager
 
-    memory_mgr = create_memory_manager(context.cwd)
+        memory_mgr = create_memory_manager(context.cwd)
 
     entry = memory_mgr.add_entry(
         scope=scope_enum,

@@ -7,15 +7,16 @@ Decouples *where* memory is persisted from *how* it is read/written by the
 - ``PostgresMemoryStore`` - a PostgreSQL-backed store (single ``pepsi_memory``
                             table, one row per entry across all three scopes)
 
-``create_memory_manager`` in ``pepsicode.context.memory`` picks PostgreSQL when it can
-connect and transparently falls back to the file store otherwise, so the rest
-of the codebase never has to know which backend is live.
+``create_memory_manager`` in ``pepsicode.context.memory`` uses the file store
+unless PostgreSQL is explicitly requested, and falls back to the file store
+when the database cannot be reached.
 """
 
 from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 import time
 from pathlib import Path
@@ -30,16 +31,29 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 # PostgreSQL connection parameters
 # ---------------------------------------------------------------------------
-# Kept as module-level constants so they are easy to find and move into the
-# settings.json config system later.  Override via environment variables for
-# flexibility without touching code.
-import os
+# Read at call time so tests and operators can set the environment after
+# import.  There is no default password: a missing password is a failed
+# connection, and the factory then keeps the file store.
 
-PG_DBNAME = os.environ.get("PEPSI_MEMORY_PG_DBNAME", "my_first_db")
-PG_USER = os.environ.get("PEPSI_MEMORY_PG_USER", "postgres")
-PG_PASSWORD = os.environ.get("PEPSI_MEMORY_PG_PASSWORD", "postgresql")
-PG_HOST = os.environ.get("PEPSI_MEMORY_PG_HOST", "localhost")
-PG_PORT = os.environ.get("PEPSI_MEMORY_PG_PORT", "5432")
+
+def _pg_setting(name: str, default: str = "") -> str:
+    return os.environ.get(name, default)
+
+
+def postgres_requested() -> bool:
+    """Whether this process asked to store memory in PostgreSQL."""
+    if os.environ.get("PEPSI_MEMORY_BACKEND", "").strip().lower() == "postgres":
+        return True
+    return any(
+        os.environ.get(name)
+        for name in (
+            "PEPSI_MEMORY_PG_DBNAME",
+            "PEPSI_MEMORY_PG_USER",
+            "PEPSI_MEMORY_PG_PASSWORD",
+            "PEPSI_MEMORY_PG_HOST",
+            "PEPSI_MEMORY_PG_PORT",
+        )
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -195,6 +209,20 @@ class PostgresMemoryStore:
         self._connect()
         self._ensure_table()
 
+    def describe(self) -> str:
+        """Return a log-safe description of the configured database."""
+        return (
+            f"{_pg_setting('PEPSI_MEMORY_PG_DBNAME', 'my_first_db')}@"
+            f"{_pg_setting('PEPSI_MEMORY_PG_HOST', 'localhost')}:"
+            f"{_pg_setting('PEPSI_MEMORY_PG_PORT', '5432')}"
+        )
+
+    def _scope_workspace(self, scope: MemoryScope) -> str:
+        """User memory is global. Project and local memory stay in one workspace."""
+        if scope is MemoryScope.USER:
+            return ""
+        return str(Path(self.workspace).resolve())
+
     # -- connection --------------------------------------------------------
 
     def _connect(self) -> None:
@@ -203,20 +231,25 @@ class PostgresMemoryStore:
         except ImportError as error:
             raise RuntimeError(f"psycopg2 not installed: {error}") from error
 
+        password = _pg_setting("PEPSI_MEMORY_PG_PASSWORD")
+        if not password:
+            raise RuntimeError("PEPSI_MEMORY_PG_PASSWORD is not set")
+
         self._conn = psycopg2.connect(
-            dbname=PG_DBNAME,
-            user=PG_USER,
-            password=PG_PASSWORD,
-            host=PG_HOST,
-            port=PG_PORT,
+            dbname=_pg_setting("PEPSI_MEMORY_PG_DBNAME", "my_first_db"),
+            user=_pg_setting("PEPSI_MEMORY_PG_USER", "postgres"),
+            password=password,
+            host=_pg_setting("PEPSI_MEMORY_PG_HOST", "localhost"),
+            port=_pg_setting("PEPSI_MEMORY_PG_PORT", "5432"),
         )
-        self._conn.autocommit = True
+        self._conn.autocommit = False
 
     def _ensure_table(self) -> None:
         with self._conn.cursor() as cur:
             cur.execute(
                 """
                 CREATE TABLE IF NOT EXISTS pepsi_memory (
+                    workspace   TEXT        NOT NULL DEFAULT '',
                     scope       TEXT        NOT NULL,
                     id          TEXT        NOT NULL,
                     category    TEXT        NOT NULL DEFAULT 'general',
@@ -225,10 +258,25 @@ class PostgresMemoryStore:
                     updated_at  DOUBLE PRECISION NOT NULL DEFAULT 0,
                     tags        JSONB       NOT NULL DEFAULT '[]'::jsonb,
                     usage_count INTEGER     NOT NULL DEFAULT 0,
-                    PRIMARY KEY (scope, id)
+                    PRIMARY KEY (workspace, scope, id)
                 )
                 """
             )
+            cur.execute("ALTER TABLE pepsi_memory ADD COLUMN IF NOT EXISTS workspace TEXT NOT NULL DEFAULT ''")
+            cur.execute(
+                """
+                SELECT a.attname
+                FROM pg_index i
+                JOIN pg_attribute a
+                  ON a.attrelid = i.indrelid AND a.attnum = ANY(i.indkey)
+                WHERE i.indrelid = 'pepsi_memory'::regclass AND i.indisprimary
+                """
+            )
+            primary_columns = {row[0] for row in cur.fetchall()}
+            if "workspace" not in primary_columns:
+                cur.execute("ALTER TABLE pepsi_memory DROP CONSTRAINT IF EXISTS pepsi_memory_pkey")
+                cur.execute("ALTER TABLE pepsi_memory ADD PRIMARY KEY (workspace, scope, id)")
+        self._conn.commit()
 
     # -- load --------------------------------------------------------------
 
@@ -237,13 +285,19 @@ class PostgresMemoryStore:
             with self._conn.cursor() as cur:
                 cur.execute(
                     "SELECT id, category, content, created_at, updated_at, "
-                    "tags, usage_count FROM pepsi_memory WHERE scope = %s "
+                    "tags, usage_count FROM pepsi_memory "
+                    "WHERE scope = %s AND workspace = %s "
                     "ORDER BY created_at",
-                    (scope.value,),
+                    (scope.value, self._scope_workspace(scope)),
                 )
                 rows = cur.fetchall()
+            self._conn.commit()
         except Exception as error:  # noqa: BLE001 - never break reads
             logger.warning("PostgresMemoryStore.load_scope failed: %s", error)
+            try:
+                self._conn.rollback()
+            except Exception:  # noqa: BLE001
+                pass
             return []
 
         entries: list[MemoryEntry] = []
@@ -271,19 +325,23 @@ class PostgresMemoryStore:
     # -- save --------------------------------------------------------------
 
     def save_scope(self, scope: MemoryScope, entries: list[MemoryEntry]) -> None:
+        workspace = self._scope_workspace(scope)
         try:
             with self._conn.cursor() as cur:
-                # Replace this scope's rows atomically.
-                cur.execute("DELETE FROM pepsi_memory WHERE scope = %s", (scope.value,))
+                cur.execute(
+                    "DELETE FROM pepsi_memory WHERE scope = %s AND workspace = %s",
+                    (scope.value, workspace),
+                )
                 for entry in entries:
                     cur.execute(
                         """
                         INSERT INTO pepsi_memory
-                            (scope, id, category, content, created_at,
+                            (workspace, scope, id, category, content, created_at,
                              updated_at, tags, usage_count)
-                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
                         """,
                         (
+                            workspace,
                             scope.value,
                             entry.id,
                             entry.category,
@@ -294,8 +352,13 @@ class PostgresMemoryStore:
                             entry.usage_count,
                         ),
                     )
+            self._conn.commit()
         except Exception as error:  # noqa: BLE001 - never break writes
             logger.warning("PostgresMemoryStore.save_scope failed: %s", error)
+            try:
+                self._conn.rollback()
+            except Exception:  # noqa: BLE001
+                pass
 
     def close(self) -> None:
         if self._conn is not None:

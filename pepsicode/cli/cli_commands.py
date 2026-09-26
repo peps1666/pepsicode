@@ -194,9 +194,9 @@ def try_handle_local_command(user_input: str, tools=None, permissions=None) -> s
         try:
             import os
 
-            from pepsicode.context.memory import MemoryManager, MemoryScope
+            from pepsicode.context.memory import MemoryScope, create_memory_manager
 
-            memory_mgr = MemoryManager(workspace=os.getcwd())
+            memory_mgr = create_memory_manager(os.getcwd())
 
             # get_stats() returns per-scope counts/size/categories; flatten it
             # into the per-scope entry counts this command has always shown.

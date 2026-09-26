@@ -361,6 +361,7 @@ def run_agent_turn(
     on_usage: Callable[[dict], None] | None = None,
     hook_engine: HookEngine | None = None,
     agent_scope: str = "main",
+    memory: Any | None = None,
 ) -> list[ChatMessage]:
     current_messages = list(messages)
     saw_tool_result = False
@@ -695,6 +696,7 @@ def run_agent_turn(
             permissions=permissions,
             hooks=hook_engine,
             agent_scope=agent_scope,
+            memory=memory,
         )
         results = _execute_calls_in_order(
             cast(Sequence[dict[str, Any]], next_step.calls),
@@ -859,6 +861,7 @@ def run_agent_turn_stream(
     on_usage: Callable[[dict], None] | None = None,
     hook_engine: HookEngine | None = None,
     agent_scope: str = "main",
+    memory: Any | None = None,
 ) -> list[ChatMessage]:
     """Run an agent turn with streaming token output.
 
@@ -1113,6 +1116,7 @@ def run_agent_turn_stream(
                 permissions=permissions,
                 hooks=hook_engine,
                 agent_scope=agent_scope,
+                memory=memory,
             )
             results = _execute_calls_in_order(
                 cast(Sequence[dict[str, Any]], parsed_calls),

@@ -11,7 +11,7 @@ from pepsicode.cli.local_tool_shortcuts import parse_local_tool_shortcut
 from pepsicode.cli.manage_cli import maybe_handle_management_command
 from pepsicode.config import load_runtime_config
 from pepsicode.context.history import load_history_entries, save_history_entries
-from pepsicode.context.prompt import build_system_prompt
+from pepsicode.context.prompt import build_session_prompt
 from pepsicode.core.agent_loop import run_agent_turn
 from pepsicode.hooks import HookContext, HookEvent, create_hook_engine
 from pepsicode.llm.anthropic_adapter import AnthropicModelAdapter
@@ -251,9 +251,10 @@ def main() -> None:
             context_mgr.summarizer = summarize
         logger.info("Context manager initialized for model: %s", runtime.get("model", "unknown"))
 
-    # Initialize MemoryManager for cross-session knowledge retention.
-    # The factory prefers PostgreSQL and falls back to the file store, so the
-    # chosen backend is detected automatically without changing call sites.
+    # One memory manager for the whole process.  File storage is the default;
+    # PostgreSQL is used only when PEPSI_MEMORY_BACKEND or PEPSI_MEMORY_PG_*
+    # is set.  The same instance is injected into every system prompt and into
+    # tool calls so save_memory and /memory see the same entries.
     from pepsicode.context.memory import create_memory_manager
 
     memory_mgr = create_memory_manager(cwd)
@@ -287,16 +288,15 @@ def main() -> None:
     messages: list[ChatMessage] = [
         {
             "role": "system",
-            "content": build_system_prompt(
+            "content": build_session_prompt(
                 cwd,
                 permissions.get_summary(),
-                {
-                    "skills": tools.get_skills(),
-                    "mcpServers": tools.get_mcp_servers(),
-                    "memory_context": memory_mgr.get_relevant_context(),  # Inject memory
-                    "planMode": permissions.is_plan_mode,
-                    "planFilePath": permissions.plan_file_path,
-                },
+                skills=tools.get_skills(),
+                mcp_servers=tools.get_mcp_servers(),
+                memory_manager=memory_mgr,
+                governance=bool(runtime.get("governance")) if runtime else False,
+                plan_mode=permissions.is_plan_mode,
+                plan_file_path=permissions.plan_file_path,
             ),
         }
     ]
@@ -379,7 +379,9 @@ def main() -> None:
                     result = tools.execute(
                         shortcut["toolName"],
                         shortcut["input"],
-                        context=ToolContext(cwd=cwd, permissions=permissions, hooks=hook_engine),
+                        context=ToolContext(
+                            cwd=cwd, permissions=permissions, hooks=hook_engine, memory=memory_mgr
+                        ),
                     )
                     _append_transcript(
                         transcript,
@@ -397,16 +399,15 @@ def main() -> None:
                 save_history_entries(history)
                 messages[0] = {
                     "role": "system",
-                    "content": build_system_prompt(
+                    "content": build_session_prompt(
                         cwd,
                         permissions.get_summary(),
-                        {
-                            "skills": tools.get_skills(),
-                            "mcpServers": tools.get_mcp_servers(),
-                            "governance": bool(runtime.get("governance")) if runtime else False,
-                            "planMode": permissions.is_plan_mode,
-                            "planFilePath": permissions.plan_file_path,
-                        },
+                        skills=tools.get_skills(),
+                        mcp_servers=tools.get_mcp_servers(),
+                        memory_manager=memory_mgr,
+                        governance=bool(runtime.get("governance")) if runtime else False,
+                        plan_mode=permissions.is_plan_mode,
+                        plan_file_path=permissions.plan_file_path,
                     ),
                 }
                 permissions.begin_turn()
@@ -419,6 +420,7 @@ def main() -> None:
                     permissions=permissions,
                     context_manager=context_mgr,
                     hook_engine=hook_engine,
+                    memory=memory_mgr,
                 )
                 permissions.end_turn()
 
@@ -450,6 +452,7 @@ def main() -> None:
             cost_tracker=cost_tracker,
             trace_manager=trace_manager,
             hook_engine=hook_engine,
+            memory=memory_mgr,
         )
     except KeyboardInterrupt:
         if os.environ.get("PEPSI_CODE_VERBOSE", "") == "1":

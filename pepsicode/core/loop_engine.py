@@ -22,7 +22,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Protocol
+from typing import Any, Protocol
 
 from pepsicode.core.agent_loop import run_agent_turn
 from pepsicode.core.task_tracker import Task, TaskManager
@@ -174,6 +174,7 @@ def run_loop(
     verifier: Verifier | None = None,
     permissions: PermissionManager | None = None,
     context_manager=None,
+    memory: Any | None = None,
     on_iteration: Callable[[int, VerificationResult], None] | None = None,
     on_verify: Callable[[VerificationResult], None] | None = None,
 ) -> LoopResult:
@@ -212,6 +213,7 @@ def run_loop(
             context_manager=context_manager,
             cost_tracker=cost_tracker,
             cost_limit_usd=cost_limit_usd,
+            memory=memory,
         )
 
         # No verifier configured -> an agent turn is "done" by definition.

@@ -117,6 +117,9 @@ class ToolContext:
     agent_scope: str = "main"
     suppress_hooks: bool = False
     cancellation_event: Any | None = None
+    # Session memory manager, when the caller has one.  save_memory writes
+    # through this instance so the next system prompt sees the new entry.
+    memory: Any | None = None
 
 
 Validator = Callable[[Any], Any]

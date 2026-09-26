@@ -269,7 +269,19 @@ class MemoryManager:
         content: str,
         tags: list[str] | None = None,
     ) -> MemoryEntry:
-        """Add a new memory entry."""
+        """Add a memory entry, or refresh an identical one already stored.
+
+        The same scope, category, and stripped content is one fact. Repeating
+        it updates ``updated_at`` instead of appending another copy.
+        """
+        category_key = category.strip()
+        content_key = content.strip()
+        for existing in self.memories[scope].entries:
+            if existing.category.strip() == category_key and existing.content.strip() == content_key:
+                existing.updated_at = time.time()
+                self._save_scope(scope)
+                return existing
+
         entry_id = f"{scope.value}-{int(time.time())}-{len(self.memories[scope].entries)}"
         entry = MemoryEntry(
             id=entry_id,
@@ -315,38 +327,46 @@ class MemoryManager:
         max_entries: int = 20,
         max_tokens: int = 8000,
     ) -> str:
-        """Get relevant memory context for system prompt injection.
+        """Format memory for the system prompt.
 
-        Returns formatted MEMORY.md content from all scopes,
-        respecting token limits.
+        Scopes are applied in priority order (local, then project, then user).
+        Within a scope the newest entries are kept until the token budget or
+        ``max_entries`` is reached. A lower-priority entry whose content was
+        already included is skipped. This does not write ``usage_count``.
         """
         from pepsicode.context.context_manager import estimate_tokens
 
-        parts = []
+        parts: list[str] = []
         total_tokens = 0
+        seen_content: set[str] = set()
 
-        # Priority order: LOCAL > PROJECT > USER
         for scope in [MemoryScope.LOCAL, MemoryScope.PROJECT, MemoryScope.USER]:
             memory = self.memories[scope]
             if not memory.entries:
                 continue
 
-            formatted = memory.format_as_markdown(include_header=True)
-            tokens = estimate_tokens(formatted)
+            fitted: list[MemoryEntry] = []
+            for entry in reversed(memory.entries):
+                content_key = entry.content.strip()
+                if not content_key or content_key in seen_content:
+                    continue
+                trial = MemoryFile(scope=scope, entries=list(reversed(fitted + [entry])))
+                formatted = trial.format_as_markdown(include_header=True)
+                if total_tokens + estimate_tokens(formatted) > max_tokens:
+                    continue
+                fitted.append(entry)
+                if len(fitted) >= max_entries:
+                    break
 
-            if total_tokens + tokens <= max_tokens:
-                parts.append(formatted)
-                total_tokens += tokens
-            else:
-                # Partial: include only recent entries
-                remaining_tokens = max_tokens - total_tokens
-                partial_entries = memory.entries[-max_entries:]
-                partial_memory = MemoryFile(scope=scope, entries=partial_entries)
-                formatted = partial_memory.format_as_markdown(include_header=True)
+            if not fitted:
+                continue
 
-                if estimate_tokens(formatted) <= remaining_tokens:
-                    parts.append(formatted)
-                break
+            ordered = list(reversed(fitted))
+            for entry in ordered:
+                seen_content.add(entry.content.strip())
+            formatted = MemoryFile(scope=scope, entries=ordered).format_as_markdown(include_header=True)
+            parts.append(formatted)
+            total_tokens += estimate_tokens(formatted)
 
         if not parts:
             return ""
@@ -391,24 +411,22 @@ class MemoryManager:
 
 
 def create_memory_manager(workspace: str) -> MemoryManager:
-    """Create a MemoryManager backed by PostgreSQL when available.
+    """Create a MemoryManager for ``workspace``.
 
-    Tries ``PostgresMemoryStore`` first.  If psycopg2 is missing or the
-    database is unreachable, silently falls back to ``FileMemoryStore`` so the
-    agent always has working memory - just stored locally instead of in the
-    database.
+    The file store is the default. PostgreSQL is used only when
+    ``PEPSI_MEMORY_BACKEND=postgres`` or any ``PEPSI_MEMORY_PG_*`` variable is
+    set. A missing password, missing driver, or unreachable database falls
+    back to the file store.
     """
-    from pepsicode.context.memory_store import (
-        PG_DBNAME,
-        PG_HOST,
-        PG_PORT,
-        FileMemoryStore,
-        PostgresMemoryStore,
-    )
+    from pepsicode.context.memory_store import FileMemoryStore, PostgresMemoryStore, postgres_requested
+
+    if not postgres_requested():
+        logger.info("Memory backend: file")
+        return MemoryManager(workspace=workspace, store=FileMemoryStore(workspace))
 
     try:
         store = PostgresMemoryStore(workspace)
-        logger.info("Memory backend: PostgreSQL (%s@%s:%s)", PG_DBNAME, PG_HOST, PG_PORT)
+        logger.info("Memory backend: PostgreSQL (%s)", store.describe())
         return MemoryManager(workspace=workspace, store=store)
     except Exception as error:  # noqa: BLE001 - fallback is the whole point
         logger.info("Memory backend: file (PostgreSQL unavailable: %s)", error)

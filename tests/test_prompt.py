@@ -1,6 +1,7 @@
 from pathlib import Path
 
-from pepsicode.context.prompt import build_system_prompt
+from pepsicode.context.memory import MemoryManager, MemoryScope
+from pepsicode.context.prompt import build_session_prompt, build_system_prompt
 
 
 def test_build_system_prompt_includes_skills_and_mcp(tmp_path: Path) -> None:
@@ -69,3 +70,13 @@ def test_build_system_prompt_does_not_invent_skills(tmp_path: Path) -> None:
 
     for absent in ("brainstorming", "writing-plans", "verification-before-completion"):
         assert absent not in prompt
+
+
+def test_build_session_prompt_includes_memory(tmp_path: Path) -> None:
+    manager = MemoryManager(str(tmp_path))
+    manager.add_entry(MemoryScope.PROJECT, "convention", "Use snake_case")
+
+    prompt = build_session_prompt(str(tmp_path), [], memory_manager=manager)
+
+    assert "Use snake_case" in prompt
+    assert "Project Memory & Context" in prompt

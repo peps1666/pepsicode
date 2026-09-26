@@ -7,7 +7,8 @@ import subprocess
 import threading
 import urllib.error
 import urllib.request
-from dataclasses import asdict, dataclass
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from queue import Empty, Queue
 from typing import Any, Protocol, runtime_checkable
@@ -61,6 +62,10 @@ MAX_TOOL_NAME_LENGTH = 64
 DEFAULT_INIT_TIMEOUT = 30.0
 DEFAULT_LIST_TIMEOUT = 30.0
 DEFAULT_CALL_TIMEOUT = 120.0
+
+# Cap on tools/resources/prompts list pages.  A server that never clears
+# nextCursor must not loop forever.
+_MAX_LIST_PAGES = 50
 
 
 @dataclass(slots=True, frozen=True)
@@ -144,6 +149,9 @@ class McpServerSummary:
     # Registered (wrapped) tool names, so callers can reference the real
     # names instead of guessing them from the server name.
     toolNames: list[str] | None = None
+    # True when the server config declares every tool read-only, which skips
+    # the approval gate.  Shown in /mcp so that choice is visible.
+    readOnly: bool = False
 
 
 def _sanitize_tool_segment(value: str) -> str:
@@ -192,11 +200,13 @@ def _wrapped_tool_name(server_name: str, tool_name: str, taken: set[str]) -> str
 
 def _validate_mcp_command(command: str) -> None:
     """Validate that an MCP command is safe to execute."""
-    from pathlib import Path
+    raw_parts = command.replace("\\", "/").split("/")
+    if ".." in raw_parts:
+        raise RuntimeError("Invalid MCP command: contains path traversal characters")
 
     normalized = Path(command).resolve().as_posix()
 
-    if ".." in normalized or "~" in normalized:
+    if "~" in command or "~" in normalized:
         raise RuntimeError("Invalid MCP command: contains path traversal characters")
 
     base_command = Path(command).name.lower()
@@ -205,7 +215,9 @@ def _validate_mcp_command(command: str) -> None:
         base_command = base_command[:-4]
 
     if Path(command).is_absolute():
-        # Check whether the command lives in a common system directory
+        # Check whether the command lives in a common system directory.
+        # Compare posix paths: Path.resolve().as_posix() uses forward slashes
+        # even on Windows, so the allowlist has to as well.
         home_posix = str(Path.home().as_posix())
         allowed_system_dirs = [
             "/usr/bin",
@@ -228,9 +240,9 @@ def _validate_mcp_command(command: str) -> None:
         if os.name == "nt":
             allowed_system_dirs.extend(
                 [
-                    "C:\\Program Files",
-                    "C:\\Program Files (x86)",
-                    "C:\\Windows\\System32",
+                    "C:/Program Files",
+                    "C:/Program Files (x86)",
+                    "C:/Windows/System32",
                 ]
             )
 
@@ -293,6 +305,27 @@ def _is_declared_read_only(declaration: Any, tool_name: str) -> bool:
 
 def _normalize_input_schema(schema: dict[str, Any] | None) -> dict[str, Any]:
     return schema if isinstance(schema, dict) else {"type": "object", "additionalProperties": True}
+
+
+def _list_paged(request: Any, method: str, key: str, timeout: float) -> list[dict[str, Any]]:
+    """Follow ``nextCursor`` until the list is complete or the page cap is hit."""
+    items: list[dict[str, Any]] = []
+    cursor: str | None = None
+    for _ in range(_MAX_LIST_PAGES):
+        params: dict[str, Any] = {}
+        if cursor:
+            params["cursor"] = cursor
+        result = request(method, params, timeout)
+        if not isinstance(result, dict):
+            break
+        batch = result.get(key) or []
+        if isinstance(batch, list):
+            items.extend(item for item in batch if isinstance(item, dict))
+        next_cursor = result.get("nextCursor")
+        if not isinstance(next_cursor, str) or not next_cursor:
+            break
+        cursor = next_cursor
+    return items
 
 
 def _format_content_block(block: Any) -> str:
@@ -430,7 +463,7 @@ class StdioMcpClient:
             process_cwd = (process_cwd / str(self.config["cwd"])).resolve()
         env = os.environ.copy()
         for key, value in dict(self.config.get("env", {}) or {}).items():
-            env[str(key)] = str(value)
+            env[str(key)] = _interpolate_env(str(value))
 
         args = list(self.config.get("args", []) or [])
         popen_kwargs: dict = {}
@@ -520,58 +553,22 @@ class StdioMcpClient:
                 except UnicodeDecodeError:
                     continue
 
-                stripped = line.strip()
-                if not stripped:
+                if not line.strip():
                     continue
 
-                # Auto-detect protocol if not determined yet
-                if self.protocol is None:
-                    if line.lower().startswith("content-length:"):
-                        self.protocol = "content-length"
-                    else:
-                        self.protocol = "newline-json"
-
-                if self.protocol == "newline-json":
+                # Inbound framing is decided per message.  Outbound framing
+                # stays on ``self.protocol`` and is not changed by what the
+                # server sends back.
+                if line.lower().startswith("content-length:"):
+                    if not self._read_content_length_message(line):
+                        return
+                else:
                     try:
-                        self._handle_message(json.loads(stripped))
+                        self._handle_message(json.loads(line.strip()))
                     except json.JSONDecodeError:
                         continue
-                else:
-                    # Content-length protocol
-                    # The current 'line' is the first header line
-                    header_lines = [line.rstrip("\r\n")]
-                    while True:
-                        next_line_bytes = self.process.stdout.readline()
-                        if not next_line_bytes:
-                            return
-                        try:
-                            next_line = next_line_bytes.decode("utf-8")
-                        except UnicodeDecodeError:
-                            return
-                        h_stripped = next_line.rstrip("\r\n")
-                        if h_stripped == "":
-                            break
-                        header_lines.append(h_stripped)
-
-                    content_length = 0
-                    for header in header_lines:
-                        if header.lower().startswith("content-length:"):
-                            try:
-                                content_length = int(header.split(":", 1)[1].strip())
-                            except ValueError:
-                                pass
-                            break
-
-                    if content_length > 0:
-                        body_bytes = self.process.stdout.read(content_length)
-                        if len(body_bytes) < content_length:
-                            return
-                        try:
-                            self._handle_message(json.loads(body_bytes.decode("utf-8")))
-                        except (json.JSONDecodeError, UnicodeDecodeError):
-                            pass
         finally:
-            # Bug 2: Notify pending requests when process exits
+            # Notify pending requests when the process exits.
             if self.process:
                 exit_code = self.process.poll()
                 error_msg = {"error": {"code": -1, "message": f"MCP server process exited (code={exit_code})"}}
@@ -579,6 +576,54 @@ class StdioMcpClient:
                     for req_id, q in list(self._pending.items()):
                         q.put(error_msg)
                     self._pending.clear()
+
+    def _read_content_length_message(self, first_header: str) -> bool:
+        """Read one Content-Length framed message.  Return False at EOF."""
+        assert self.process is not None and self.process.stdout is not None
+        header_lines = [first_header.rstrip("\r\n")]
+        while True:
+            next_line_bytes = self.process.stdout.readline()
+            if not next_line_bytes:
+                return False
+            try:
+                next_line = next_line_bytes.decode("utf-8")
+            except UnicodeDecodeError:
+                return False
+            if next_line.rstrip("\r\n") == "":
+                break
+            header_lines.append(next_line.rstrip("\r\n"))
+
+        content_length = 0
+        for header in header_lines:
+            if header.lower().startswith("content-length:"):
+                try:
+                    content_length = int(header.split(":", 1)[1].strip())
+                except ValueError:
+                    pass
+                break
+
+        if content_length <= 0:
+            return True
+        body_bytes = self.process.stdout.read(content_length)
+        if len(body_bytes) < content_length:
+            return False
+        try:
+            self._handle_message(json.loads(body_bytes.decode("utf-8")))
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            pass
+        return True
+
+    def _process_alive(self) -> bool:
+        return self.process is not None and self.process.poll() is None
+
+    def _restart(self) -> ToolResult | None:
+        """Close a dead server and initialize it again.  None means it is up."""
+        self.close()
+        try:
+            self.start()
+        except Exception as error:  # noqa: BLE001 - caller returns this to the model
+            return ToolResult(ok=False, output=str(error))
+        return None
 
     def _handle_message(self, message: dict[str, Any]) -> None:
         message_id = message.get("id")
@@ -634,12 +679,20 @@ class StdioMcpClient:
         return message.get("result")
 
     def list_tools(self) -> list[dict[str, Any]]:
-        result = self.request("tools/list", {}, timeout_seconds=self.timeouts.list)
-        return list(result.get("tools", []) if isinstance(result, dict) else [])
+        return _list_paged(
+            lambda method, params, timeout: self.request(method, params, timeout_seconds=timeout),
+            "tools/list",
+            "tools",
+            self.timeouts.list,
+        )
 
     def list_resources(self) -> list[dict[str, Any]]:
-        result = self.request("resources/list", {}, timeout_seconds=self.timeouts.list)
-        return list(result.get("resources", []) if isinstance(result, dict) else [])
+        return _list_paged(
+            lambda method, params, timeout: self.request(method, params, timeout_seconds=timeout),
+            "resources/list",
+            "resources",
+            self.timeouts.list,
+        )
 
     def read_resource(self, uri: str) -> ToolResult:
         return _format_read_resource_result(
@@ -647,8 +700,12 @@ class StdioMcpClient:
         )
 
     def list_prompts(self) -> list[dict[str, Any]]:
-        result = self.request("prompts/list", {}, timeout_seconds=self.timeouts.list)
-        return list(result.get("prompts", []) if isinstance(result, dict) else [])
+        return _list_paged(
+            lambda method, params, timeout: self.request(method, params, timeout_seconds=timeout),
+            "prompts/list",
+            "prompts",
+            self.timeouts.list,
+        )
 
     def get_prompt(self, name: str, args: dict[str, str] | None = None) -> ToolResult:
         return _format_prompt_result(
@@ -656,13 +713,36 @@ class StdioMcpClient:
         )
 
     def call_tool(self, name: str, input_data: Any) -> ToolResult:
-        return _format_tool_call_result(
-            self.request(
-                "tools/call",
-                {"name": name, "arguments": input_data or {}},
-                timeout_seconds=self.timeouts.call,
+        def _invoke() -> ToolResult:
+            return _format_tool_call_result(
+                self.request(
+                    "tools/call",
+                    {"name": name, "arguments": input_data or {}},
+                    timeout_seconds=self.timeouts.call,
+                )
             )
-        )
+
+        if not self._process_alive():
+            failure = self._restart()
+            if failure is not None:
+                return failure
+            try:
+                return _invoke()
+            except Exception as error:  # noqa: BLE001 - restart already used its one attempt
+                return ToolResult(ok=False, output=str(error))
+
+        try:
+            return _invoke()
+        except Exception as error:  # noqa: BLE001
+            if self._process_alive():
+                raise
+            failure = self._restart()
+            if failure is not None:
+                return failure
+            try:
+                return _invoke()
+            except Exception as retry_error:  # noqa: BLE001
+                return ToolResult(ok=False, output=str(retry_error))
 
     def close(self) -> None:
         with self._lock:
@@ -829,33 +909,42 @@ class HttpMcpClient:
             raise RuntimeError(f"MCP {self.server_name}: connection failed: {e.reason}") from e
 
         # 解析响应（可能是 SSE 格式或纯 JSON）
-        result = self._parse_response(raw)
+        result = self._parse_response(raw, message_id=message_id)
         if result.get("error"):
             details = result["error"].get("data")
             suffix = f"\n{json.dumps(details, indent=2, ensure_ascii=False)}" if details else ""
             raise RuntimeError(f"MCP {self.server_name}: {result['error']['message']}{suffix}")
         return result.get("result")
 
-    def _parse_response(self, raw: str) -> dict[str, Any]:
-        """解析 HTTP 响应体，支持纯 JSON 和 SSE 格式。"""
-        # 尝试直接解析为 JSON
+    def _parse_response(self, raw: str, *, message_id: int | None = None) -> dict[str, Any]:
+        """解析 HTTP 响应体。SSE 里取 id 与本次请求匹配的 JSON-RPC 消息。"""
         try:
-            return json.loads(raw)
+            parsed = json.loads(raw)
+            if isinstance(parsed, dict):
+                return parsed
         except json.JSONDecodeError:
             pass
-        # 尝试从 SSE 格式提取最后一条 JSON 消息
-        last_json = None
+        messages: list[dict[str, Any]] = []
         for line in raw.split("\n"):
             line = line.strip()
-            if line.startswith("data:"):
-                data_str = line[len("data:") :].strip()
-                if data_str:
-                    try:
-                        last_json = json.loads(data_str)
-                    except json.JSONDecodeError:
-                        continue
-        if last_json is not None:
-            return last_json
+            if not line.startswith("data:"):
+                continue
+            data_str = line[len("data:") :].strip()
+            if not data_str or data_str == "[DONE]":
+                continue
+            try:
+                payload = json.loads(data_str)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(payload, dict):
+                messages.append(payload)
+        if message_id is not None:
+            for item in messages:
+                if item.get("id") == message_id:
+                    return item
+            raise RuntimeError(f"MCP {self.server_name}: response did not include JSON-RPC id {message_id}")
+        if messages:
+            return messages[-1]
         raise RuntimeError(f"MCP {self.server_name}: failed to parse response:\n{raw[:500]}")
 
     def _notify(self, method: str, params: Any) -> None:
@@ -869,12 +958,20 @@ class HttpMcpClient:
             pass  # 通知不需要处理响应
 
     def list_tools(self) -> list[dict[str, Any]]:
-        result = self._request("tools/list", {}, timeout_seconds=self.timeouts.list)
-        return list(result.get("tools", []) if isinstance(result, dict) else [])
+        return _list_paged(
+            lambda method, params, timeout: self._request(method, params, timeout_seconds=timeout),
+            "tools/list",
+            "tools",
+            self.timeouts.list,
+        )
 
     def list_resources(self) -> list[dict[str, Any]]:
-        result = self._request("resources/list", {}, timeout_seconds=self.timeouts.list)
-        return list(result.get("resources", []) if isinstance(result, dict) else [])
+        return _list_paged(
+            lambda method, params, timeout: self._request(method, params, timeout_seconds=timeout),
+            "resources/list",
+            "resources",
+            self.timeouts.list,
+        )
 
     def read_resource(self, uri: str) -> ToolResult:
         return _format_read_resource_result(
@@ -882,8 +979,12 @@ class HttpMcpClient:
         )
 
     def list_prompts(self) -> list[dict[str, Any]]:
-        result = self._request("prompts/list", {}, timeout_seconds=self.timeouts.list)
-        return list(result.get("prompts", []) if isinstance(result, dict) else [])
+        return _list_paged(
+            lambda method, params, timeout: self._request(method, params, timeout_seconds=timeout),
+            "prompts/list",
+            "prompts",
+            self.timeouts.list,
+        )
 
     def get_prompt(self, name: str, args: dict[str, str] | None = None) -> ToolResult:
         return _format_prompt_result(
@@ -917,6 +1018,53 @@ class HttpMcpClient:
 # =============================================================================
 
 
+@dataclass(slots=True)
+class _McpProbe:
+    name: str
+    config: dict[str, Any]
+    status: str
+    client: McpClient | None = None
+    descriptors: list[dict[str, Any]] = field(default_factory=list)
+    resources: list[dict[str, Any]] = field(default_factory=list)
+    prompts: list[dict[str, Any]] = field(default_factory=list)
+    error: str | None = None
+
+
+def _probe_mcp_server(server_name: str, config: dict[str, Any], cwd: str) -> _McpProbe:
+    """Connect to one server.  Failures stay on this server."""
+    if config.get("enabled") is False:
+        return _McpProbe(name=server_name, config=config, status="disabled")
+    client: McpClient | None = None
+    try:
+        client = _create_client(server_name, config, cwd)
+        client.start()
+        descriptors = client.list_tools()
+        try:
+            resources = client.list_resources()
+        except Exception:  # noqa: BLE001
+            resources = []
+        try:
+            prompts = client.list_prompts()
+        except Exception:  # noqa: BLE001
+            prompts = []
+        return _McpProbe(
+            name=server_name,
+            config=config,
+            status="connected",
+            client=client,
+            descriptors=descriptors,
+            resources=resources,
+            prompts=prompts,
+        )
+    except Exception as error:  # noqa: BLE001
+        if client is not None:
+            try:
+                client.close()
+            except Exception:  # noqa: BLE001
+                pass
+        return _McpProbe(name=server_name, config=config, status="error", error=str(error))
+
+
 def create_mcp_backed_tools(*, cwd: str, mcp_servers: dict[str, dict[str, Any]]) -> dict[str, Any]:
     """Connect to all configured MCP servers and wrap their capabilities as local tools.
 
@@ -933,9 +1081,19 @@ def create_mcp_backed_tools(*, cwd: str, mcp_servers: dict[str, dict[str, Any]])
     taken_names: set[str] = set()
 
     try:
-        # --- Phase 1: connect to each server, discover tools/resources/prompts ---
-        for server_name, config in mcp_servers.items():
-            if config.get("enabled") is False:
+        # Connect in parallel.  Tool names are registered afterwards, in config
+        # order, so aliases stay deterministic.
+        server_items = list(mcp_servers.items())
+        probes: list[_McpProbe] = []
+        if server_items:
+            with ThreadPoolExecutor(max_workers=min(8, len(server_items))) as pool:
+                futures = [pool.submit(_probe_mcp_server, name, config, cwd) for name, config in server_items]
+                probes = [future.result() for future in futures]
+
+        for probe in probes:
+            server_name = probe.name
+            config = probe.config
+            if probe.status == "disabled":
                 servers.append(
                     asdict(
                         McpServerSummary(
@@ -948,87 +1106,7 @@ def create_mcp_backed_tools(*, cwd: str, mcp_servers: dict[str, dict[str, Any]])
                     )
                 )
                 continue
-
-            client = _create_client(server_name, config, cwd)
-            try:
-                client.start()
-                descriptors = client.list_tools()
-                try:
-                    resources = client.list_resources()
-                except Exception:  # noqa: BLE001
-                    resources = []
-                try:
-                    prompts = client.list_prompts()
-                except Exception:  # noqa: BLE001
-                    prompts = []
-                clients.append(client)
-
-                # Index resources and prompts for later meta-tool creation
-                for resource in resources:
-                    resource_index[f"{server_name}:{resource.get('uri')}"] = {
-                        "serverName": server_name,
-                        "resource": resource,
-                    }
-                for prompt in prompts:
-                    prompt_index[f"{server_name}:{prompt.get('name')}"] = {"serverName": server_name, "prompt": prompt}
-
-                # Tools the server config declares side-effect free.  These get
-                # the READ_ONLY capability, which lets them run in Plan mode and
-                # skips the approval prompt.  Everything else is gated.
-                read_only_declaration = config.get("readOnlyTools")
-
-                # Wrap each MCP tool as a local ToolDefinition
-                # Naming convention: mcp__<server>__<tool>
-                server_tool_names: list[str] = []
-                for descriptor in descriptors:
-                    descriptor_name = str(descriptor.get("name", "tool"))
-                    wrapped_name = _wrapped_tool_name(server_name, descriptor_name, taken_names)
-                    input_schema = _normalize_input_schema(descriptor.get("inputSchema"))
-
-                    def _validator(value: Any) -> Any:
-                        return value
-
-                    def _run(input_data: Any, _context, *, _client=client, _descriptor_name=descriptor_name):
-                        return _client.call_tool(_descriptor_name, input_data)
-
-                    # Always state the true server/tool identity: the wrapped
-                    # name may have been truncated to fit the API name limit.
-                    description = f"[MCP {server_name}/{descriptor_name}] " + str(
-                        descriptor.get("description") or f"Call MCP tool {descriptor_name} from server {server_name}."
-                    )
-
-                    capabilities: set[ToolCapability] = set()
-                    if _is_declared_read_only(read_only_declaration, descriptor_name):
-                        capabilities.add(ToolCapability.READ_ONLY)
-
-                    tools.append(
-                        ToolDefinition(
-                            name=wrapped_name,
-                            description=description,
-                            input_schema=input_schema,
-                            validator=_validator,
-                            run=_run,
-                            capabilities=capabilities,
-                        )
-                    )
-                    server_tool_names.append(wrapped_name)
-
-                servers.append(
-                    asdict(
-                        McpServerSummary(
-                            name=server_name,
-                            command=config.get("command", ""),
-                            status="connected",
-                            toolCount=len(descriptors),
-                            protocol=client.protocol,
-                            resourceCount=len(resources),
-                            promptCount=len(prompts),
-                            toolNames=server_tool_names,
-                        )
-                    )
-                )
-            except Exception as error:  # noqa: BLE001
-                client.close()
+            if probe.status != "connected" or probe.client is None:
                 servers.append(
                     asdict(
                         McpServerSummary(
@@ -1036,11 +1114,84 @@ def create_mcp_backed_tools(*, cwd: str, mcp_servers: dict[str, dict[str, Any]])
                             command=config.get("command", ""),
                             status="error",
                             toolCount=0,
-                            error=str(error),
+                            error=probe.error,
                             protocol=config.get("protocol"),
                         )
                     )
                 )
+                continue
+
+            client = probe.client
+            descriptors = probe.descriptors
+            resources = probe.resources
+            prompts = probe.prompts
+            clients.append(client)
+
+            # Index resources and prompts for later meta-tool creation
+            for resource in resources:
+                resource_index[f"{server_name}:{resource.get('uri')}"] = {
+                    "serverName": server_name,
+                    "resource": resource,
+                }
+            for prompt in prompts:
+                prompt_index[f"{server_name}:{prompt.get('name')}"] = {"serverName": server_name, "prompt": prompt}
+
+            # Tools the server config declares side-effect free.  These get
+            # the READ_ONLY capability, which lets them run in Plan mode and
+            # skips the approval prompt.  Everything else is gated.
+            read_only_declaration = config.get("readOnlyTools")
+
+            # Wrap each MCP tool as a local ToolDefinition
+            # Naming convention: mcp__<server>__<tool>
+            server_tool_names: list[str] = []
+            for descriptor in descriptors:
+                descriptor_name = str(descriptor.get("name", "tool"))
+                wrapped_name = _wrapped_tool_name(server_name, descriptor_name, taken_names)
+                input_schema = _normalize_input_schema(descriptor.get("inputSchema"))
+
+                def _validator(value: Any) -> Any:
+                    return value
+
+                def _run(input_data: Any, _context, *, _client=client, _descriptor_name=descriptor_name):
+                    return _client.call_tool(_descriptor_name, input_data)
+
+                # Always state the true server/tool identity: the wrapped
+                # name may have been truncated to fit the API name limit.
+                description = f"[MCP {server_name}/{descriptor_name}] " + str(
+                    descriptor.get("description") or f"Call MCP tool {descriptor_name} from server {server_name}."
+                )
+
+                capabilities: set[ToolCapability] = set()
+                if _is_declared_read_only(read_only_declaration, descriptor_name):
+                    capabilities.add(ToolCapability.READ_ONLY)
+
+                tools.append(
+                    ToolDefinition(
+                        name=wrapped_name,
+                        description=description,
+                        input_schema=input_schema,
+                        validator=_validator,
+                        run=_run,
+                        capabilities=capabilities,
+                    )
+                )
+                server_tool_names.append(wrapped_name)
+
+            servers.append(
+                asdict(
+                    McpServerSummary(
+                        name=server_name,
+                        command=config.get("command", ""),
+                        status="connected",
+                        toolCount=len(descriptors),
+                        protocol=client.protocol,
+                        resourceCount=len(resources),
+                        promptCount=len(prompts),
+                        toolNames=server_tool_names,
+                        readOnly=read_only_declaration == "*",
+                    )
+                )
+            )
     except Exception:
         for client in clients:
             try:

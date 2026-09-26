@@ -30,7 +30,7 @@ from pepsicode.agents.trace import TraceManager
 from pepsicode.approval import ApprovalBackend, ApprovalDecision, ApprovalOutcome, ApprovalRequest
 from pepsicode.config import load_runtime_config
 from pepsicode.context.context_manager import ContextManager
-from pepsicode.context.prompt import build_system_prompt
+from pepsicode.context.prompt import build_session_prompt
 from pepsicode.core.agent_loop import run_agent_turn_stream
 from pepsicode.core.session import (
     SessionData,
@@ -151,6 +151,7 @@ class ClientSession:
         self.context_manager: ContextManager | None = None
         self.cost_tracker: CostTracker | None = None
         self.trace_manager: TraceManager | None = None
+        self.memory_manager: Any = None
         self._turn_lock = asyncio.Lock()
         self._current_turn_task: asyncio.Task | None = None
 
@@ -173,6 +174,7 @@ class ClientSession:
         self.context_manager = None
         self.cost_tracker = None
         self.trace_manager = None
+        self.memory_manager = None
         try:
             self.runtime = load_runtime_config(self.cwd)
         except Exception as error:  # noqa: BLE001
@@ -207,20 +209,22 @@ class ClientSession:
                 self.context_manager.summarizer = summarize
 
         self.session_data = create_new_session(self.cwd)
+        from pepsicode.context.memory import create_memory_manager
+
+        self.memory_manager = create_memory_manager(self.cwd)
         self._rebuild_system_prompt()
 
     def _rebuild_system_prompt(self) -> None:
         if not self.permissions or not self.tools:
             return
-        prompt = build_system_prompt(
+        prompt = build_session_prompt(
             self.cwd,
             self.permissions.get_summary(),
-            {
-                "skills": self.tools.get_skills(),
-                "mcpServers": self.tools.get_mcp_servers(),
-                "planMode": self.permissions.is_plan_mode,
-                "planFilePath": self.permissions.plan_file_path,
-            },
+            skills=self.tools.get_skills(),
+            mcp_servers=self.tools.get_mcp_servers(),
+            memory_manager=self.memory_manager,
+            plan_mode=self.permissions.is_plan_mode,
+            plan_file_path=self.permissions.plan_file_path,
         )
         # Replace existing system prompt or prepend
         if self.messages and self.messages[0].get("role") == "system":
@@ -632,6 +636,7 @@ class PepsiCodeServer:
                     on_progress_message=on_progress_message,
                     on_usage=on_usage,
                     hook_engine=session.hook_engine,
+                    memory=session.memory_manager,
                 )
 
             executor = ThreadPoolExecutor(max_workers=1)

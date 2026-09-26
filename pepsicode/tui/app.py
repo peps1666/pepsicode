@@ -30,7 +30,7 @@ from pepsicode.cli.cli_commands import (
 )
 from pepsicode.cli.local_tool_shortcuts import parse_local_tool_shortcut
 from pepsicode.context.history import load_history_entries, save_history_entries
-from pepsicode.context.prompt import build_system_prompt
+from pepsicode.context.prompt import build_session_prompt
 from pepsicode.core.agent_loop import run_agent_turn_stream
 from pepsicode.core.background_tasks import list_background_tasks
 from pepsicode.core.session import (
@@ -191,6 +191,7 @@ class TtyAppArgs:
     # Trace manager for sub-agent observability (token/tool-call tree).
     trace_manager: Any | None = None
     hook_engine: HookEngine | None = None
+    memory: Any | None = None
 
 
 def _emit_tty_hook(
@@ -1398,7 +1399,9 @@ def _execute_tool_shortcut(
         result = args.tools.execute(
             tool_name,
             tool_input,
-            context=ToolContext(cwd=args.cwd, permissions=args.permissions, hooks=args.hook_engine),
+            context=ToolContext(
+                cwd=args.cwd, permissions=args.permissions, hooks=args.hook_engine, memory=args.memory
+            ),
         )
         state.recent_tools.append(
             {
@@ -1553,16 +1556,15 @@ def _handle_input(
     # Refresh system prompt
     args.messages[0] = {
         "role": "system",
-        "content": build_system_prompt(
+        "content": build_session_prompt(
             args.cwd,
             args.permissions.get_summary(),
-            {
-                "skills": args.tools.get_skills(),
-                "mcpServers": args.tools.get_mcp_servers(),
-                "governance": bool(args.runtime.get("governance")) if args.runtime else False,
-                "planMode": args.permissions.is_plan_mode,
-                "planFilePath": args.permissions.plan_file_path,
-            },
+            skills=args.tools.get_skills(),
+            mcp_servers=args.tools.get_mcp_servers(),
+            memory_manager=args.memory,
+            governance=bool(args.runtime.get("governance")) if args.runtime else False,
+            plan_mode=args.permissions.is_plan_mode,
+            plan_file_path=args.permissions.plan_file_path,
         ),
     }
     args.messages.append({"role": "user", "content": input_text})
@@ -1798,6 +1800,7 @@ def _handle_input(
                 on_progress_message=on_progress_message,
                 context_manager=args.context_manager,
                 hook_engine=args.hook_engine,
+                memory=args.memory,
             )
             if args.context_manager:
                 args.context_manager.messages = [dict(message) for message in next_messages]
@@ -1843,6 +1846,13 @@ def _handle_input(
 # ---------------------------------------------------------------------------
 
 
+def _session_memory(cwd: str) -> Any:
+    """Return the process memory manager, creating the file-backed default."""
+    from pepsicode.context.memory import create_memory_manager
+
+    return create_memory_manager(cwd)
+
+
 def run_tty_app(
     *,
     runtime: dict | None,
@@ -1856,6 +1866,7 @@ def run_tty_app(
     cost_tracker: CostTracker | None = None,
     trace_manager: Any | None = None,
     hook_engine: HookEngine | None = None,
+    memory: Any | None = None,
 ) -> list[ChatMessage]:
     """Event-driven full-screen TTY application, ported from the TypeScript version.
 
@@ -1885,6 +1896,7 @@ def run_tty_app(
         cost_tracker=cost_tracker,
         trace_manager=trace_manager,
         hook_engine=hook_engine,
+        memory=memory if memory is not None else _session_memory(cwd),
     )
 
     # Session initialization

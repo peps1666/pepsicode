@@ -12,10 +12,12 @@ import pytest
 
 from pepsicode.mcp import (
     MAX_TOOL_NAME_LENGTH,
+    _MAX_LIST_PAGES,
     HttpMcpClient,
     StdioMcpClient,
     _create_client,
     _interpolate_env,
+    _validate_mcp_command,
     _wrapped_tool_name,
     create_mcp_backed_tools,
 )
@@ -476,3 +478,191 @@ def test_create_mcp_backed_tools_with_http_server(tmp_path: Path) -> None:
         mcp["dispose"]()
     finally:
         server.close()
+
+
+def test_connected_server_summary_marks_full_read_only(tmp_path: Path) -> None:
+    server_script = Path(__file__).parent / "fixtures" / "fake_mcp_server.py"
+    mcp = create_mcp_backed_tools(
+        cwd=str(tmp_path),
+        mcp_servers={
+            "fake": {"command": "python", "args": [str(server_script)], "readOnlyTools": "*"},
+        },
+    )
+    try:
+        assert mcp["servers"][0]["status"] == "connected"
+        assert mcp["servers"][0]["readOnly"] is True
+    finally:
+        mcp["dispose"]()
+
+
+def test_list_tools_follows_next_cursor() -> None:
+    client = StdioMcpClient("fake", {"command": "python"}, ".")
+    pages = [
+        {"tools": [{"name": "a"}], "nextCursor": "p2"},
+        {"tools": [{"name": "b"}]},
+    ]
+
+    def request(method: str, params: dict, timeout_seconds: float | None = None) -> dict:
+        assert method == "tools/list"
+        if params.get("cursor"):
+            assert params["cursor"] == "p2"
+        return pages.pop(0)
+
+    client.request = request  # type: ignore[method-assign]
+    assert [item["name"] for item in client.list_tools()] == ["a", "b"]
+
+
+def test_list_tools_stops_at_page_cap() -> None:
+    client = StdioMcpClient("fake", {"command": "python"}, ".")
+    calls = {"n": 0}
+
+    def request(method: str, params: dict, timeout_seconds: float | None = None) -> dict:
+        calls["n"] += 1
+        return {"tools": [{"name": str(calls["n"])}], "nextCursor": "again"}
+
+    client.request = request  # type: ignore[method-assign]
+    tools = client.list_tools()
+    assert calls["n"] == _MAX_LIST_PAGES
+    assert len(tools) == _MAX_LIST_PAGES
+
+
+def test_stdio_inbound_mixes_content_length_and_newline_json() -> None:
+    from queue import Queue
+
+    client = StdioMcpClient("fake", {"command": "python", "protocol": "newline-json"}, ".")
+    body = json.dumps({"jsonrpc": "2.0", "id": 1, "result": {"ok": True}}).encode()
+    framed = f"Content-Length: {len(body)}\r\n\r\n".encode() + body
+    line = json.dumps({"jsonrpc": "2.0", "id": 2, "result": {"ok": True}}).encode() + b"\n"
+
+    class _Stream:
+        def __init__(self, data: bytes) -> None:
+            self._data = data
+            self._pos = 0
+
+        def readline(self) -> bytes:
+            if self._pos >= len(self._data):
+                return b""
+            end = self._data.find(b"\n", self._pos)
+            if end < 0:
+                chunk = self._data[self._pos :]
+                self._pos = len(self._data)
+                return chunk
+            chunk = self._data[self._pos : end + 1]
+            self._pos = end + 1
+            return chunk
+
+        def read(self, count: int) -> bytes:
+            chunk = self._data[self._pos : self._pos + count]
+            self._pos += len(chunk)
+            return chunk
+
+    class _Process:
+        def __init__(self, stdout: _Stream) -> None:
+            self.stdout = stdout
+
+        def poll(self) -> int:
+            return 0
+
+    client.protocol = "newline-json"
+    client.process = _Process(_Stream(framed + line))  # type: ignore[assignment]
+    first: Queue = Queue()
+    second: Queue = Queue()
+    client._pending[1] = first
+    client._pending[2] = second
+
+    client._consume_stdout()
+
+    assert first.get_nowait()["result"]["ok"] is True
+    assert second.get_nowait()["result"]["ok"] is True
+    assert client.protocol == "newline-json"
+
+
+def test_call_tool_restarts_a_dead_process_once() -> None:
+    client = StdioMcpClient("fake", {"command": "python"}, ".")
+    state = {"alive": False, "starts": 0, "calls": 0}
+
+    class _Process:
+        def poll(self) -> int | None:
+            return None if state["alive"] else 1
+
+    client.process = _Process()  # type: ignore[assignment]
+
+    def close() -> None:
+        client.process = None
+
+    def start() -> None:
+        state["starts"] += 1
+        state["alive"] = True
+        client.process = _Process()  # type: ignore[assignment]
+
+    def request(method: str, params: dict, timeout_seconds: float | None = None) -> dict:
+        state["calls"] += 1
+        assert state["alive"]
+        return {"content": [{"type": "text", "text": "recovered"}]}
+
+    client.close = close  # type: ignore[method-assign]
+    client.start = start  # type: ignore[method-assign]
+    client.request = request  # type: ignore[method-assign]
+
+    result = client.call_tool("echo", {})
+
+    assert result.ok is True
+    assert result.output == "recovered"
+    assert state["starts"] == 1
+    assert state["calls"] == 1
+
+
+def test_call_tool_returns_error_when_the_restarted_process_dies() -> None:
+    client = StdioMcpClient("fake", {"command": "python"}, ".")
+    state = {"alive": True, "starts": 0, "calls": 0}
+
+    class _Process:
+        def poll(self) -> int | None:
+            return None if state["alive"] else 1
+
+    client.process = _Process()  # type: ignore[assignment]
+
+    def close() -> None:
+        client.process = None
+
+    def start() -> None:
+        state["starts"] += 1
+        state["alive"] = True
+        client.process = _Process()  # type: ignore[assignment]
+
+    def request(method: str, params: dict, timeout_seconds: float | None = None) -> dict:
+        state["calls"] += 1
+        state["alive"] = False
+        raise RuntimeError(f"died-{state['calls']}")
+
+    client.close = close  # type: ignore[method-assign]
+    client.start = start  # type: ignore[method-assign]
+    client.request = request  # type: ignore[method-assign]
+
+    result = client.call_tool("echo", {})
+
+    assert result.ok is False
+    assert "died-2" in result.output
+    assert state["starts"] == 1
+
+
+def test_http_parse_response_matches_request_id() -> None:
+    client = HttpMcpClient("docs", {"url": "https://example.test/mcp"}, ".")
+    raw = (
+        'data: {"jsonrpc":"2.0","id":1,"result":{"ignored":true}}\n\n'
+        'data: {"jsonrpc":"2.0","id":7,"result":{"tools":[{"name":"search"}]}}\n'
+    )
+
+    parsed = client._parse_response(raw, message_id=7)
+
+    assert parsed["result"]["tools"][0]["name"] == "search"
+
+
+def test_validate_mcp_command_rejects_parent_directory_segments() -> None:
+    with pytest.raises(RuntimeError, match="path traversal"):
+        _validate_mcp_command(r"C:\Program Files\..\Windows\System32\notepad.exe")
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows path allowlist")
+def test_validate_mcp_command_allows_program_files_absolute_path() -> None:
+    _validate_mcp_command(r"C:\Program Files\MyAgent\workspace-inspector.exe")
