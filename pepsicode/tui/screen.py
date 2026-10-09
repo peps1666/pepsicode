@@ -3,6 +3,36 @@ from __future__ import annotations
 import os
 import sys
 
+from .chrome import truncate_plain
+
+
+class FrameRenderer:
+    """Update changed physical rows without newline-driven scrolling."""
+
+    def __init__(self) -> None:
+        self._lines: list[str] = []
+        self._size: tuple[int, int] | None = None
+
+    def draw(self, lines: list[str], cols: int, rows: int) -> None:
+        cols, rows = max(2, cols), max(1, rows)
+        # Leave the final column unused to avoid autowrap on the bottom row.
+        frame = [truncate_plain(line, cols - 1) for line in lines[:rows]]
+        frame += [""] * (rows - len(frame))
+        previous = self._lines if self._size == (cols, rows) else []
+        updates: list[str] = []
+        for index, line in enumerate(frame):
+            if index < len(previous) and previous[index] == line:
+                continue
+            # Paint before erasing the old suffix. Absolute row positioning
+            # works even when raw mode disables LF -> CRLF conversion.
+            updates.append(f"\x1b[{index + 1};1H\x1b[0m{line}\x1b[0m\x1b[K")
+        if updates:
+            sys.stdout.write("".join(updates))
+            sys.stdout.flush()
+        self._lines = frame
+        self._size = (cols, rows)
+
+
 ENTER_ALT_SCREEN = "\u001b[?1049h"
 EXIT_ALT_SCREEN = "\u001b[?1049l"
 ERASE_SCREEN_AND_HOME = "\u001b[2J\u001b[H"

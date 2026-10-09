@@ -2,22 +2,18 @@ from __future__ import annotations
 
 import re
 
-RESET = "\u001b[0m"
-DIM = "\u001b[2m"
-CYAN = "\u001b[36m"
-YELLOW = "\u001b[33m"
-MAGENTA = "\u001b[35m"
-BOLD = "\u001b[1m"
-ITALIC = "\u001b[3m"
-UNDERLINE = "\u001b[4m"
-# Extended colors for markdown rendering
-BRIGHT_CYAN = "\u001b[96m"
-BRIGHT_YELLOW = "\u001b[93m"
-SUBTLE = "\u001b[38;5;243m"
-CODE_BG = "\u001b[48;5;236m"  # dark bg for code
-CODE_FG = "\u001b[38;5;215m"  # warm amber for inline code
-QUOTE_BAR = "\u001b[38;5;243m"  # subtle gray for blockquote
-HEADING_ACCENT = "\u001b[38;5;39m"  # amber for headings (Claude-style)
+from .theme import (
+    BOLD,
+    CODE_BG,
+    CODE_FG,
+    DIM,
+    HEADING_ACCENT,
+    ITALIC,
+    QUOTE_BAR,
+    RESET,
+    SUBTLE,
+    UNDERLINE,
+)
 
 # Pre-compiled regexes for markdown parsing
 _RE_TABLE_SEP = re.compile(r"^\|(?:\s*:?-+:?\s*\|)+$")
@@ -63,7 +59,7 @@ def render_markdownish(input_text: str) -> str:
             continue
 
         if in_code_block:
-            result_lines.append(f"{CODE_BG}{DIM} {line} {RESET}")
+            result_lines.append(f"{CODE_BG} {line} {RESET}")
             continue
 
         trimmed_line = line.strip()

@@ -55,6 +55,7 @@ from pepsicode.tui.chrome import (
     ACCENT,
     BOLD,
     BRIGHT_GREEN,
+    BRIGHT_RED,
     BRIGHT_WHITE,
     DIM,
     HIGHLIGHT_BG,
@@ -86,6 +87,7 @@ from pepsicode.tui.input_parser import (
 )
 from pepsicode.tui.markdown import render_markdownish
 from pepsicode.tui.screen import (
+    FrameRenderer,
     enter_alternate_screen,
     exit_alternate_screen,
     hide_cursor,
@@ -288,6 +290,7 @@ class ScreenState:
     # Streaming state: the entry currently being streamed into (if any).
     streaming_entry_id: int | None = None
     streaming_text: str = ""
+    frame_renderer: FrameRenderer = field(default_factory=FrameRenderer, repr=False)
 
 
 # ---------------------------------------------------------------------------
@@ -780,7 +783,8 @@ def _render_footer_cached(
 
 def _render_prompt_panel(state: ScreenState) -> str:
     commands = _get_visible_commands(state.input)
-    prompt_body = render_input_prompt(state.input, state.cursor_offset)
+    cols, _ = _get_terminal_size()
+    prompt_body = render_input_prompt(state.input, state.cursor_offset, width=max(5, cols - 4))
     if commands:
         prompt_body += "\n" + render_slash_menu(
             commands,
@@ -810,7 +814,7 @@ def _center_line(text: str, cols: int) -> str:
 
 
 def _paint_line(text: str, cols: int, bg: str) -> str:
-    painted = text.replace(RESET, RESET + bg)
+    painted = text.replace(RESET, RESET + bg) if RESET else text
     return bg + _pad_visible(truncate_plain(painted, cols), cols) + RESET
 
 
@@ -845,71 +849,62 @@ def _render_home_input_card(state: ScreenState, model: str, provider: str, cols:
 
 
 def _render_home_brand(cols: int, rows: int) -> list[str]:
-    """Render the startup wordmark and a small terminal-safe mascot."""
-    wordmark = [
-        f"{ACCENT}{BOLD}pepsicode{RESET}",
+    """Render a compact wordmark and terminal-safe mascot."""
+    lines = [
+        f"{ACCENT}{BOLD}pepsicode{RESET}  {SUBTLE}{DISPLAY_VERSION}{RESET}",
         f"{SUBTLE}terminal coding agent{RESET}",
     ]
-    if rows < 18 or cols < 58:
-        return wordmark + [
+    if rows >= 22 and cols >= 58:
+        lines += [
             "",
-            "  /\\_/\\",
-            " ( o.o )  ready",
-            "  > ^ <",
+            f"{ACCENT} /\\_/\\{RESET}",
+            f"{ACCENT}( o.o ){RESET}  {SUBTLE}Ready to explore your code.{RESET}",
+            f"{ACCENT} > ^ <{RESET}",
         ]
-
-    mascot = [
-        "                __",
-        "           /\\_/\\\\`.__",
-        "          (  o.o  )  )   sniffing the codebase",
-        "          /  ___  \\_/",
-        "         /__/   \\__\\  tests ready",
-    ]
-    return wordmark + [""] + mascot
+    return lines
 
 
 def _render_home_screen(args: TtyAppArgs, state: ScreenState, cols: int, rows: int) -> None:
-    """Claude-style: centered name, amber prompt, example prompts, minimal footer."""
+    """Welcome block with input and workspace always visible."""
     runtime = args.runtime or {}
     model = runtime.get("model", "unknown")
     visible_commands = _get_visible_commands(state.input)
-
-    offset = max(0, min(state.cursor_offset, len(state.input)))
-    before = state.input[:offset]
-    current = state.input[offset] if offset < len(state.input) else " "
-    after = state.input[offset + 1 :]
-    placeholder = f"{DIM}Ask anything...{RESET}" if not state.input else ""
-    prompt_line = f"  {ACCENT}>{RESET} {before}{HIGHLIGHT_BG}{BOLD}{current}{RESET}{after}{placeholder}"
-
-    # Example prompts (like Claude Code)
-    examples = [
-        f"  {SUBTLE}{ICON_DOT}{RESET} Analyze this codebase",
-        f"  {SUBTLE}{ICON_DOT}{RESET} Refactor the auth module",
-        f"  {SUBTLE}{ICON_DOT}{RESET} Write tests for the API",
-        f"  {SUBTLE}{ICON_DOT}{RESET} Explain the architecture",
+    block_width = max(4, min(72, cols - 4))
+    margin = " " * max(0, (cols - block_width) // 2)
+    content = _render_home_brand(cols, rows)
+    if rows < 10:
+        content = content[:1]
+    if rows >= 18 and not state.input.startswith("/"):
+        content += [
+            "",
+            f"{BOLD}Start with an idea{RESET}",
+            f"{SUBTLE}{ICON_DOT} Explore the codebase   {ICON_DOT} Fix a bug   {ICON_DOT} Add tests{RESET}",
+        ]
+    content += [
+        *([""] if rows >= 10 else []),
+        f"{SUBTLE}{'─' * block_width}{RESET}",
+        render_input_prompt(state.input, state.cursor_offset, width=block_width),
     ]
-
-    cwd_text = truncate_plain(str(Path(args.cwd)), max(10, cols - 30))
-    footer = f"  {SUBTLE}{cwd_text}{RESET}  {DIM}{model}{RESET}"
-
-    content = [""] + _render_home_brand(cols, rows) + [""] + examples + [""] + [prompt_line]
     if visible_commands and state.input:
-        content.append("")
+        # Reserve space for selection, input, and the workspace footer.
+        content = content[-3:]
         content.extend(
             render_slash_menu(
                 visible_commands,
                 min(state.selected_slash_index, len(visible_commands) - 1),
+                max_rows=max(1, min(10, rows - 7)),
+                width=block_width,
             ).splitlines()
         )
-    content += ["", footer]
-    top_pad = max(1, min(8, (rows - len(content) - 1) // 2))
-    frame = [""] * top_pad + content
-    while len(frame) < rows - 1:
+    content += [f"{SUBTLE}{'─' * block_width}{RESET}", f"{SUBTLE}{model}{RESET}"]
+    top_pad = max(0, min(5, (rows - len(content) - 2) // 2))
+    frame = [""] * top_pad + [margin + line for line in content]
+    while len(frame) < rows - 2:
         frame.append("")
-    frame.append(f"  {SUBTLE}/help for commands{RESET}  {SUBTLE}{ICON_DOT}{RESET}  {SUBTLE}ctrl+c to exit{RESET}")
-
-    sys.stdout.write("[H" + "[K\n".join(frame[:rows]) + "[K[J")
-    sys.stdout.flush()
+    frame.append(f"  {SUBTLE}{Path(args.cwd)}{RESET}")
+    frame.append(f"  {SUBTLE}/help for commands · ctrl+c to exit{RESET}")
+    frame = _truncate_frame_lines(frame, cols, rows)
+    state.frame_renderer.draw(frame, cols, rows)
 
 
 def _render_resume_picker_lines(
@@ -949,12 +944,7 @@ def _render_resume_picker_lines(
 
 def _render_stream_input(state: ScreenState, model: str, cols: int, visible_commands: list | None = None) -> list[str]:
     """Claude-style: clean amber > prompt line with slash hints."""
-    offset = max(0, min(state.cursor_offset, len(state.input)))
-    before = state.input[:offset]
-    current = state.input[offset] if offset < len(state.input) else " "
-    after = state.input[offset + 1 :]
-    placeholder = f"{DIM}Ask anything...{RESET}" if not state.input else ""
-    prompt = f"  {ACCENT}>{RESET} {before}{HIGHLIGHT_BG}{BOLD}{current}{RESET}{after}{placeholder}"
+    prompt = " " + render_input_prompt(state.input, state.cursor_offset, width=max(5, cols - 2))
 
     lines = [prompt]
 
@@ -993,20 +983,23 @@ def _render_stream_transcript(
         if entry.kind == "user":
             rendered.append(f"  {ACCENT}{ICON_ARROW}{RESET} {BOLD}You{RESET}")
             for line in body_lines:
-                rendered.append(f"     {wrap_text(line, cols - 7)}")
+                rendered.extend(f"     {part}" for part in wrap_text(line, max(2, cols - 7)).split("\n"))
             rendered.append("")
             continue
 
         if entry.kind == "assistant":
+            rendered.append(f"  {ACCENT}{ICON_DOT}{RESET} {BOLD}pepsicode{RESET}")
             for line in render_markdownish(entry.body).splitlines() or [""]:
-                rendered.append(f"  {wrap_text(line, cols - 4)}")
+                rendered.extend(f"  {part}" for part in wrap_text(line, max(2, cols - 4)).split("\n"))
             rendered.append("")
             continue
 
         if entry.kind == "progress":
             for index, line in enumerate(body_lines):
                 prefix = f"{ACCENT}{ICON_DOT}{RESET} " if index == 0 else "  "
-                rendered.append(f"  {prefix}{SUBTLE}{wrap_text(line, cols - 5)}{RESET}")
+                for part_index, part in enumerate(wrap_text(line, max(2, cols - 5)).split("\n")):
+                    marker = prefix if part_index == 0 else "  "
+                    rendered.append(f"  {marker}{SUBTLE}{part}{RESET}")
             rendered.append("")
             continue
 
@@ -1018,7 +1011,7 @@ def _render_stream_transcript(
             elif status == "running":
                 status_color = YELLOW
             else:
-                status_color = "[91m"
+                status_color = BRIGHT_RED
             rendered.append(f"  {SUBTLE}{ICON_DIVIDER}{RESET} {BOLD}{name}{RESET} {status_color}{status}{RESET}")
             if entry.collapsed and entry.collapsedSummary:
                 rendered.append(f"     {SUBTLE}{truncate_plain(entry.collapsedSummary, cols - 7)}{RESET}")
@@ -1027,7 +1020,9 @@ def _render_stream_transcript(
                 body_output_lines = body.splitlines()
                 max_visible = 30
                 for i, line in enumerate(body_output_lines[:max_visible]):
-                    rendered.append(f"     {SUBTLE}{wrap_text(line, cols - 7)}{RESET}")
+                    rendered.extend(
+                        f"     {SUBTLE}{part}{RESET}" for part in wrap_text(line, max(2, cols - 7)).split("\n")
+                    )
                 if len(body_output_lines) > max_visible:
                     rendered.append(f"     {SUBTLE}... {len(body_output_lines) - max_visible} more lines ...{RESET}")
             rendered.append("")
@@ -1049,8 +1044,8 @@ def _render_stream_transcript(
 def _render_stream_screen(args: TtyAppArgs, state: ScreenState) -> None:
     """Claude-style: clean stream layout with proper scroll tracking."""
     cols, rows = _get_terminal_size()
-    cols = max(40, cols)
-    rows = max(10, rows)
+    cols = max(8, cols)
+    rows = max(8, rows)
     if state.resume_picker_sessions is not None:
         frame = _render_resume_picker_lines(
             state.resume_picker_sessions,
@@ -1059,8 +1054,7 @@ def _render_stream_screen(args: TtyAppArgs, state: ScreenState) -> None:
             rows - 1,
         )
         footer = f"  {SUBTLE}{Path(args.cwd).name or args.cwd}{RESET}  {SUBTLE}{len(state.resume_picker_sessions)} saved sessions{RESET}"
-        sys.stdout.write("[H" + "[K\n".join(frame + [footer]) + "[K[J")
-        sys.stdout.flush()
+        state.frame_renderer.draw(frame + [footer], cols, rows)
         return
 
     if not state.transcript:
@@ -1077,14 +1071,16 @@ def _render_stream_screen(args: TtyAppArgs, state: ScreenState) -> None:
         menu = render_slash_menu(
             visible_commands,
             min(state.selected_slash_index, len(visible_commands) - 1),
+            max_rows=max(1, min(10, rows - len(input_lines) - 5)),
+            width=max(2, cols - 1),
         )
         input_lines.append("")
         input_lines.extend(menu.splitlines())
 
     msg_count = len(state.transcript)
-    sep = f"  {SUBTLE}{ICON_DIVIDER * min(50, cols - 4)}{RESET}"
+    sep = f"  {SUBTLE}{'─' * max(1, cols - 4)}{RESET}"
 
-    reserved = len(input_lines) + 3
+    reserved = len(input_lines) + 2
     transcript_height = max(1, rows - reserved)
     transcript_snapshot = list(state.transcript)
     transcript_lines, total = _render_stream_transcript(
@@ -1094,6 +1090,8 @@ def _render_stream_screen(args: TtyAppArgs, state: ScreenState) -> None:
         cols,
     )
     state.transcript_total_lines = total
+    # Anchor the composer while new output streams in.
+    transcript_lines += [""] * max(0, transcript_height - len(transcript_lines))
 
     cwd_name = Path(args.cwd).name or args.cwd
     mode_label = f"  {YELLOW}PLAN{RESET}" if args.permissions.is_plan_mode else ""
@@ -1104,8 +1102,7 @@ def _render_stream_screen(args: TtyAppArgs, state: ScreenState) -> None:
     frame = _truncate_frame_lines(transcript_lines, cols, transcript_height) + [sep] + input_lines + [footer]
     frame = _truncate_frame_lines(frame, cols, rows)
 
-    sys.stdout.write("[H" + "[K\n".join(frame) + "[K[J")
-    sys.stdout.flush()
+    state.frame_renderer.draw(frame, cols, rows)
 
 
 def _render_screen(args: TtyAppArgs, state: ScreenState) -> None:
@@ -1120,9 +1117,7 @@ def _render_screen(args: TtyAppArgs, state: ScreenState) -> None:
 
     # Build the entire frame into a buffer, then write once
     buf: list[str] = []
-    # Full display clear -- 2J clears the entire display instead of just erasing
-    # below the cursor (plain J), which is more reliable on Windows alt-screen.
-    buf.append("\u001b[H")
+    cols, rows = _get_terminal_size()
 
     # Header
     buf.append(_render_header_panel(args, state))
@@ -1151,8 +1146,7 @@ def _render_screen(args: TtyAppArgs, state: ScreenState) -> None:
         )
         buf.append("\n\n")
         buf.append(_render_footer_cached(state.status, True, has_skills, background_tasks))
-        sys.stdout.write("".join(buf) + "[J")
-        sys.stdout.flush()
+        state.frame_renderer.draw("".join(buf).splitlines(), cols, rows)
         return
 
     # Transcript -- snapshot the list to avoid IndexError from concurrent
@@ -1185,8 +1179,7 @@ def _render_screen(args: TtyAppArgs, state: ScreenState) -> None:
     if contextual_help:
         buf.append(f"\n{SUBTLE}{contextual_help}{RESET}")
 
-    sys.stdout.write("".join(buf) + "[J")
-    sys.stdout.flush()
+    state.frame_renderer.draw("".join(buf).splitlines(), cols, rows)
 
 
 # ---------------------------------------------------------------------------
@@ -1399,9 +1392,7 @@ def _execute_tool_shortcut(
         result = args.tools.execute(
             tool_name,
             tool_input,
-            context=ToolContext(
-                cwd=args.cwd, permissions=args.permissions, hooks=args.hook_engine, memory=args.memory
-            ),
+            context=ToolContext(cwd=args.cwd, permissions=args.permissions, hooks=args.hook_engine, memory=args.memory),
         )
         state.recent_tools.append(
             {
@@ -2004,8 +1995,8 @@ def run_tty_app(
     original_permission_prompt = permissions.prompt
     permissions.prompt = _permission_prompt_handler
 
-    # Throttled renderer: coalesces rapid rerender() calls to reduce flickering
-    throttled = _ThrottledRenderer(lambda: _render_screen(args, state), min_interval=0.016)
+    # Coalesce streaming updates to at most 30 fps.
+    throttled = _ThrottledRenderer(lambda: _render_screen(args, state))
 
     def rerender() -> None:
         throttled.request()
@@ -2052,9 +2043,14 @@ def run_tty_app(
 
     try:
         _render_screen(args, state)
+        last_terminal_size = _get_terminal_size()
 
         with _RawModeContext():
             while not should_exit:
+                terminal_size = _get_terminal_size()
+                if terminal_size != last_terminal_size:
+                    last_terminal_size = terminal_size
+                    rerender()
                 # Autosave check (throttled)
                 _autosave_counter += 1
                 if state.autosave and _autosave_counter >= _AUTOSAVE_CHECK_INTERVAL:
