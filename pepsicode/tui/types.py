@@ -3,11 +3,13 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal
 
+TranscriptKind = Literal["user", "assistant", "progress", "thinking", "tool"]
+
 
 @dataclass(slots=True)
 class TranscriptEntry:
     id: int
-    kind: Literal["user", "assistant", "progress", "tool"]
+    kind: TranscriptKind
     body: str
     toolName: str | None = None
     status: Literal["running", "success", "error"] | None = None
@@ -25,7 +27,7 @@ _POOL_MAX_SIZE = 100
 
 def _create_transcript_entry(
     id: int,
-    kind: Literal["user", "assistant", "progress", "tool"],
+    kind: TranscriptKind,
     body: str,
     toolName: str | None = None,
     status: Literal["running", "success", "error"] | None = None,

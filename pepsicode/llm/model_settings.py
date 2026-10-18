@@ -137,7 +137,8 @@ def reasoning_request_fields(runtime: dict[str, Any], model: str) -> dict[str, A
             **({"output_config": {"effort": effort}} if mode == "budget_effort" else {}),
         }
     return {
-        "thinking": {"type": "adaptive" if mode == "adaptive" else "enabled"},
+        # Newer adaptive models omit thinking text unless asked; summaries make it viewable.
+        "thinking": {"type": "adaptive", "display": "summarized"} if mode == "adaptive" else {"type": "enabled"},
         "output_config": {"effort": effort},
         "max_tokens": runtime.get("maxOutputTokens") or min(32768, capabilities.get("maxOutputTokens", 32768)),
     }

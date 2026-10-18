@@ -8,6 +8,7 @@ from pepsicode.llm.anthropic_adapter import (
     _parse_sse_event,
     _process_sse_event,
 )
+from pepsicode.tooling import ToolResult
 from pepsicode.types import ChatMessage, StreamToken
 
 
@@ -383,6 +384,85 @@ def test_run_agent_turn_stream_emits_structured_error():
     assert errors == ["Model API error (RuntimeError): provider unavailable"]
     assert assistants == []
     assert result[-1]["isError"] is True
+
+
+def _sse(event_type, **data):
+    return {"event": event_type, "data": {"type": event_type, **data}}
+
+
+def test_thinking_deltas_stream_and_reassemble_the_signed_block():
+    state: dict = {}
+    events = [
+        _sse("content_block_start", index=0, content_block={"type": "thinking", "thinking": "", "signature": ""}),
+        _sse("content_block_delta", index=0, delta={"type": "thinking_delta", "thinking": "Check the "}),
+        _sse("content_block_delta", index=0, delta={"type": "thinking_delta", "thinking": "test output."}),
+        _sse("content_block_delta", index=0, delta={"type": "signature_delta", "signature": "sig=="}),
+        _sse("content_block_stop", index=0),
+        _sse("content_block_start", index=1, content_block={"type": "redacted_thinking", "data": "opaque"}),
+        _sse("content_block_stop", index=1),
+        _sse("content_block_start", index=2, content_block={"type": "text", "text": ""}),
+        _sse("content_block_stop", index=2),
+    ]
+    tokens = [token for event in events for token in _process_sse_event(event, thinking_state=state)]
+    assert "".join(t.content for t in tokens if t.type == "thinking") == "Check the test output."
+    assert [t.thinking_block for t in tokens if t.thinking_block] == [
+        {"type": "thinking", "thinking": "Check the test output.", "signature": "sig=="},
+        {"type": "redacted_thinking", "data": "opaque"},
+    ]
+    assert state == {}
+
+
+class _ToolTurnModel:
+    """First reply thinks then calls a tool; the second answers."""
+
+    def __init__(self):
+        self.requests: list[list] = []
+
+    def next_stream(self, messages):
+        self.requests.append(list(messages))
+        if len(self.requests) == 1:
+            block = {"type": "thinking", "thinking": "Need the file.", "signature": "s1"}
+            return iter(
+                [
+                    StreamToken(type="thinking", content="Need the file."),
+                    StreamToken(type="thinking", thinking_block=block),
+                    StreamToken(type="tool_use", tool_name="missing_tool", tool_id="toolu_1"),
+                    StreamToken(type="tool_use", tool_input_partial="{}"),
+                    StreamToken(type="done"),
+                ]
+            )
+        return iter(
+            [
+                StreamToken(type="thinking", content="The tool failed; answer anyway."),
+                StreamToken(type="text", content="Done."),
+                StreamToken(type="done"),
+            ]
+        )
+
+
+def test_streaming_turn_replays_thinking_before_its_tool_call_and_forwards_it():
+    class MockTools:
+        def find(self, name):
+            return None
+
+        def execute(self, name, tool_input, context):
+            return ToolResult(ok=False, output=f"Unknown tool: {name}")
+
+    model = _ToolTurnModel()
+    seen: list[str] = []
+    result = run_agent_turn_stream(
+        model=model,
+        tools=MockTools(),
+        messages=[{"role": "user", "content": "read it"}],
+        cwd=".",
+        on_token=lambda t: seen.append(t.content) if t.type == "thinking" and t.content else None,
+        max_steps=3,
+    )
+    roles = [message["role"] for message in model.requests[1]]
+    assert roles == ["user", "assistant_thinking", "assistant_tool_call", "tool_result"]
+    assert model.requests[1][1]["blocks"] == [{"type": "thinking", "thinking": "Need the file.", "signature": "s1"}]
+    assert seen == ["Need the file.", "The tool failed; answer anyway."]
+    assert result[-1] == {"role": "assistant", "content": "Done."}
 
 
 def main() -> int:

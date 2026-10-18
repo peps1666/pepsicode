@@ -209,12 +209,17 @@ def _normalize_usage(usage: dict[str, Any]) -> dict[str, int]:
 
 
 def _process_sse_event(
-    event: dict[str, Any], *, usage_state: dict[str, int] | None = None
+    event: dict[str, Any],
+    *,
+    usage_state: dict[str, int] | None = None,
+    thinking_state: dict[int, dict[str, Any]] | None = None,
 ) -> Generator[StreamToken, None, None]:
     """Translate a parsed SSE event into one or more ``StreamToken`` objects.
 
     Only the events we care about produce tokens; the rest are ignored so
     callers can safely iterate the whole stream without bookkeeping.
+    ``thinking_state`` (keyed by content-block index) reassembles thinking
+    blocks so the signed block can be replayed with the following tool calls.
     """
     event_type = event.get("event")
     data = event.get("data")
@@ -246,7 +251,15 @@ def _process_sse_event(
                 tool_id=block.get("id") if isinstance(block.get("id"), str) else None,
             )
         elif block_kind == "thinking":
-            yield StreamToken(type="thinking")
+            if thinking_state is not None:
+                thinking_state[data.get("index", 0)] = {
+                    "type": "thinking",
+                    "thinking": block.get("thinking") or "",
+                    "signature": block.get("signature") or "",
+                }
+            yield StreamToken(type="thinking", content=block.get("thinking") or "")
+        elif block_kind == "redacted_thinking" and thinking_state is not None:
+            thinking_state[data.get("index", 0)] = dict(block)
 
     elif event_type == "content_block_delta":
         delta = data.get("delta")
@@ -260,6 +273,20 @@ def _process_sse_event(
                 type="tool_use",
                 tool_input_partial=delta["partial_json"],
             )
+        elif delta_type == "thinking_delta" and isinstance(delta.get("thinking"), str):
+            pending = (thinking_state or {}).get(data.get("index", 0))
+            if pending is not None:
+                pending["thinking"] += delta["thinking"]
+            yield StreamToken(type="thinking", content=delta["thinking"])
+        elif delta_type == "signature_delta" and isinstance(delta.get("signature"), str):
+            pending = (thinking_state or {}).get(data.get("index", 0))
+            if pending is not None:
+                pending["signature"] += delta["signature"]
+
+    elif event_type == "content_block_stop" and thinking_state is not None:
+        finished = thinking_state.pop(data.get("index", 0), None)
+        if finished is not None:
+            yield StreamToken(type="thinking", thinking_block=finished)
 
     elif event_type == "message_stop":
         yield StreamToken(type="done")
@@ -505,6 +532,7 @@ class AnthropicModelAdapter:
         # Each response owns its accumulator, including concurrent sub-agents.
         self.last_usage = None
         usage_state: dict[str, int] = {}
+        thinking_state: dict[int, dict[str, Any]] = {}
 
         try:
             response = urllib.request.urlopen(request, timeout=120)  # noqa: S310
@@ -538,7 +566,7 @@ class AnthropicModelAdapter:
                     event = _parse_sse_event(event_str)
                     if event is None:
                         continue
-                    for token in _process_sse_event(event, usage_state=usage_state):
+                    for token in _process_sse_event(event, usage_state=usage_state, thinking_state=thinking_state):
                         if token.type == "usage":
                             self.last_usage = token.usage
                         if token.type == "done":
@@ -558,7 +586,7 @@ class AnthropicModelAdapter:
         if buffer.strip():
             event = _parse_sse_event(buffer)
             if event is not None:
-                for token in _process_sse_event(event, usage_state=usage_state):
+                for token in _process_sse_event(event, usage_state=usage_state, thinking_state=thinking_state):
                     if token.type == "usage":
                         self.last_usage = token.usage
                     yield token

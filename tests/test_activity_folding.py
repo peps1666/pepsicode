@@ -46,6 +46,30 @@ def test_folded_header_reports_failures():
     assert "1 failed" in _plain(_turn(tool_status="error"))
 
 
+def _thinking_turn(status=None):
+    return [
+        TranscriptEntry(id=1, kind="user", body="fix tests"),
+        TranscriptEntry(id=2, kind="tool", toolName="run_command", status="success", body="pytest output"),
+        TranscriptEntry(id=3, kind="thinking", body="The failure is an off-by-one in the loop.", status=status),
+        TranscriptEntry(id=4, kind="assistant", body="Fixed the off-by-one."),
+    ]
+
+
+def test_thinking_after_a_tool_result_folds_and_expands_with_the_activity():
+    folded = _plain(_thinking_turn())
+    assert "▸ Activity  1 tool · 1 thought" in folded
+    assert "off-by-one in the loop" not in folded and "Fixed the off-by-one." in folded
+
+    expanded = _plain(_thinking_turn(), expanded_groups={2})
+    assert "✻ Thought" in expanded and "The failure is an off-by-one in the loop." in expanded
+
+
+def test_thinking_still_streaming_keeps_the_activity_open():
+    live = _plain(_thinking_turn(status="running")[:3])
+    assert "✻ Thinking…" in live and "off-by-one in the loop" in live
+    assert "Activity" not in live
+
+
 def _screen(monkeypatch, entries):
     monkeypatch.setattr(app, "_get_terminal_size", lambda: (100, 30))
     monkeypatch.setattr(chrome, "_cached_terminal_size", lambda: (100, 30))

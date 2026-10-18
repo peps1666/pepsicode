@@ -137,6 +137,9 @@ def _render_transcript_entry(entry: TranscriptEntry) -> str:
         content, _ = parse_assistant_text(entry.body)
         return f"{label}\n{_indent_block(render_markdownish(content))}"
 
+    if entry.kind == "thinking":
+        return f"{ACCENT}✻{RESET} {SUBTLE}thinking{RESET}\n{_indent_block(f'{SUBTLE}{entry.body}{RESET}')}"
+
     if entry.kind == "tool":
         cols, _ = _cached_terminal_size()
         return "\n".join(render_tool_activity(entry, max(8, cols - 4)))

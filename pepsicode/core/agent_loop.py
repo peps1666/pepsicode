@@ -779,6 +779,7 @@ def _accumulate_stream_tokens(
     token_stream: Generator[StreamToken, None, None],
     *,
     on_token: Callable[[StreamToken], None] | None = None,
+    thinking_blocks: list[dict[str, Any]] | None = None,
 ) -> tuple[str, list[dict[str, Any]] | None]:
     """Consume the token stream and accumulate text + tool-call blocks.
 
@@ -786,6 +787,7 @@ def _accumulate_stream_tokens(
     only plain text, ``tool_calls`` is ``None``.  When a tool-use block is
     present, the list contains dicts with keys ``id``, ``toolName``, and
     ``input`` (the fully-assembled JSON string, parsed to a dict).
+    Completed thinking blocks are appended to ``thinking_blocks`` when given.
 
     The function keeps the tool-calling state-machine minimal:
     1. ``content_block_start(type=tool_use)``  -> enter tool mode
@@ -817,6 +819,10 @@ def _accumulate_stream_tokens(
 
         if token.type == "text":
             text_parts.append(token.content)
+
+        elif token.type == "thinking":
+            if token.thinking_block is not None and thinking_blocks is not None:
+                thinking_blocks.append(token.thinking_block)
 
         elif token.type == "tool_use":
             # A tool_use token with tool_name set marks the *start* of a new block.
@@ -952,6 +958,7 @@ def run_agent_turn_stream(
             context_manager.messages = cast(list[dict[str, Any]], current_messages)
         text_content: str = ""
         parsed_calls: list[dict] | None = None
+        thinking_blocks: list[dict[str, Any]] = []
         try:
             # For the first step we use next_stream(); retries of the same step
             # fall back to the non-streaming path so error handling stays simple.
@@ -966,6 +973,7 @@ def run_agent_turn_stream(
                 text_content, parsed_calls = _accumulate_stream_tokens(
                     token_stream,
                     on_token=on_stream_token,
+                    thinking_blocks=thinking_blocks,
                 )
             else:
                 # Fallback non-stream (kept as reference; can be removed later)
@@ -1123,6 +1131,9 @@ def run_agent_turn_stream(
 
         # ------ Handle tool calls ------
         if parsed_calls:
+            # Signed thinking must precede the tool calls it led to, or the API rejects the replay.
+            if thinking_blocks:
+                current_messages.append({"role": "assistant_thinking", "blocks": thinking_blocks})
             # Emit the assistant text as progress (if any) before tool calls.
             if text_content.strip():
                 if on_progress_message:
@@ -1201,6 +1212,9 @@ def run_agent_turn_stream(
 
             # Continue to the next agent step after tool execution.
             continue
+
+        if thinking_blocks:
+            current_messages.append({"role": "assistant_thinking", "blocks": thinking_blocks})
 
         if text_kind == "progress":
             if on_progress_message:

@@ -57,7 +57,7 @@ def session(tmp_path):
         ("deepseek-v4-pro", "max", {"type": "enabled"}, {"effort": "max"}),
         ("deepseek-v4-pro", "off", {"type": "disabled"}, None),
         ("deepseek-v4-pro", "default", None, None),
-        ("claude-sonnet-4-6", "medium", {"type": "adaptive"}, {"effort": "medium"}),
+        ("claude-sonnet-4-6", "medium", {"type": "adaptive", "display": "summarized"}, {"effort": "medium"}),
         ("claude-sonnet-4-20250514", "low", {"type": "enabled", "budget_tokens": 1024}, None),
         ("claude-sonnet-4-20250514", "high", {"type": "enabled", "budget_tokens": 16384}, None),
         ("custom-model", "default", None, None),

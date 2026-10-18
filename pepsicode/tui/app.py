@@ -75,6 +75,7 @@ from pepsicode.tui.chrome import (
     HIGHLIGHT_BG,
     ICON_ARROW,
     ICON_DOT,
+    ITALIC,
     RESET,
     SUBTLE,
     YELLOW,
@@ -323,6 +324,8 @@ class ScreenState:
     # Streaming state: the entry currently being streamed into (if any).
     streaming_entry_id: int | None = None
     streaming_text: str = ""
+    # The model's reasoning streams into its own entry, separate from answer text.
+    thinking_entry_id: int | None = None
     frame_renderer: FrameRenderer = field(default_factory=FrameRenderer, repr=False)
     # Mouse text selection (drawn by frame_renderer.selection).
     selection_dragging: bool = False
@@ -1275,7 +1278,7 @@ def _render_stream_transcript(
 def _finished_activity_groups(
     entries: list[TranscriptEntry], streaming_entry_id: int | None = None
 ) -> dict[int, list[TranscriptEntry]]:
-    """Runs of progress/tool entries whose turn has already produced its answer.
+    """Runs of progress/thinking/tool entries whose turn has already produced its answer.
 
     Keyed by the first entry id of each run, in transcript order. A run that is
     still streaming or has a tool running stays open so live work is visible.
@@ -1283,7 +1286,7 @@ def _finished_activity_groups(
     groups: dict[int, list[TranscriptEntry]] = {}
     run: list[TranscriptEntry] = []
     for entry in entries:
-        if entry.kind in ("progress", "tool"):
+        if entry.kind in ("progress", "thinking", "tool"):
             run.append(entry)
             continue
         answered = entry.kind == "assistant" and entry.id != streaming_entry_id
@@ -1361,6 +1364,17 @@ def _build_stream_transcript_lines(
                 for part_index, part in enumerate(wrap_text(line, max(2, cols - 5)).split("\n")):
                     marker = prefix if part_index == 0 else "  "
                     rendered.append(f"  {marker}{SUBTLE}{part}{RESET}")
+            rendered.append("")
+            continue
+
+        if entry.kind == "thinking":
+            running = entry.status == "running"
+            label = "Thinking…" if running else "Thought"
+            rendered.append(f"  {ACCENT}✻{RESET} {SUBTLE}{ITALIC}{label}{RESET}")
+            for line in body_lines:
+                rendered.extend(
+                    f"    {SUBTLE}{ITALIC}{part}{RESET}" for part in wrap_text(line, max(2, cols - 6)).split("\n")
+                )
             rendered.append("")
             continue
 
@@ -2053,6 +2067,17 @@ def _handle_input(
     args.messages.append({"role": "user", "content": input_text})
     state.latest_usage = None
 
+    def finish_thinking() -> None:
+        """Mark the reasoning entry being streamed as complete."""
+        if state.thinking_entry_id is None:
+            return
+        for entry in state.transcript:
+            if entry.id == state.thinking_entry_id:
+                entry.status = None
+                break
+        state.thinking_entry_id = None
+        rerender()
+
     def on_token(token: StreamToken) -> None:
         """Handle a single streaming token from the model.
 
@@ -2062,7 +2087,23 @@ def _handle_input(
         if token.type == "usage":
             state.latest_usage = token.usage
             rerender()
+        elif token.type == "thinking":
+            if token.content:
+                if state.thinking_entry_id is None:
+                    state.thinking_entry_id = _push_transcript_entry(
+                        state, kind="thinking", body=token.content, status="running"
+                    )
+                else:
+                    for entry in state.transcript:
+                        if entry.id == state.thinking_entry_id:
+                            entry.body += token.content
+                            break
+                _reset_scroll_if_needed(state)
+                rerender()
+            if token.thinking_block is not None:
+                finish_thinking()
         elif token.type == "text":
+            finish_thinking()
             state.streaming_text += token.content
             if state.streaming_entry_id is None:
                 # Create a new transcript entry for the streaming output.
@@ -2312,6 +2353,7 @@ def _handle_input(
             state.status = None
             # Clear streaming state
             state.streaming_entry_id = None
+            finish_thinking()
             _drain_tty_hook_notifications(args, state)
             state.streaming_text = ""
             rerender()

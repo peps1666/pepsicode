@@ -58,12 +58,14 @@ class StreamToken:
     Attributes:
         type:            "text"     - incremental text delta
                         "tool_use"  - a tool-call block (start or incremental JSON)
-                        "thinking"  - a thinking-block marker
+                        "thinking"  - incremental reasoning text, or a finished thinking block
                         "done"      - end-of-stream marker
-        content:         raw text delta (populated for type=="text")
+        content:         raw text delta (populated for type=="text" and type=="thinking")
         tool_name:       tool name (set when a tool_use block starts)
         tool_id:         tool use id (set when a tool_use block starts)
         tool_input_partial:  incremental JSON for a tool_use input (string delta)
+        thinking_block:  the complete signed block, set once when a thinking block stops;
+                         it must be sent back unchanged alongside the tool calls it preceded
     """
 
     type: Literal["text", "tool_use", "thinking", "usage", "done"]
@@ -72,6 +74,7 @@ class StreamToken:
     tool_id: str | None = None
     tool_input_partial: str = ""
     usage: dict[str, int] | None = None
+    thinking_block: dict[str, Any] | None = None
 
 
 class ModelAdapter(Protocol):
