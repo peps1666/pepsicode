@@ -18,6 +18,23 @@ EFFORT_LABELS = {
     "max": ("最高", "使用最高支持强度，可能增加耗时和费用"),
 }
 
+PERMISSION_OPTIONS = [
+    ("read_only", "只读", "查看文件和搜索，禁止编辑及命令执行"),
+    ("auto", "自动", "项目内编辑免确认，越界和危险操作再询问"),
+    ("full_access", "完全访问", "文件、命令及外部工具均免权限确认"),
+]
+
+
+def create_permissions_picker(current: str) -> SettingsPicker:
+    options = [SettingOption(*option) for option in PERMISSION_OPTIONS]
+    return SettingsPicker(
+        kind="permissions",
+        model="",
+        options=options,
+        current=current,
+        selected=next((i for i, option in enumerate(options) if option.value == current), 0),
+    )
+
 
 @dataclass(frozen=True)
 class SettingOption:
@@ -90,8 +107,10 @@ def create_settings_picker(runtime: dict, kind: str, *, notice: str = "", return
 
 def render_settings_picker(picker: SettingsPicker, cols: int, rows: int) -> list[str]:
     width, height = max(8, cols - 2), max(5, rows)
-    title = {"provider": "选择服务商", "model": "选择模型", "effort": "选择思考强度"}[picker.kind]
-    header = [f"  {BOLD}{title}{RESET}", f"  {SUBTLE}当前模型：{picker.model}{RESET}"]
+    title = {"provider": "选择服务商", "model": "选择模型", "effort": "选择思考强度", "permissions": "选择权限模式"}[picker.kind]
+    header = [f"  {BOLD}{title}{RESET}"]
+    if picker.kind != "permissions":
+        header.append(f"  {SUBTLE}当前模型：{picker.model}{RESET}")
     if picker.provider:
         header.insert(
             1, f"  服务商：{picker.provider_name or PROVIDERS.get(picker.provider, {}).get('name', picker.provider)}"
@@ -121,6 +140,8 @@ def render_settings_picker(picker: SettingsPicker, cols: int, rows: int) -> list
         "  ↑/↓ 选择 · Enter 应用 · r 刷新 · Esc 返回",
         f"  {picker.selected + 1 if picker.options else 0}/{len(picker.options)} · 从下一轮对话生效",
     ]
+    if picker.kind == "permissions":
+        footer = ["  ↑/↓ 选择 · Enter 应用 · Esc 返回", "  √ 当前模式 · 选择后随当前会话保存"]
     content = (header + body)[: max(1, height - len(footer))]
     content += [""] * max(0, height - len(content) - len(footer))
     return [truncate_plain(line, width) for line in (content + footer)[:height]]

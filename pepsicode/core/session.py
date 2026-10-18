@@ -57,6 +57,7 @@ class SessionData:
     skills: list[dict[str, Any]] = field(default_factory=list)
     mcp_servers: list[dict[str, Any]] = field(default_factory=list)
     permission_mode: str = "default"
+    access_mode: str = "auto"
     plan_file_path: str | None = None
     model_settings: dict[str, str] = field(default_factory=dict)
     metadata: SessionMetadata = field(default=None)
@@ -176,6 +177,7 @@ def save_session(session: SessionData) -> None:
         "skills": session.skills,
         "mcp_servers": session.mcp_servers,
         "permission_mode": session.permission_mode,
+        "access_mode": session.access_mode,
         "plan_file_path": session.plan_file_path,
         "model_settings": session.model_settings,
         "metadata": {
@@ -225,6 +227,7 @@ def load_session(session_id: str) -> SessionData | None:
             skills=data.get("skills", []),
             mcp_servers=data.get("mcp_servers", []),
             permission_mode=data.get("permission_mode", "default"),
+            access_mode=data.get("access_mode", "auto"),
             plan_file_path=data.get("plan_file_path"),
             model_settings=data.get("model_settings", {}),
             metadata=metadata,

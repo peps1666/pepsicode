@@ -57,6 +57,10 @@ PermissionDecision = str  # one of ApprovalDecision values
 
 
 class PermissionMode(str, Enum):
+    READ_ONLY = "read_only"
+    AUTO = "auto"
+    FULL_ACCESS = "full_access"
+    # Legacy callers can retain per-file approval; new sessions use AUTO.
     DEFAULT = "default"
     PLAN = "plan"
 
@@ -114,6 +118,7 @@ class PermissionManager:
         *,
         approval: ApprovalBackend | None = None,
         sandbox: SandboxBackend | None = None,
+        mode: PermissionMode | str = PermissionMode.DEFAULT,
     ) -> None:
         self.workspace_root = _normalize_path(workspace_root)
         self.approval: ApprovalBackend = approval or LocalApprovalBackend(prompt)
@@ -121,8 +126,8 @@ class PermissionManager:
         self.store = ApprovalStore(workspace_root)
 
         # Plan-mode state
-        self.mode = PermissionMode.DEFAULT
-        self.previous_mode = PermissionMode.DEFAULT
+        self.mode = PermissionMode(mode)
+        self.previous_mode = self.mode
         self.plan_file_path: str | None = None
         self._plan_followup: str | None = None
 
@@ -151,8 +156,21 @@ class PermissionManager:
         # If value is None and backend is not LocalApprovalBackend, no-op.
 
     # ------------------------------------------------------------------ #
-    # Plan mode (unchanged behaviour, preserved verbatim)
+    # Access presets and the independent Plan boundary
     # ------------------------------------------------------------------ #
+
+    @property
+    def access_mode(self) -> PermissionMode:
+        return self.previous_mode if self.is_plan_mode else self.mode
+
+    def set_access_mode(self, mode: str) -> None:
+        candidate = PermissionMode(mode)
+        if candidate not in {PermissionMode.READ_ONLY, PermissionMode.AUTO, PermissionMode.FULL_ACCESS}:
+            raise ValueError("Choose read_only, auto, or full_access")
+        if self.is_plan_mode:
+            self.previous_mode = candidate
+        else:
+            self.mode = candidate
 
     @property
     def is_plan_mode(self) -> bool:
@@ -181,7 +199,7 @@ class PermissionManager:
         plans_root = _normalize_path(str(Path(self.workspace_root) / ".pepsi-code" / "plans"))
         if not _is_within_directory(plans_root, candidate):
             return
-        self.previous_mode = PermissionMode.DEFAULT
+        self.previous_mode = self.access_mode
         self.mode = PermissionMode.PLAN
         self.plan_file_path = candidate
 
@@ -193,14 +211,25 @@ class PermissionManager:
         return os.path.normcase(_normalize_path(target_path)) == os.path.normcase(_normalize_path(self.plan_file_path))
 
     def ensure_tool_allowed(self, tool: Any, parsed: Any) -> None:
-        """Gate a tool call: MCP approval first, then the Plan-mode boundary."""
+        """Enforce read-only boundaries before requesting tool approval."""
         tool_name = str(getattr(tool, "name", ""))
         is_read_only = bool(getattr(tool, "is_read_only", False))
 
+        if self.mode == PermissionMode.READ_ONLY and not is_read_only:
+            if tool_name == "ask_user":
+                return
+            if tool_name == "task" and isinstance(parsed, dict) and parsed.get("agent_type", "explore") in {"explore", "plan"}:
+                return
+            raise RuntimeError(f"Read-only mode denied tool '{tool_name}'. Switch to auto to make changes.")
+
+        # Reject Plan-disallowed tools before requesting approval for them.
+        if self.is_plan_mode and tool_name.startswith(MCP_TOOL_PREFIX) and not is_read_only:
+            raise RuntimeError(f"Plan mode denied tool '{tool_name}'. Only read-only MCP tools are allowed.")
+
         # MCP tools are supplied by third-party servers and can do anything the
         # host process can.  Unless the server config declares a tool read-only
-        # (which also tags it READ_ONLY), require approval before every first
-        # use — in Plan mode *and* in the default mode.
+        # (which also tags it READ_ONLY), require approval on first use in
+        # automatic and legacy default modes.
         if tool_name.startswith(MCP_TOOL_PREFIX) and not is_read_only:
             outcome = self.check_mcp_tool(tool_name, parsed)
             if outcome.is_denied or outcome.is_unavailable:
@@ -231,6 +260,10 @@ class PermissionManager:
 
     def ensure_local_command_allowed(self, user_input: str) -> None:
         """Block local slash-command side doors while Plan mode is active."""
+        if self.mode == PermissionMode.READ_ONLY:
+            parts = user_input.casefold().split()
+            if parts[:2] in (["/worktree", "create"], ["/worktree", "exit"], ["/worktree", "cleanup"], ["/hooks", "trust"]):
+                raise RuntimeError(f"Read-only mode denied local command: {user_input}")
         if not self.is_plan_mode:
             return
         text = user_input.strip()
@@ -323,7 +356,7 @@ class PermissionManager:
     # ------------------------------------------------------------------ #
 
     def get_summary(self) -> list[str]:
-        summary = [f"cwd: {self.workspace_root}", f"mode: {self.mode.value}"]
+        summary = [f"cwd: {self.workspace_root}", f"mode: {self.mode.value}", f"access mode: {self.access_mode.value}"]
         if self.plan_file_path:
             summary.append(f"plan: {self.plan_file_path}")
         summary.extend(self.store.get_summary_lines())
@@ -336,6 +369,11 @@ class PermissionManager:
     def check_path_access(self, target_path: str, intent: str) -> ApprovalOutcome:
         """Check whether a path can be accessed, returning a typed outcome."""
         normalized = _normalize_path(target_path)
+
+        if self.mode == PermissionMode.READ_ONLY and intent not in {"read", "list", "search"}:
+            return ApprovalOutcome(decision=ApprovalDecision.DENY_ONCE)
+        if self.mode == PermissionMode.FULL_ACCESS:
+            return ApprovalOutcome(decision=ApprovalDecision.ALLOW_ONCE)
 
         # 1. Check cache
         cached = self.store.lookup(ApprovalKind.PATH, normalized, intent=intent)
@@ -379,6 +417,10 @@ class PermissionManager:
         force_prompt_reason: str | None = None,
     ) -> ApprovalOutcome:
         """Check whether a command can run, returning a typed outcome."""
+        if self.mode == PermissionMode.READ_ONLY or self.is_plan_mode:
+            return ApprovalOutcome(decision=ApprovalDecision.DENY_ONCE)
+        if self.mode == PermissionMode.FULL_ACCESS:
+            return ApprovalOutcome(decision=ApprovalDecision.ALLOW_ONCE)
         # 1. Path check on cwd
         path_outcome = self.check_path_access(command_cwd, "command_cwd")
         if path_outcome.is_denied or path_outcome.is_unavailable:
@@ -429,6 +471,11 @@ class PermissionManager:
         is the wrapped tool name, so ``allow_always`` trusts that one tool
         rather than the whole server.
         """
+        if self.mode == PermissionMode.READ_ONLY or self.is_plan_mode:
+            return ApprovalOutcome(decision=ApprovalDecision.DENY_ONCE)
+        if self.mode == PermissionMode.FULL_ACCESS:
+            return ApprovalOutcome(decision=ApprovalDecision.ALLOW_ONCE)
+
         # 1. Check cache
         cached = self.store.lookup(ApprovalKind.MCP, tool_name)
         if cached is not None:
@@ -471,11 +518,20 @@ class PermissionManager:
         # Plan-file writes bypass approval
         if self.is_plan_mode and self._is_exact_plan_file(normalized):
             return ApprovalOutcome(decision=ApprovalDecision.ALLOW_ONCE)
+        if self.mode == PermissionMode.READ_ONLY or self.is_plan_mode:
+            return ApprovalOutcome(decision=ApprovalDecision.DENY_ONCE)
+        if self.mode == PermissionMode.FULL_ACCESS:
+            return ApprovalOutcome(decision=ApprovalDecision.ALLOW_ONCE)
 
         # 1. Check cache
         cached = self.store.lookup(ApprovalKind.EDIT, normalized)
         if cached is not None:
             return cached
+
+        if self.mode == PermissionMode.AUTO:
+            # Path approval already expresses consent to edit outside the
+            # workspace; do not ask again for the same file modification.
+            return self.check_path_access(normalized, "write")
 
         # 2. Prompt
         if self.prompt is None and isinstance(self.approval, LocalApprovalBackend):

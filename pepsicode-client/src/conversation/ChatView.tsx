@@ -33,7 +33,7 @@ function buildTimeline(messages: ChatMessage[]): TimelineBlock[] {
 }
 
 export default function ChatView({ onSend }: { onSend: (input: string) => void }) {
-  const { messages, isRunning, cwd, model, models, reasoningEffort, isMock, modelUpdating, sessionId, planMode } = useSessionStore();
+  const { messages, isRunning, cwd, model, models, reasoningEffort, isMock, modelUpdating, permissionUpdating, sessionId, planMode } = useSessionStore();
   const modelName = models.find((item) => item.id === model)?.name || model;
   const [settingsOpen, setSettingsOpen] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -99,7 +99,7 @@ export default function ChatView({ onSend }: { onSend: (input: string) => void }
           </div>
         )}
       </div>
-      <Composer onSend={onSend} disabled={isRunning || modelUpdating} />
+      <Composer onSend={onSend} disabled={isRunning || modelUpdating || permissionUpdating} />
       {settingsOpen && <ModelSettings onClose={() => setSettingsOpen(false)} />}
     </div>
   );

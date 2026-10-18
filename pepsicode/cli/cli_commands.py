@@ -54,7 +54,7 @@ SLASH_COMMANDS = [
     SlashCommand("/memory", "/memory", "Show memory system status.", "Status"),
     SlashCommand("/config", "/config", "Show configuration diagnostics.", "Status"),
     SlashCommand("/config-paths", "/config-paths", "Show settings file paths.", "Status"),
-    SlashCommand("/permissions", "/permissions", "Show permission storage path.", "Status"),
+    SlashCommand("/permissions", "/permissions", "选择权限模式，√ 标记当前模式。", "Status"),
     # Files
     SlashCommand("/ls", "/ls [path]", "List files in a directory.", "Files"),
     SlashCommand("/grep", "/grep <pattern>::[path]", "Search text in files.", "Files"),
@@ -131,7 +131,7 @@ def format_slash_commands() -> str:
             ("/resume [id]", "Resume a saved session"),
             ("/transcript-save <path>", "Save transcript to text file"),
             ("/retry", "Retry the last prompt"),
-            ("/permissions", "Show permission storage path"),
+            ("/permissions", "选择权限模式（√ 当前）"),
             ("/config-paths", "Show settings file paths"),
         ],
     }
@@ -200,8 +200,24 @@ def try_handle_local_command(
             ]
         )
 
-    if user_input == "/permissions":
-        return f"permission store: {PEPSI_CODE_PERMISSIONS_PATH}"
+    if user_input.split() and user_input.split()[0] == "/permissions":
+        if permissions is None:
+            return "Permissions unavailable."
+        parts = user_input.split()
+        if len(parts) > 1:
+            if len(parts) != 2:
+                return "Usage: /permissions [read_only|auto|full_access]"
+            try:
+                permissions.set_access_mode(parts[1])
+            except ValueError:
+                return "Usage: /permissions [read_only|auto|full_access]"
+        return (
+            f"权限模式: {permissions.access_mode.value}\n"
+            "read_only · 只读：查看文件和搜索，禁止编辑及命令执行\n"
+            "auto · 自动：项目内编辑免确认，越界、危险命令及外部写入仍确认\n"
+            "full_access · 完全访问：编辑、命令与外部工具均免确认\n"
+            f"permission store: {PEPSI_CODE_PERMISSIONS_PATH}"
+        )
 
     if user_input == "/worktree" or user_input.startswith("/worktree "):
         return _handle_worktree_command(user_input)

@@ -39,6 +39,9 @@ interface SessionHistoryItem {
 }
 
 interface SessionState {
+  accessMode: "read_only" | "auto" | "full_access";
+  permissionUpdating: boolean;
+  updatePermissions: (mode: SessionState["accessMode"]) => Promise<void>;
   messages: ChatMessage[];
   isRunning: boolean;
   sessionId: string | null;
@@ -159,6 +162,19 @@ function hydrateSessionHistory(value: unknown): ChatMessage[] {
 }
 
 export const useSessionStore = create<SessionState>((set, get) => ({
+  accessMode: "auto",
+  permissionUpdating: false,
+  updatePermissions: async (mode) => {
+    const { ws } = useConnectionStore.getState();
+    if (!ws || get().isRunning || get().permissionUpdating) return;
+    set({ permissionUpdating: true });
+    try {
+      const result = await sendRequest(ws, "permissions/set", { mode });
+      set({ accessMode: result.access_mode });
+    } finally {
+      set({ permissionUpdating: false });
+    }
+  },
   messages: [],
   isRunning: false,
   sessionId: null,
@@ -187,6 +203,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       set({
         sessionId: result.session_id,
         cwd: result.cwd,
+        accessMode: result.access_mode || "auto",
         ...modelSettings(result),
       });
       await get().refreshSessions();
@@ -200,6 +217,10 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       const { event, data } = message;
 
       switch (event) {
+        case "permissions/settings": {
+          set({ accessMode: data.access_mode });
+          break;
+        }
         case "model/settings": {
           set(modelSettings(data));
           break;
@@ -336,6 +357,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     set({
       sessionId: result.session_id,
       cwd: result.cwd,
+      accessMode: result.access_mode || "auto",
       ...modelSettings(result),
       messages: [],
       isRunning: false,
@@ -420,6 +442,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       set({
         sessionId: result.session_id,
         cwd: result.workspace,
+        accessMode: result.access_mode || "auto",
         ...modelSettings(result),
         messages: hydrateSessionHistory(result.history),
         isRunning: false,
@@ -484,6 +507,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     set({
       sessionId: result.session_id,
       cwd: result.cwd,
+      accessMode: result.access_mode || "auto",
       ...modelSettings(result),
       messages: [],
       isRunning: false,

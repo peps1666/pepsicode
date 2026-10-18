@@ -201,7 +201,7 @@ class ClientSession:
         self.tools = create_default_tool_registry(
             self.cwd, runtime=self.runtime, cost_tracker=self.cost_tracker, trace_manager=self.trace_manager
         )
-        self.permissions = PermissionManager(self.cwd, prompt=None)  # set later
+        self.permissions = PermissionManager(self.cwd, prompt=None, mode=PermissionMode.AUTO)  # set later
         self.hook_engine = create_hook_engine(self.cwd, self.permissions)
         self.hook_engine.emit(
             HookEvent.STARTUP,
@@ -438,6 +438,7 @@ class PepsiCodeServer:
                 **session.model_settings(),
                 "tools": [t.name for t in session.tools.list()],
                 "permissions": session.permissions.get_summary() if session.permissions else [],
+                "access_mode": session.permissions.access_mode.value,
             }
 
         if method == "session/list":
@@ -480,7 +481,8 @@ class PepsiCodeServer:
                     session.update_model(loaded.model_settings)
                 except ValueError as error:
                     logger.warning("Could not restore session model settings: %s", error)
-            if session.permissions and loaded.permission_mode == PermissionMode.PLAN.value:
+            if session.permissions:
+                session.permissions.set_access_mode(loaded.access_mode)
                 session.permissions.restore_plan_state(loaded.permission_mode, loaded.plan_file_path)
             session._rebuild_system_prompt()
             return {
@@ -491,8 +493,22 @@ class PepsiCodeServer:
                 "workspace": session.cwd,
                 **session.model_settings(),
                 "permission_mode": session.permissions.mode.value if session.permissions else "default",
+                "access_mode": session.permissions.access_mode.value,
                 "plan_file": session.permissions.plan_file_path if session.permissions else None,
             }
+
+        if method == "permissions/set":
+            if session._turn_lock.locked() or session._worker_active.is_set():
+                raise ValueError("Wait for the current turn to finish before changing permissions")
+            assert session.permissions is not None
+            session.permissions.set_access_mode(params.get("mode", ""))
+            session.session_data.access_mode = session.permissions.access_mode.value
+            session.session_data.permission_mode = session.permissions.mode.value
+            session.session_data.plan_file_path = session.permissions.plan_file_path
+            session._rebuild_system_prompt()
+            session.session_data.messages = session.messages
+            save_session(session.session_data)
+            return {"access_mode": session.permissions.access_mode.value}
 
         if method == "model/settings":
             candidate = provider_runtime(session.runtime or {"model": "mock"}, params.get("provider"))
@@ -807,6 +823,7 @@ class PepsiCodeServer:
             if session.session_data:
                 session.session_data.messages = list(session.messages)
                 session.session_data.permission_mode = session.permissions.mode.value
+                session.session_data.access_mode = session.permissions.access_mode.value
                 session.session_data.plan_file_path = session.permissions.plan_file_path
                 if session.runtime and not isinstance(session.model, MockModelAdapter):
                     session.session_data.model_settings = model_settings_snapshot(session.runtime)
@@ -827,6 +844,8 @@ class PepsiCodeServer:
 
     async def _handle_local_command(self, user_input: str, session: ClientSession, emit: Any) -> dict[str, Any]:
         """Handle slash commands like /plan, /hooks, /tools."""
+        if session.permissions:
+            session.permissions.ensure_local_command_allowed(user_input)
         if user_input == "/plan" or user_input.startswith("/plan "):
             assert session.permissions is not None
             plan_path = session.permissions.enter_plan_mode()
@@ -857,6 +876,17 @@ class PepsiCodeServer:
                 context_manager=session.context_manager,
             )
             if result is not None:
+                if user_input.split()[0] == "/permissions":
+                    session._rebuild_system_prompt()
+                    session.session_data.access_mode = session.permissions.access_mode.value
+                    session.session_data.permission_mode = session.permissions.mode.value
+                    session.session_data.plan_file_path = session.permissions.plan_file_path
+                    session.session_data.messages = session.messages
+                    save_session(session.session_data)
+                    await emit("permissions/settings", {"access_mode": session.permissions.access_mode.value})
+                    await emit("message/start", {})
+                    await emit("message/end", {"content": result})
+                    await emit("turn/end", {"status": "ok"})
                 if user_input.split()[0] in {"/model", "/effort", "/provider"}:
                     if session.session_data and session.runtime and not isinstance(session.model, MockModelAdapter):
                         session.session_data.model_settings = model_settings_snapshot(session.runtime)

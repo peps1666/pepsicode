@@ -105,7 +105,12 @@ from pepsicode.tui.screen import (
     hide_cursor,
     show_cursor,
 )
-from pepsicode.tui.settings_picker import SettingsPicker, create_settings_picker, render_settings_picker
+from pepsicode.tui.settings_picker import (
+    SettingsPicker,
+    create_permissions_picker,
+    create_settings_picker,
+    render_settings_picker,
+)
 from pepsicode.tui.transcript import (
     get_transcript_max_scroll_offset,
     render_tool_activity,
@@ -342,6 +347,11 @@ def _open_settings_picker(
     return_input: str = "",
     provider: str | None = None,
 ) -> None:
+    if kind == "permissions":
+        state.settings_picker = create_permissions_picker(args.permissions.access_mode.value)
+        state.input = ""
+        state.cursor_offset = 0
+        return
     if kind != "provider" and (not args.runtime or isinstance(args.model, MockModelAdapter)):
         _push_transcript_entry(
             state, kind="assistant", status="error", body="Mock 模式下无法选择模型或思考强度，请先配置 API。"
@@ -364,6 +374,30 @@ def _handle_settings_picker_event(
 ) -> None:
     picker = state.settings_picker
     if picker is None:
+        return
+    if picker.kind == "permissions":
+        if isinstance(event, KeyEvent):
+            if event.name == "escape":
+                state.settings_picker = None
+            elif event.name in {"up", "down"}:
+                picker.selected = (picker.selected + (-1 if event.name == "up" else 1)) % len(picker.options)
+            elif event.name == "return":
+                option = picker.options[picker.selected]
+                try:
+                    args.permissions.set_access_mode(option.value)
+                    if state.session:
+                        state.session.access_mode = option.value
+                        state.session.permission_mode = args.permissions.mode.value
+                        state.session.plan_file_path = args.permissions.plan_file_path
+                        if state.autosave:
+                            state.autosave.mark_dirty()
+                            state.autosave.force_save()
+                except (ValueError, OSError) as error:
+                    picker.error = str(error)
+                else:
+                    _push_transcript_entry(state, kind="assistant", body=f"权限模式：{option.label} √")
+                    state.settings_picker = None
+        rerender()
         return
     if isinstance(event, TextEvent) and not event.ctrl and event.text.lower() == "r":
         candidate = provider_runtime(args.runtime or {"model": "mock"}, picker.provider)
@@ -538,6 +572,10 @@ def _restore_session_into_state(
     session: SessionData,
 ) -> None:
     args.messages = list(session.messages)
+    args.permissions.mode = args.permissions.access_mode
+    args.permissions.plan_file_path = None
+    args.permissions.set_access_mode(session.access_mode)
+    args.permissions.restore_plan_state(session.permission_mode, session.plan_file_path)
     _restore_model_settings(args, session)
     state.session = session
     state.autosave = AutosaveManager(session)
@@ -1700,6 +1738,7 @@ def _handle_input(
     if input_text == "/plan" or input_text.startswith("/plan "):
         plan_path = args.permissions.enter_plan_mode()
         if state.session:
+            state.session.access_mode = args.permissions.access_mode.value
             state.session.permission_mode = args.permissions.mode.value
             state.session.plan_file_path = args.permissions.plan_file_path
         task = input_text[len("/plan") :].strip()
@@ -1743,7 +1782,7 @@ def _handle_input(
         rerender()
         return False
 
-    if input_text in {"/model", "/effort", "/provider"}:
+    if input_text in {"/model", "/effort", "/provider", "/permissions"}:
         _open_settings_picker(args, state, input_text[1:])
         rerender()
         return False
@@ -2208,6 +2247,7 @@ def run_tty_app(
     if not session:
         session = create_new_session(workspace=str(Path(cwd).resolve()))
 
+    permissions.set_access_mode(session.access_mode)
     permissions.restore_plan_state(session.permission_mode, session.plan_file_path)
     _restore_model_settings(args, session)
 
@@ -2360,6 +2400,7 @@ def run_tty_app(
                         agent_result_data["done"] = False  # Reset flag
                     plan_followup = args.permissions.consume_plan_followup()
                     if state.session:
+                        state.session.access_mode = args.permissions.access_mode.value
                         state.session.permission_mode = args.permissions.mode.value
                         state.session.plan_file_path = args.permissions.plan_file_path
                         if state.autosave:
@@ -2462,6 +2503,7 @@ def run_tty_app(
             state.session.permissions_summary = args.permissions.get_summary()
             state.session.skills = args.tools.get_skills()
             state.session.mcp_servers = args.tools.get_mcp_servers()
+            state.session.access_mode = args.permissions.access_mode.value
             state.session.permission_mode = args.permissions.mode.value
             state.session.plan_file_path = args.permissions.plan_file_path
             if args.runtime and not isinstance(args.model, MockModelAdapter):
@@ -2854,9 +2896,9 @@ def _handle_normal_mode_return(
         selected = visible_commands[state.selected_slash_index]
         usage = getattr(selected, "usage", str(selected))
         # If input already matches the command exactly, submit instead of completing
-        if state.input.strip() == usage or usage in {"/model", "/effort"}:
+        if state.input.strip() == usage or usage in {"/model", "/effort", "/permissions"}:
             state.selected_slash_index = 0
-            submitted = usage if usage in {"/model", "/effort"} else state.input
+            submitted = usage if usage in {"/model", "/effort", "/permissions"} else state.input
             state.input = ""
             state.cursor_offset = 0
             rerender()
