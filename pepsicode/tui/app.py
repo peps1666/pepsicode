@@ -1105,12 +1105,12 @@ def _render_home_brand(cols: int, rows: int) -> list[str]:
 
 
 def _render_home_screen(args: TtyAppArgs, state: ScreenState, cols: int, rows: int) -> None:
-    """Welcome block with input and workspace always visible."""
+    """Fill the viewport with welcome content above a bottom-anchored composer."""
     runtime = args.runtime or {}
     model = f"{model_display_name(runtime) if runtime else 'unknown'} · {runtime.get('reasoningEffort', 'default')}"
     visible_commands = _get_visible_commands(state.input)
-    block_width = max(4, min(72, cols - 4))
-    margin = " " * max(0, (cols - block_width) // 2)
+    block_width = max(4, cols - 4)
+    margin = "  "
     content = _render_home_brand(cols, rows)
     if rows < 10:
         content = content[:1]
@@ -1120,27 +1120,25 @@ def _render_home_screen(args: TtyAppArgs, state: ScreenState, cols: int, rows: i
             f"{BOLD}Start with an idea{RESET}",
             f"{SUBTLE}{ICON_DOT} Explore the codebase   {ICON_DOT} Fix a bug   {ICON_DOT} Add tests{RESET}",
         ]
-    content += [
-        *([""] if rows >= 10 else []),
+    composer = [
         f"{SUBTLE}{'─' * block_width}{RESET}",
         render_input_prompt(state.input, state.cursor_offset, width=block_width),
+        f"{SUBTLE}{'─' * block_width}{RESET}",
+        f"{SUBTLE}{model}{RESET}",
     ]
+    menu: list[str] = []
     if visible_commands and state.input:
-        # Reserve space for selection, input, and the workspace footer.
-        content = content[-3:]
-        content.extend(
-            render_slash_menu(
-                visible_commands,
-                min(state.selected_slash_index, len(visible_commands) - 1),
-                max_rows=max(1, min(10, rows - 7)),
-                width=block_width,
-            ).splitlines()
-        )
-    content += [f"{SUBTLE}{'─' * block_width}{RESET}", f"{SUBTLE}{model}{RESET}"]
-    top_pad = max(0, min(5, (rows - len(content) - 2) // 2))
-    frame = [""] * top_pad + [margin + line for line in content]
-    while len(frame) < rows - 2:
-        frame.append("")
+        # Expand upward so opening/filtering the menu does not move the input.
+        menu = render_slash_menu(
+            visible_commands,
+            min(state.selected_slash_index, len(visible_commands) - 1),
+            max_rows=max(1, min(10, rows - len(composer) - 2)),
+            width=block_width,
+        ).splitlines()
+    welcome_height = max(0, rows - len(composer) - len(menu) - 2)
+    frame = [margin + line for line in content[:welcome_height]]
+    frame += [""] * (welcome_height - len(frame))
+    frame += [margin + line for line in menu + composer]
     frame.append(f"  {SUBTLE}{Path(args.cwd)}{RESET}")
     exit_hint = (
         "Press Ctrl+C again to exit" if state.exit_requested_at is not None else "/help for commands · /exit to quit"

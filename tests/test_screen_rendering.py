@@ -405,3 +405,44 @@ def test_permission_prompt_keeps_transcript_on_screen(monkeypatch, capsys):
     assert "please list files" in text and "Allow once" in text
     # Only the composer area changes; the transcript rows are not repainted.
     assert "\x1b[1;1H" not in output and "\x1b[2;1H" not in output
+
+
+@pytest.mark.parametrize("cols,rows", [(32, 8), (80, 24), (124, 32), (180, 50)])
+def test_home_composer_fills_width_and_stays_at_bottom(monkeypatch, capsys, cols, rows):
+    from pepsicode.tui import app
+
+    args = _stream_args()
+    state = app.ScreenState()
+    terminal = TerminalGrid(cols, rows)
+    for user_input in ("", "/", "/permissions", "中文输入" * cols):
+        state.input = user_input
+        state.cursor_offset = len(user_input)
+        app._render_home_screen(args, state, cols, rows)
+        terminal.apply(capsys.readouterr().out)
+        lines = terminal.lines()
+        assert len(lines) == rows
+        assert lines[rows - 6].strip() == "─" * (cols - 4)
+        assert lines[rows - 5].startswith("   > ")
+        assert lines[rows - 4].strip() == "─" * (cols - 4)
+        assert "/exit" in lines[-1]
+        assert all(string_display_width(line) <= cols for line in lines)
+        if user_input == "/permissions":
+            # The selected command remains visible directly above the input.
+            assert "/permissions" in "\n".join(lines[: rows - 6])
+
+
+def test_home_resize_reflows_input_and_clears_old_positions(monkeypatch, capsys):
+    from pepsicode.tui import app
+
+    args = _stream_args()
+    state = app.ScreenState(input="/permissions", cursor_offset=len("/permissions"))
+    app._render_home_screen(args, state, 80, 24)
+    capsys.readouterr()
+    for cols, rows in ((140, 40), (40, 10)):
+        app._render_home_screen(args, state, cols, rows)
+        terminal = TerminalGrid(cols, rows)
+        terminal.apply(capsys.readouterr().out)
+        lines = terminal.lines()
+        assert lines[rows - 6].strip() == "─" * (cols - 4)
+        assert "> /permissions" in lines[rows - 5]
+        assert "/exit" in lines[-1]
