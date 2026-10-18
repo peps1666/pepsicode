@@ -110,6 +110,7 @@ def apply_model_settings(
         window = model_capabilities(runtime, model).get("contextWindow")
         if window:
             context_manager.context_window = window
+            context_manager.context_window_is_estimate = False
 
 
 def reasoning_request_fields(runtime: dict[str, Any], model: str) -> dict[str, Any]:

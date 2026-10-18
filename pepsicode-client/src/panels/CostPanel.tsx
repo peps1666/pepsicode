@@ -3,7 +3,7 @@ import { useSessionStore } from "../stores/session";
 import styles from "./Panels.module.css";
 
 export default function CostPanel() {
-  const { costData, contextData, refreshCost, refreshContext } = useSessionStore();
+  const { costData, contextData, cacheHitPercentage, refreshCost, refreshContext } = useSessionStore();
 
   useEffect(() => {
     refreshCost();
@@ -11,7 +11,7 @@ export default function CostPanel() {
   }, [refreshCost, refreshContext]);
 
   const totalCost = costData?.total_cost_usd ?? 0;
-  const inputTokens = costData?.total_input_tokens ?? 0;
+  const inputTokens = costData?.total_prompt_tokens ?? costData?.total_input_tokens ?? 0;
   const outputTokens = costData?.total_output_tokens ?? 0;
   const ctxTokens = contextData?.total_tokens ?? 0;
   const ctxPct = contextData?.usage_percentage ?? 0;
@@ -41,6 +41,14 @@ export default function CostPanel() {
 
       <section className={styles.section}>
         <h3 className={styles.sectionTitle}>Token Usage</h3>
+        <div className={styles.statRow}>
+          <span className={styles.statLabel}>缓存命中率（最近请求）</span>
+          <span className={styles.statValue}>{cacheHitPercentage === null ? "未提供" : `${cacheHitPercentage.toFixed(1)}%`}</span>
+        </div>
+        <div className={styles.statRow}>
+          <span className={styles.statLabel}>缓存读取 tokens</span>
+          <span className={styles.statValue}>{(costData?.total_cache_read_tokens ?? 0).toLocaleString()}</span>
+        </div>
         <div className={styles.statRow}>
           <span className={styles.statLabel}>Input</span>
           <span className={styles.statValue}>{inputTokens.toLocaleString()}</span>

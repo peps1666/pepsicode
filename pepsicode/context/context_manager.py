@@ -452,6 +452,7 @@ class ContextManager:
     model: str = "default"
     context_window: int = 0
     messages: list[dict[str, Any]] = field(default_factory=list)
+    context_window_is_estimate: bool = False
     compaction_history: list[dict[str, Any]] = field(default_factory=list)
     compact_boundaries: list[CompactBoundary] = field(default_factory=list)
     recovery_state: RecoveryState = field(default_factory=RecoveryState)
@@ -470,6 +471,7 @@ class ContextManager:
     def __post_init__(self):
         if self.context_window == 0:
             self.context_window = DEFAULT_CONTEXT_WINDOWS.get(self.model, DEFAULT_CONTEXT_WINDOWS["default"])
+            self.context_window_is_estimate = self.model not in DEFAULT_CONTEXT_WINDOWS
 
     def update_usage(self, input_tokens: int, output_tokens: int) -> None:
         """Record real token usage reported by the API for the latest call."""
@@ -500,6 +502,9 @@ class ContextManager:
         """Update model and adjust context window."""
         self.model = model
         self.context_window = DEFAULT_CONTEXT_WINDOWS.get(model, DEFAULT_CONTEXT_WINDOWS["default"])
+        self.context_window_is_estimate = model not in DEFAULT_CONTEXT_WINDOWS
+        self.actual_input_tokens = 0
+        self.actual_output_tokens = 0
 
     def add_message(self, message: dict[str, Any]) -> None:
         """Add a message and update tracking."""
@@ -582,7 +587,7 @@ class ContextManager:
         # reflects exactly what the model saw last call, including tool schemas
         # the heuristic ignores.
         if self.actual_input_tokens > 0:
-            total_tokens = max(total_tokens, self.actual_input_tokens)
+            total_tokens = max(total_tokens, self.actual_input_tokens + self.actual_output_tokens)
         usage_pct = (total_tokens / self.context_window * 100) if self.context_window > 0 else 0
 
         is_near_limit = usage_pct >= 80  # Warning at 80%
@@ -820,6 +825,7 @@ def save_context_state(manager: ContextManager) -> None:
     state = {
         "model": manager.model,
         "context_window": manager.context_window,
+        "context_window_is_estimate": manager.context_window_is_estimate,
         "messages": manager.messages,
         "compaction_history": manager.compaction_history[-10:],  # Keep last 10
         "compact_boundaries": [item.to_dict() for item in manager.compact_boundaries[-10:]],
@@ -841,6 +847,7 @@ def load_context_state() -> ContextManager | None:
         return ContextManager(
             model=state.get("model", "default"),
             context_window=state.get("context_window", 0),
+            context_window_is_estimate=state.get("context_window_is_estimate", True),
             messages=state.get("messages", []),
             compaction_history=state.get("compaction_history", []),
             compact_boundaries=[

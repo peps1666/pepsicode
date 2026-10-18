@@ -39,6 +39,7 @@ interface SessionHistoryItem {
 }
 
 interface SessionState {
+  cacheHitPercentage: number | null;
   accessMode: "read_only" | "auto" | "full_access";
   permissionUpdating: boolean;
   updatePermissions: (mode: SessionState["accessMode"]) => Promise<void>;
@@ -162,6 +163,7 @@ function hydrateSessionHistory(value: unknown): ChatMessage[] {
 }
 
 export const useSessionStore = create<SessionState>((set, get) => ({
+  cacheHitPercentage: null,
   accessMode: "auto",
   permissionUpdating: false,
   updatePermissions: async (mode) => {
@@ -207,6 +209,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         ...modelSettings(result),
       });
       await get().refreshSessions();
+      await Promise.all([get().refreshCost(), get().refreshContext()]);
     } catch (e) {
       console.error("Failed to initialize session:", e);
     }
@@ -222,7 +225,8 @@ export const useSessionStore = create<SessionState>((set, get) => ({
           break;
         }
         case "model/settings": {
-          set(modelSettings(data));
+          set({ ...modelSettings(data), cacheHitPercentage: null });
+          void get().refreshContext();
           break;
         }
         case "message/start": {
@@ -327,8 +331,17 @@ export const useSessionStore = create<SessionState>((set, get) => ({
           break;
         }
         case "cost/update": {
-          set((state) => ({ costData: { ...state.costData, ...data } }));
-          // Also refresh full cost data periodically
+          set((state) => ({
+            costData: { ...state.costData, ...data },
+            cacheHitPercentage: data.cache_hit_percentage ?? null,
+          }));
+          break;
+        }
+        case "usage/update": {
+          set((state) => ({
+            cacheHitPercentage: data.cache_hit_percentage ?? null,
+            contextData: data.context ? { ...state.contextData, ...data.context } : null,
+          }));
           break;
         }
         case "turn/end": {
@@ -363,11 +376,13 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       isRunning: false,
       pendingPermission: null,
       costData: null,
+      cacheHitPercentage: null,
       contextData: null,
       planMode: false,
       planFile: null,
     });
     await get().refreshSessions();
+    await Promise.all([get().refreshCost(), get().refreshContext()]);
   },
 
   runTurn: async (input: string) => {
@@ -381,7 +396,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       content: input,
       timestamp: Date.now(),
     };
-    set((state) => ({ messages: [...state.messages, userMsg], isRunning: true }));
+    set((state) => ({ messages: [...state.messages, userMsg], isRunning: true, cacheHitPercentage: null }));
 
     // Fire-and-forget: turn/run blocks until the agent turn completes.
     // Stream events (message/delta, tool/call, etc.) arrive in the meantime
@@ -448,6 +463,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         isRunning: false,
         pendingPermission: null,
         costData: null,
+        cacheHitPercentage: null,
         contextData: null,
         planMode: result.permission_mode === "plan",
         planFile: result.plan_file || null,
@@ -479,9 +495,12 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   refreshCost: async () => {
     const { ws } = useConnectionStore.getState();
     if (!ws) return;
+    const sessionId = get().sessionId;
     try {
       const result = await sendRequest(ws, "cost/query", {});
-      set({ costData: result });
+      if (get().sessionId === sessionId) {
+        set({ costData: result, cacheHitPercentage: result.cache_hit_percentage ?? null });
+      }
     } catch (e) {
       // ignore
     }
@@ -490,9 +509,10 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   refreshContext: async () => {
     const { ws } = useConnectionStore.getState();
     if (!ws) return;
+    const sessionId = get().sessionId;
     try {
       const result = await sendRequest(ws, "context/query", {});
-      set({ contextData: result });
+      if (get().sessionId === sessionId) set({ contextData: result });
     } catch (e) {
       // ignore
     }
@@ -513,12 +533,14 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       isRunning: false,
       pendingPermission: null,
       costData: null,
+      cacheHitPercentage: null,
       contextData: null,
       planMode: false,
       planFile: null,
       sessions: [],
     });
     await get().refreshSessions();
+    await Promise.all([get().refreshCost(), get().refreshContext()]);
   },
 
   refreshModels: async () => {
@@ -571,7 +593,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     set({ modelUpdating: true });
     try {
       const result = await sendRequest(ws, "model/update", { model, reasoningEffort, persist, ...(provider ? { provider } : {}) });
-      set(modelSettings(result));
+      set({ ...modelSettings(result), cacheHitPercentage: null });
       void get().refreshContext();
     } finally {
       set({ modelUpdating: false });

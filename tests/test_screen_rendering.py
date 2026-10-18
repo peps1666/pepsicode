@@ -189,8 +189,9 @@ def test_streaming_updates_keep_footer_and_input_on_their_rows(monkeypatch, caps
         terminal.apply(capsys.readouterr().out)
         lines = terminal.lines()
         assert "demo" in lines[-1]
-        assert "test-model" in lines[-2]
-        assert ">" in lines[-3] and "..." not in lines[-3]
+        assert "Cache" in lines[-2] and "Ctx" in lines[-2]
+        assert "test-model" in lines[-3]
+        assert ">" in lines[-4] and "..." not in lines[-4]
 
 
 def test_display_width_is_consistent_for_combining_marks_and_hangul():
@@ -421,14 +422,14 @@ def test_home_composer_fills_width_and_stays_at_bottom(monkeypatch, capsys, cols
         terminal.apply(capsys.readouterr().out)
         lines = terminal.lines()
         assert len(lines) == rows
-        assert lines[rows - 6].strip() == "─" * (cols - 4)
-        assert lines[rows - 5].startswith("   > ")
-        assert lines[rows - 4].strip() == "─" * (cols - 4)
+        assert lines[rows - 7].strip() == "─" * (cols - 4)
+        assert lines[rows - 6].startswith("   > ")
+        assert lines[rows - 5].strip() == "─" * (cols - 4)
         assert "/exit" in lines[-1]
         assert all(string_display_width(line) <= cols for line in lines)
         if user_input == "/permissions":
             # The selected command remains visible directly above the input.
-            assert "/permissions" in "\n".join(lines[: rows - 6])
+            assert "/permissions" in "\n".join(lines[: rows - 7])
 
 
 def test_home_resize_reflows_input_and_clears_old_positions(monkeypatch, capsys):
@@ -443,6 +444,6 @@ def test_home_resize_reflows_input_and_clears_old_positions(monkeypatch, capsys)
         terminal = TerminalGrid(cols, rows)
         terminal.apply(capsys.readouterr().out)
         lines = terminal.lines()
-        assert lines[rows - 6].strip() == "─" * (cols - 4)
-        assert "> /permissions" in lines[rows - 5]
+        assert lines[rows - 7].strip() == "─" * (cols - 4)
+        assert "> /permissions" in lines[rows - 6]
         assert "/exit" in lines[-1]

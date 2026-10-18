@@ -66,11 +66,12 @@ class StreamToken:
         tool_input_partial:  incremental JSON for a tool_use input (string delta)
     """
 
-    type: Literal["text", "tool_use", "thinking", "done"]
+    type: Literal["text", "tool_use", "thinking", "usage", "done"]
     content: str = ""
     tool_name: str | None = None
     tool_id: str | None = None
     tool_input_partial: str = ""
+    usage: dict[str, int] | None = None
 
 
 class ModelAdapter(Protocol):

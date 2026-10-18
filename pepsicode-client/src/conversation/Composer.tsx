@@ -16,7 +16,9 @@ interface ComposerProps {
 export default function Composer({ onSend, disabled }: ComposerProps) {
   const [input, setInput] = useState("");
   const textareaRef = useRef<HTMLTextAreaElement>(null);
-  const { accessMode, permissionUpdating, updatePermissions } = useSessionStore();
+  const { accessMode, permissionUpdating, updatePermissions, cacheHitPercentage, contextData } = useSessionStore();
+  const contextPercent = contextData?.max_tokens ? contextData.usage_percentage : null;
+  const estimated = contextData?.is_estimate || contextData?.window_is_estimate;
   const [permissionError, setPermissionError] = useState("");
   const [permissionsOpen, setPermissionsOpen] = useState(false);
 
@@ -98,6 +100,17 @@ export default function Composer({ onSend, disabled }: ComposerProps) {
             </svg>
           </button>
         </div>
+      </div>
+      <div className={styles.usageStatus} aria-label="实时用量">
+        <span title="最近一次模型请求：缓存读取 token / 总输入 token；未提供表示接口没有返回缓存数据。">
+          缓存命中 {cacheHitPercentage === null ? "未提供" : `${cacheHitPercentage.toFixed(1)}%`}
+        </span>
+        <span title={contextPercent === null ? "上下文窗口数据未提供" : `${contextData.total_tokens.toLocaleString()} / ${contextData.max_tokens.toLocaleString()} tokens${estimated ? "（估算）" : ""}`}>
+          上下文 {contextPercent === null ? "未提供" : `${estimated ? "约 " : ""}${contextPercent.toFixed(1)}%`}
+        </span>
+        {contextPercent !== null && (
+          <progress aria-label="上下文窗口占比" max={100} value={Math.max(0, Math.min(100, contextPercent))} />
+        )}
       </div>
       <div className={styles.modeHint} role={permissionError ? "alert" : undefined}>
         {permissionError || accessModes[accessMode].description}

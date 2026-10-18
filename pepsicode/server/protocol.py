@@ -93,6 +93,7 @@ EventName = Literal[
     "session/saved",
     "session/created",
     "cost/update",
+    "usage/update",
     "context/compact",
     "error",
     "turn/end",

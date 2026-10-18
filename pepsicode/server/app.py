@@ -60,6 +60,7 @@ from pepsicode.permissions import PermissionManager, PermissionMode
 from pepsicode.server import protocol
 from pepsicode.tools import create_default_tool_registry
 from pepsicode.types import ChatMessage
+from pepsicode.usage import cache_hit_percentage, usage_snapshot
 
 logger = get_logger("server")
 
@@ -219,6 +220,10 @@ class ClientSession:
 
         if self.runtime:
             self.context_manager = ContextManager(model=self.runtime.get("model", "default"))
+            window = model_capabilities(self.runtime, self.runtime["model"]).get("contextWindow")
+            if window:
+                self.context_manager.context_window = window
+                self.context_manager.context_window_is_estimate = False
             summarize = getattr(self.model, "summarize", None)
             if summarize is not None:
                 self.context_manager.summarizer = summarize
@@ -251,6 +256,29 @@ class ClientSession:
         assert self.permissions is not None
         # RemotePermissionBridge now implements ApprovalBackend directly.
         self.permissions.approval = handler
+
+    def cost_snapshot(self) -> dict[str, Any]:
+        tracker = self.cost_tracker
+        entries = [
+            {"model": model, **vars(usage)}
+            for model, usage in (tracker.model_usage.items() if tracker else [])
+        ]
+        total_input = sum(entry["input_tokens"] for entry in entries)
+        total_read = sum(entry["cache_read_tokens"] for entry in entries)
+        total_write = sum(entry["cache_write_tokens"] for entry in entries)
+        return {
+            "total_cost_usd": tracker.total_cost_usd if tracker else 0,
+            "total_tokens": tracker.get_total_tokens() if tracker else 0,
+            "total_input_tokens": total_input,
+            "total_output_tokens": sum(entry["output_tokens"] for entry in entries),
+            "total_cache_read_tokens": total_read,
+            "total_cache_write_tokens": total_write,
+            "total_prompt_tokens": total_input + total_read + total_write,
+            "cache_hit_percentage": cache_hit_percentage(getattr(self.model, "last_usage", None)),
+            "total_calls": tracker.get_total_calls() if tracker else 0,
+            "total_errors": tracker.get_total_errors() if tracker else 0,
+            "entries": entries,
+        }
 
     def model_settings(self, provider: str | None = None) -> dict[str, Any]:
         """Return public model settings only; credentials never cross the socket."""
@@ -438,7 +466,7 @@ class PepsiCodeServer:
                 **session.model_settings(),
                 "tools": [t.name for t in session.tools.list()],
                 "permissions": session.permissions.get_summary() if session.permissions else [],
-                "access_mode": session.permissions.access_mode.value,
+                "access_mode": session.permissions.access_mode.value if session.permissions else "auto",
             }
 
         if method == "session/list":
@@ -493,7 +521,7 @@ class PepsiCodeServer:
                 "workspace": session.cwd,
                 **session.model_settings(),
                 "permission_mode": session.permissions.mode.value if session.permissions else "default",
-                "access_mode": session.permissions.access_mode.value,
+                "access_mode": session.permissions.access_mode.value if session.permissions else "auto",
                 "plan_file": session.permissions.plan_file_path if session.permissions else None,
             }
 
@@ -632,41 +660,15 @@ class PepsiCodeServer:
             return result
 
         if method == "cost/query":
-            tracker = session.cost_tracker
-            if tracker is None:
-                return {"total_cost_usd": 0, "total_tokens": 0, "total_calls": 0, "entries": []}
-            entries = []
-            total_input = 0
-            total_output = 0
-            for model, usage in tracker.model_usage.items():
-                total_input += usage.input_tokens
-                total_output += usage.output_tokens
-                entries.append(
-                    {
-                        "model": model,
-                        "input_tokens": usage.input_tokens,
-                        "output_tokens": usage.output_tokens,
-                        "cache_read_tokens": usage.cache_read_tokens,
-                        "cache_write_tokens": usage.cache_write_tokens,
-                        "cost_usd": usage.cost_usd,
-                        "call_count": usage.call_count,
-                        "error_count": usage.error_count,
-                    }
-                )
-            return {
-                "total_cost_usd": tracker.total_cost_usd,
-                "total_tokens": tracker.get_total_tokens(),
-                "total_input_tokens": total_input,
-                "total_output_tokens": total_output,
-                "total_calls": tracker.get_total_calls(),
-                "total_errors": tracker.get_total_errors(),
-                "entries": entries,
-            }
+            return session.cost_snapshot()
 
         if method == "context/query":
             if session.context_manager is None:
                 return {"total_tokens": 0, "usage_percentage": 0, "messages_count": len(session.messages)}
-            session.context_manager.messages = list(session.messages)
+            # During a turn the worker owns the current (possibly compacted)
+            # message list; session.messages still contains the pre-turn copy.
+            if not session._worker_active.is_set() and not session._turn_lock.locked():
+                session.context_manager.messages = list(session.messages)
             stats = session.context_manager.get_stats()
             return {
                 "total_tokens": stats.total_tokens,
@@ -677,6 +679,7 @@ class PepsiCodeServer:
                 "tool_calls_count": stats.tool_calls_count,
                 "is_near_limit": stats.is_near_limit,
                 "should_compact": stats.should_compact,
+                **(usage_snapshot(session.context_manager, None)["context"] or {}),
             }
 
         if method == "tools/list":
@@ -722,12 +725,20 @@ class PepsiCodeServer:
             session.messages.append({"role": "user", "content": user_input})
             session.permissions.begin_turn()
             session._rebuild_system_prompt()
+            if session.context_manager is not None:
+                session.context_manager.messages = list(session.messages)
+            await emit("usage/update", usage_snapshot(session.context_manager, None))
 
             # Token streaming: accumulate and emit deltas
             message_started = False
 
             def on_token(token: Any) -> None:
                 nonlocal message_started
+                if token.type == "usage":
+                    asyncio.run_coroutine_threadsafe(
+                        emit("usage/update", usage_snapshot(session.context_manager, token.usage)), loop
+                    )
+                    return
                 if token.type != "text":
                     return
                 if not message_started:
@@ -774,7 +785,10 @@ class PepsiCodeServer:
                     asyncio.run_coroutine_threadsafe(emit("progress/message", {"content": content}), loop)
 
             def on_usage(usage: dict) -> None:
-                asyncio.run_coroutine_threadsafe(emit("cost/update", usage), loop)
+                asyncio.run_coroutine_threadsafe(emit("cost/update", session.cost_snapshot()), loop)
+                asyncio.run_coroutine_threadsafe(
+                    emit("usage/update", usage_snapshot(session.context_manager, usage)), loop
+                )
 
             def run_turn_sync() -> list[ChatMessage]:
                 try:

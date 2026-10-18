@@ -188,7 +188,29 @@ def _parse_sse_event(event_str: str) -> dict[str, Any] | None:
     return None
 
 
-def _process_sse_event(event: dict[str, Any]) -> Generator[StreamToken, None, None]:
+def _normalize_usage(usage: dict[str, Any]) -> dict[str, int]:
+    normalized = {}
+    for source, target in (
+        ("input_tokens", "input_tokens"),
+        ("output_tokens", "output_tokens"),
+        ("cache_read_input_tokens", "cache_read_tokens"),
+        ("cache_creation_input_tokens", "cache_write_tokens"),
+        ("cache_read_tokens", "cache_read_tokens"),
+        ("cache_write_tokens", "cache_write_tokens"),
+    ):
+        if source in usage:
+            normalized[target] = max(0, int(usage[source] or 0))
+    if "prompt_cache_hit_tokens" in usage:
+        hit = max(0, int(usage["prompt_cache_hit_tokens"] or 0))
+        total = int(usage.get("prompt_tokens", usage.get("input_tokens", 0)) or 0)
+        normalized["cache_read_tokens"] = hit
+        normalized["input_tokens"] = max(0, int(usage.get("prompt_cache_miss_tokens", total - hit) or 0))
+    return normalized
+
+
+def _process_sse_event(
+    event: dict[str, Any], *, usage_state: dict[str, int] | None = None
+) -> Generator[StreamToken, None, None]:
     """Translate a parsed SSE event into one or more ``StreamToken`` objects.
 
     Only the events we care about produce tokens; the rest are ignored so
@@ -198,6 +220,19 @@ def _process_sse_event(event: dict[str, Any]) -> Generator[StreamToken, None, No
     data = event.get("data")
     if not isinstance(data, dict):
         return
+
+    if event_type in {"message_start", "message_delta"}:
+        source = data.get("message", {}) if event_type == "message_start" else data
+        usage = source.get("usage") if isinstance(source, dict) else None
+        if isinstance(usage, dict):
+            state = usage_state if usage_state is not None else getattr(_process_sse_event, "_pending_usage", {})
+            if event_type == "message_start":
+                state.clear()
+            state.update(_normalize_usage(usage))
+            if usage_state is None:
+                _process_sse_event._pending_usage = state
+            else:
+                yield StreamToken(type="usage", usage=dict(state))
 
     if event_type == "content_block_start":
         block = data.get("content_block")
@@ -228,20 +263,6 @@ def _process_sse_event(event: dict[str, Any]) -> Generator[StreamToken, None, No
 
     elif event_type == "message_stop":
         yield StreamToken(type="done")
-
-    elif event_type == "message_delta":
-        # Final usage / stop_reason - capture token usage when the provider
-        # reports it.  Mirror the non-streaming path so context-manager stats
-        # stay accurate.
-        usage = data.get("usage")
-        if isinstance(usage, dict):
-            # Stash the usage on a sentinel attribute so next_stream() can
-            # assign it back to self.last_usage at the end of the stream.
-            _process_sse_event._pending_usage = {
-                "input_tokens": int(usage.get("input_tokens", 0) or 0),
-                "output_tokens": int(usage.get("output_tokens", 0) or 0),
-            }
-
 
 def _consume_pending_usage() -> dict[str, int] | None:
     """Read and clear the pending usage stashed by ``_process_sse_event``."""
@@ -481,11 +502,9 @@ class AnthropicModelAdapter:
         system_message, converted_messages = _to_anthropic_messages(messages)
         request = self._build_stream_request(self.runtime["model"], system_message, converted_messages)
 
-        # Reset any pending usage stashed by a previous run.
-        try:
-            delattr(_process_sse_event, "_pending_usage")
-        except AttributeError:
-            pass
+        # Each response owns its accumulator, including concurrent sub-agents.
+        self.last_usage = None
+        usage_state: dict[str, int] = {}
 
         try:
             response = urllib.request.urlopen(request, timeout=120)  # noqa: S310
@@ -519,11 +538,11 @@ class AnthropicModelAdapter:
                     event = _parse_sse_event(event_str)
                     if event is None:
                         continue
-                    for token in _process_sse_event(event):
+                    for token in _process_sse_event(event, usage_state=usage_state):
+                        if token.type == "usage":
+                            self.last_usage = token.usage
                         if token.type == "done":
-                            usage = _consume_pending_usage()
-                            if usage is not None:
-                                self.last_usage = usage
+                            self.last_usage = dict(usage_state) or None
                             yield token
                             return
                         yield token
@@ -539,16 +558,17 @@ class AnthropicModelAdapter:
         if buffer.strip():
             event = _parse_sse_event(buffer)
             if event is not None:
-                for token in _process_sse_event(event):
+                for token in _process_sse_event(event, usage_state=usage_state):
+                    if token.type == "usage":
+                        self.last_usage = token.usage
                     yield token
 
         # Surface any pending usage that arrived without a ``done`` token.
-        usage = _consume_pending_usage()
-        if usage is not None:
-            self.last_usage = usage
+        self.last_usage = dict(usage_state) or None
         yield StreamToken(type="done")
 
     def next(self, messages: list[ChatMessage]) -> AgentStep:
+        self.last_usage = None
         problem = model_selection_error(self.runtime)
         if problem:
             raise RuntimeError(problem)
@@ -575,10 +595,7 @@ class AnthropicModelAdapter:
         # Capture real token usage when the provider reports it.
         if isinstance(data, dict) and isinstance(data.get("usage"), dict):
             usage = data["usage"]
-            self.last_usage = {
-                "input_tokens": int(usage.get("input_tokens", 0) or 0),
-                "output_tokens": int(usage.get("output_tokens", 0) or 0),
-            }
+            self.last_usage = _normalize_usage(usage)
 
         tool_calls: list[ToolCall] = []
         text_parts: list[str] = []

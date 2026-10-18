@@ -55,7 +55,12 @@ from pepsicode.llm.assistant_text import parse_assistant_text
 from pepsicode.llm.cost_tracker import CostTracker
 from pepsicode.llm.mock_model import MockModelAdapter
 from pepsicode.llm.model_discovery import refresh_model_catalog
-from pepsicode.llm.model_settings import apply_model_settings, model_display_name, model_selection_error
+from pepsicode.llm.model_settings import (
+    apply_model_settings,
+    model_capabilities,
+    model_display_name,
+    model_selection_error,
+)
 from pepsicode.llm.provider_setup import probe_provider_setup, save_provider_setup
 from pepsicode.llm.providers import PROVIDERS, model_settings_snapshot, provider_runtime
 from pepsicode.permissions import PermissionManager
@@ -118,6 +123,7 @@ from pepsicode.tui.transcript import (
 )
 from pepsicode.tui.types import TranscriptEntry
 from pepsicode.types import ChatMessage, ModelAdapter, StreamToken
+from pepsicode.usage import format_usage_status, usage_snapshot
 from pepsicode.version import DISPLAY_VERSION
 from pepsicode.workspace import resolve_tool_path
 
@@ -274,6 +280,9 @@ class AggregatedEditProgress:
 
 @dataclass
 class ScreenState:
+    latest_usage: dict | None = None
+    usage_stats_key: tuple | None = None
+    usage_stats: dict | None = None
     input: str = ""
     cursor_offset: int = 0
     transcript: list[TranscriptEntry] = field(default_factory=list)
@@ -319,6 +328,13 @@ class ScreenState:
     selection_dragging: bool = False
     selection_notice: str | None = None
     exit_requested_at: float | None = None
+    # Finished turns fold their tool/progress activity behind one header row.
+    # Keys are the first entry id of each activity run.
+    expanded_activity_groups: set[int] = field(default_factory=set)
+    # Screen row -> activity group id for headers visible in the last frame.
+    activity_header_rows: dict[int, int] = field(default_factory=dict)
+    # Keep a toggled header on the row it was on: (group id, screen row).
+    activity_anchor: tuple[int, int] | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -461,6 +477,7 @@ def _handle_settings_picker_event(
             except (ValueError, OSError, RuntimeError) as error:
                 picker.error = str(error)
             else:
+                state.latest_usage = None
                 _sync_model_settings_state(args, state)
                 label = f"模型：{model}" if picker.kind == "model" else f"思考强度：{option.label}（{option.value}）"
                 scope = "已保存为新会话默认设置。" if picker.persist else "仅用于当前会话。"
@@ -572,6 +589,12 @@ def _restore_session_into_state(
     session: SessionData,
 ) -> None:
     args.messages = list(session.messages)
+    state.latest_usage = None
+    state.usage_stats_key = None
+    if args.context_manager is not None:
+        args.context_manager.actual_input_tokens = 0
+        args.context_manager.actual_output_tokens = 0
+        args.context_manager.messages = list(args.messages)
     args.permissions.mode = args.permissions.access_mode
     args.permissions.plan_file_path = None
     args.permissions.set_access_mode(session.access_mode)
@@ -581,6 +604,8 @@ def _restore_session_into_state(
     state.autosave = AutosaveManager(session)
     state.transcript = [TranscriptEntry(**entry) for entry in session.transcript_entries]
     state.next_entry_id = max((entry.id for entry in state.transcript), default=0) + 1
+    state.expanded_activity_groups.clear()
+    state.activity_anchor = None
     state.transcript_scroll_offset = 0
     state.transcript_total_lines = 0
     state.user_scrolled_away = False
@@ -1125,6 +1150,7 @@ def _render_home_screen(args: TtyAppArgs, state: ScreenState, cols: int, rows: i
         render_input_prompt(state.input, state.cursor_offset, width=block_width),
         f"{SUBTLE}{'─' * block_width}{RESET}",
         f"{SUBTLE}{model}{RESET}",
+        _render_usage_status(args, state, block_width),
     ]
     menu: list[str] = []
     if visible_commands and state.input:
@@ -1146,6 +1172,31 @@ def _render_home_screen(args: TtyAppArgs, state: ScreenState, cols: int, rows: i
     frame.append(f"  {SUBTLE}{exit_hint}{RESET}")
     frame = _truncate_frame_lines(frame, cols, rows)
     state.frame_renderer.draw(frame, cols, rows)
+
+
+def _render_usage_status(args: TtyAppArgs, state: ScreenState, width: int) -> str:
+    manager = getattr(args, "context_manager", None)
+    if manager is not None and not state.is_busy:
+        manager.messages = list(args.messages)
+    key = (id(state.latest_usage),)
+    if manager is not None:
+        key += (len(manager.messages), manager.actual_input_tokens, manager.actual_output_tokens,
+                manager.context_window, manager.context_window_is_estimate)
+    # Streaming text repaints at 30fps; only rescan the context when its
+    # messages, provider counts, or model capacity actually change.
+    if state.usage_stats is None or state.usage_stats_key != key:
+        state.usage_stats = usage_snapshot(manager, state.latest_usage)
+        state.usage_stats_key = key
+    snapshot = state.usage_stats
+    label = format_usage_status(snapshot)
+    if _visible_width(label) > width:
+        rate = snapshot["cache_hit_percentage"]
+        context = snapshot["context"]
+        cache = f"{rate:.0f}%" if rate is not None else "--"
+        percent = f"{context['usage_percentage']:.0f}%" if context else "--"
+        estimated = "~" if context and (context["is_estimate"] or context["window_is_estimate"]) else ""
+        label = f"Cache {cache} · Ctx {estimated}{percent}"
+    return f"{SUBTLE}{truncate_plain(label, width)}{RESET}"
 
 
 def _render_resume_picker_lines(
@@ -1221,9 +1272,70 @@ def _render_stream_transcript(
     return (_window_stream_transcript(rendered, scroll_offset, height), len(rendered))
 
 
-def _build_stream_transcript_lines(entries: list[TranscriptEntry], cols: int) -> list[str]:
+def _finished_activity_groups(
+    entries: list[TranscriptEntry], streaming_entry_id: int | None = None
+) -> dict[int, list[TranscriptEntry]]:
+    """Runs of progress/tool entries whose turn has already produced its answer.
+
+    Keyed by the first entry id of each run, in transcript order. A run that is
+    still streaming or has a tool running stays open so live work is visible.
+    """
+    groups: dict[int, list[TranscriptEntry]] = {}
+    run: list[TranscriptEntry] = []
+    for entry in entries:
+        if entry.kind in ("progress", "tool"):
+            run.append(entry)
+            continue
+        answered = entry.kind == "assistant" and entry.id != streaming_entry_id
+        if run and answered and all(item.status != "running" for item in run):
+            groups[run[0].id] = run
+        run = []
+    return groups
+
+
+def _render_activity_header(group: list[TranscriptEntry], expanded: bool, cols: int) -> str:
+    tools = sum(entry.kind == "tool" for entry in group)
+    thoughts = len(group) - tools
+    failed = sum(entry.status == "error" for entry in group)
+    parts = []
+    if tools:
+        parts.append(f"{tools} tool{'s' if tools != 1 else ''}")
+    if thoughts:
+        parts.append(f"{thoughts} thought{'s' if thoughts != 1 else ''}")
+    summary = f" {SUBTLE}·{RESET} ".join(f"{SUBTLE}{part}{RESET}" for part in parts)
+    if failed:
+        summary += f" {SUBTLE}·{RESET} {BRIGHT_RED}{failed} failed{RESET}"
+    arrow = "▾" if expanded else "▸"
+    hint = f"click/ctrl+o to {'collapse' if expanded else 'expand'}"
+    line = f"  {ACCENT}{arrow}{RESET} {BOLD}Activity{RESET}  {summary}  {DIM}{hint}{RESET}"
+    return truncate_plain(line, cols)
+
+
+def _build_stream_transcript_lines(
+    entries: list[TranscriptEntry],
+    cols: int,
+    *,
+    expanded_groups: set[int] | frozenset[int] = frozenset(),
+    streaming_entry_id: int | None = None,
+    header_lines: dict[int, int] | None = None,
+) -> list[str]:
+    """Render the stream transcript; ``header_lines`` collects line index -> group id."""
+    groups = _finished_activity_groups(entries, streaming_entry_id)
+    hidden: set[int] = set()
     rendered: list[str] = []
     for entry in entries:
+        group = groups.get(entry.id)
+        if group is not None:
+            expanded = entry.id in expanded_groups
+            if header_lines is not None:
+                header_lines[len(rendered)] = entry.id
+            rendered.append(_render_activity_header(group, expanded, cols))
+            rendered.append("")
+            if not expanded:
+                hidden.update(item.id for item in group)
+        if entry.id in hidden:
+            continue
+
         body_lines = (entry.body or "").splitlines() or [""]
         if entry.kind == "user":
             rendered.append(f"  {ACCENT}{ICON_ARROW}{RESET} {BOLD}You{RESET}")
@@ -1258,20 +1370,51 @@ def _build_stream_transcript_lines(entries: list[TranscriptEntry], cols: int) ->
     return rendered
 
 
+def _stream_window_rows(total: int, scroll_offset: int, height: int) -> list[int | None]:
+    """Rendered-line index on each transcript row; None marks the scroll marker."""
+    max_offset = max(0, total - height)
+    offset = max(0, min(scroll_offset, max_offset))
+    end = total - offset
+    start = max(0, end - height)
+    rows: list[int | None] = list(range(start, end))
+    if offset > 0:
+        rows.insert(0, None)
+    return rows[: max(0, height)]
+
+
 def _window_stream_transcript(rendered: list[str], scroll_offset: int, height: int) -> list[str]:
     """The ``height`` rows ending ``scroll_offset`` rows above the bottom."""
     total = len(rendered)
     max_offset = max(0, total - height)
     offset = max(0, min(scroll_offset, max_offset))
-    end = total - offset
-    start = max(0, end - height)
-    window = rendered[start:end]
-    if offset > 0:
-        pct = int(offset / max_offset * 100) if max_offset > 0 else 0
-        marker = f"{SUBTLE}-- {offset}/{max_offset} ({pct}%) --{RESET}"
-        window = [marker] + window
-        window = window[:height]
-    return window[-height:] if window else []
+    pct = int(offset / max_offset * 100) if max_offset > 0 else 0
+    marker = f"{SUBTLE}-- {offset}/{max_offset} ({pct}%) --{RESET}"
+    return [marker if index is None else rendered[index] for index in _stream_window_rows(total, offset, height)]
+
+
+def _anchored_scroll_offset(total: int, height: int, line_index: int, row: int) -> int:
+    """Scroll offset that shows ``line_index`` on screen ``row`` (as close as possible)."""
+    # A scrolled-back view spends row 0 on the marker, shifting content down one.
+    offset = total - height - (line_index - max(row, 1) + 1)
+    return max(0, min(offset, max(0, total - height)))
+
+
+def _toggle_activity_group(state: ScreenState, group_id: int, row: int | None = None) -> None:
+    if group_id in state.expanded_activity_groups:
+        state.expanded_activity_groups.discard(group_id)
+    else:
+        state.expanded_activity_groups.add(group_id)
+    state.activity_anchor = (group_id, row) if row is not None else None
+
+
+def _toggle_latest_activity_group(state: ScreenState) -> bool:
+    groups = _finished_activity_groups(list(state.transcript), state.streaming_entry_id)
+    if not groups:
+        return False
+    group_id = list(groups)[-1]
+    rows = [row for row, header in state.activity_header_rows.items() if header == group_id]
+    _toggle_activity_group(state, group_id, rows[0] if rows else None)
+    return True
 
 
 def _render_stream_screen(args: TtyAppArgs, state: ScreenState) -> None:
@@ -1279,6 +1422,8 @@ def _render_stream_screen(args: TtyAppArgs, state: ScreenState) -> None:
     cols, rows = _get_terminal_size()
     cols = max(8, cols)
     rows = max(8, rows)
+    # Repopulated below only when the transcript is actually on screen.
+    state.activity_header_rows = {}
     if state.provider_wizard is not None:
         state.frame_renderer.draw(render_provider_wizard(state.provider_wizard, cols, rows), cols, rows)
         return
@@ -1327,11 +1472,13 @@ def _render_stream_screen(args: TtyAppArgs, state: ScreenState) -> None:
             menu = render_slash_menu(
                 visible_commands,
                 min(state.selected_slash_index, len(visible_commands) - 1),
-                max_rows=max(1, min(10, rows - len(input_lines) - 5)),
+                max_rows=max(1, min(10, rows - len(input_lines) - 6)),
                 width=max(2, cols - 1),
             )
             input_lines.append("")
             input_lines.extend(menu.splitlines())
+
+    input_lines.append("  " + _render_usage_status(args, state, max(4, cols - 4)))
 
     msg_count = len(state.transcript)
     sep = f"  {SUBTLE}{'─' * max(1, cols - 4)}{RESET}"
@@ -1350,9 +1497,21 @@ def _render_stream_screen(args: TtyAppArgs, state: ScreenState) -> None:
         state.frame_renderer.draw(_truncate_frame_lines((input_lines + [footer])[-rows:], cols, rows), cols, rows)
         return
 
-    rendered = _build_stream_transcript_lines(list(state.transcript), cols)
+    header_lines: dict[int, int] = {}
+    rendered = _build_stream_transcript_lines(
+        list(state.transcript),
+        cols,
+        expanded_groups=state.expanded_activity_groups,
+        streaming_entry_id=state.streaming_entry_id,
+        header_lines=header_lines,
+    )
     total = len(rendered)
-    if state.transcript_scroll_offset > 0 and cols == state.transcript_layout_cols:
+    anchor, state.activity_anchor = state.activity_anchor, None
+    anchor_line = next((line for line, group in header_lines.items() if group == anchor[0]), None) if anchor else None
+    if anchor and anchor_line is not None:
+        # A toggled header stays under the pointer; its details open below it.
+        state.transcript_scroll_offset = _anchored_scroll_offset(total, transcript_height, anchor_line, anchor[1])
+    elif state.transcript_scroll_offset > 0 and cols == state.transcript_layout_cols:
         # Offsets count from the bottom, so keep a scrolled-back view on the
         # same text while new output is appended below it.
         state.transcript_scroll_offset += total - state.transcript_total_lines
@@ -1361,6 +1520,10 @@ def _render_stream_screen(args: TtyAppArgs, state: ScreenState) -> None:
     state.transcript_total_lines = total
     state.transcript_view_height = transcript_height
     state.transcript_layout_cols = cols
+    window_rows = _stream_window_rows(total, state.transcript_scroll_offset, transcript_height)
+    state.activity_header_rows = {
+        row: header_lines[index] for row, index in enumerate(window_rows) if index in header_lines
+    }
     transcript_lines = _window_stream_transcript(rendered, state.transcript_scroll_offset, transcript_height)
     # Anchor the composer while new output streams in.
     transcript_lines += [""] * max(0, transcript_height - len(transcript_lines))
@@ -1828,6 +1991,8 @@ def _handle_input(
         context_manager=args.context_manager,
     )
     if local_result is not None:
+        if input_text.split()[0] in {"/model", "/effort", "/provider"}:
+            state.latest_usage = None
         _sync_model_settings_state(args, state)
         _push_transcript_entry(state, kind="assistant", body=local_result)
         return False
@@ -1886,6 +2051,7 @@ def _handle_input(
         ),
     }
     args.messages.append({"role": "user", "content": input_text})
+    state.latest_usage = None
 
     def on_token(token: StreamToken) -> None:
         """Handle a single streaming token from the model.
@@ -1893,7 +2059,10 @@ def _handle_input(
         Creates or updates a transcript entry in real-time so the user sees
         the response being generated character-by-character.
         """
-        if token.type == "text":
+        if token.type == "usage":
+            state.latest_usage = token.usage
+            rerender()
+        elif token.type == "text":
             state.streaming_text += token.content
             if state.streaming_entry_id is None:
                 # Create a new transcript entry for the streaming output.
@@ -2089,6 +2258,10 @@ def _handle_input(
 
     args.permissions.begin_turn()
 
+    def on_usage(usage: dict) -> None:
+        state.latest_usage = usage
+        rerender()
+
     # Run agent turn in background thread to keep UI responsive
     agent_error = None
     agent_result: dict = {"messages": None}
@@ -2111,6 +2284,8 @@ def _handle_input(
                 on_error_message=on_error_message,
                 on_progress_message=on_progress_message,
                 context_manager=args.context_manager,
+                cost_tracker=state.cost_tracker,
+                on_usage=on_usage,
                 hook_engine=args.hook_engine,
                 memory=args.memory,
             )
@@ -2194,6 +2369,10 @@ def run_tty_app(
         from pepsicode.context.context_manager import ContextManager
 
         context_manager = ContextManager(model=runtime.get("model", "default"))
+        window = model_capabilities(runtime, runtime["model"]).get("contextWindow")
+        if window:
+            context_manager.context_window = window
+            context_manager.context_window_is_estimate = False
         if hasattr(model, "summarize"):
             context_manager.summarizer = model.summarize
 
@@ -2860,6 +3039,12 @@ def _handle_normal_mode_key(
     if _handle_normal_mode_navigation(state, event, rerender):
         return True
 
+    # Ctrl-O -> fold/unfold the latest finished turn's activity
+    if event.ctrl and event.name == "o":
+        if _toggle_latest_activity_group(state):
+            rerender()
+        return True
+
     # Ctrl shortcuts (P, N handled in text handler)
     # PageUp/PageDown -> scroll transcript by most of a screen
     page = max(1, state.transcript_view_height - 2) if state.transcript_view_height else 8
@@ -3069,6 +3254,11 @@ def _handle_normal_mode_text(
                 rerender()
             return True
 
+        if event.text == "o":  # Ctrl-O -> fold/unfold latest activity
+            if _toggle_latest_activity_group(state):
+                rerender()
+            return True
+
         return False
 
     # Regular text input (accept any non-empty text, including multi-byte CJK/emoji)
@@ -3132,6 +3322,10 @@ def _handle_selection_event(state: ScreenState, event: ParsedInputEvent, rerende
                 state.selection_dragging = False
                 if renderer.selection.is_empty:
                     renderer.selection = None
+                    # A plain click on an activity header folds/unfolds it.
+                    group_id = state.activity_header_rows.get(event.y)
+                    if group_id is not None:
+                        _toggle_activity_group(state, group_id, event.y)
                 else:
                     _copy_selection(state)
         rerender()

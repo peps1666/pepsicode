@@ -15,6 +15,7 @@ from pepsicode.logging_config import get_logger
 from pepsicode.permissions import PermissionManager
 from pepsicode.tooling import ToolContext, ToolRegistry, ToolResult
 from pepsicode.types import AgentStep, ChatMessage, ModelAdapter, StreamToken
+from pepsicode.usage import prompt_tokens
 
 logger = get_logger("agent_loop")
 
@@ -162,7 +163,8 @@ def _record_cost_usage(model: ModelAdapter, cost_tracker: CostTracker | None) ->
     usage = getattr(model, "last_usage", None)
     if not isinstance(usage, dict):
         return
-    model_name = usage.get("model") or getattr(model, "name", None) or "default"
+    runtime = getattr(model, "runtime", None) or {}
+    model_name = usage.get("model") or runtime.get("model") or getattr(model, "name", None) or "default"
     cost_tracker.add_usage(
         model=model_name,
         input_tokens=usage.get("input_tokens", 0),
@@ -414,6 +416,8 @@ def run_agent_turn(
         # Layer 1 compression: trim oversized older tool outputs before the
         # model sees them.  Cheap and lossless for recent context.
         current_messages = _snip_tool_outputs(current_messages)
+        if context_manager is not None:
+            context_manager.messages = cast(list[dict[str, Any]], current_messages)
         try:
             next_step = model.next(_messages_for_model(current_messages, hook_engine))
         except KeyboardInterrupt:
@@ -529,7 +533,7 @@ def run_agent_turn(
             usage = getattr(model, "last_usage", None)
             if isinstance(usage, dict):
                 context_manager.update_usage(
-                    usage.get("input_tokens", 0),
+                    prompt_tokens(usage),
                     usage.get("output_tokens", 0),
                 )
         _record_cost_usage(model, cost_tracker)
@@ -944,16 +948,24 @@ def run_agent_turn_stream(
         current_messages = _snip_tool_outputs(current_messages)
 
         # ------ Stream the model response ------
+        if context_manager is not None:
+            context_manager.messages = cast(list[dict[str, Any]], current_messages)
         text_content: str = ""
         parsed_calls: list[dict] | None = None
         try:
             # For the first step we use next_stream(); retries of the same step
             # fall back to the non-streaming path so error handling stays simple.
             if step == 1 or True:  # always stream for now
+                def on_stream_token(token: StreamToken) -> None:
+                    if token.type == "usage" and token.usage is not None and context_manager is not None:
+                        context_manager.update_usage(prompt_tokens(token.usage), token.usage.get("output_tokens", 0))
+                    if on_token is not None:
+                        on_token(token)
+
                 token_stream = model.next_stream(_messages_for_model(current_messages, hook_engine))
                 text_content, parsed_calls = _accumulate_stream_tokens(
                     token_stream,
-                    on_token=on_token,
+                    on_token=on_stream_token,
                 )
             else:
                 # Fallback non-stream (kept as reference; can be removed later)
@@ -1074,7 +1086,7 @@ def run_agent_turn_stream(
             usage = getattr(model, "last_usage", None)
             if isinstance(usage, dict):
                 context_manager.update_usage(
-                    usage.get("input_tokens", 0),
+                    prompt_tokens(usage),
                     usage.get("output_tokens", 0),
                 )
         _record_cost_usage(model, cost_tracker)
