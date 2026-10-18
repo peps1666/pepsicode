@@ -10,6 +10,7 @@ import urllib.request
 from collections.abc import Generator
 from typing import Any, Literal, cast
 
+from pepsicode.cancellation import cancellable_response, cancellation_event, raise_if_cancelled
 from pepsicode.llm.assistant_text import parse_assistant_text
 from pepsicode.llm.model_settings import model_capabilities, model_selection_error, reasoning_request_fields
 from pepsicode.llm.providers import auth_headers, messages_url
@@ -35,7 +36,11 @@ class ServiceOverloadError(Exception):
 
 
 def _sleep(milliseconds: int) -> None:
-    time.sleep(max(0, milliseconds) / 1000)
+    event = cancellation_event()
+    if event is None:
+        time.sleep(max(0, milliseconds) / 1000)
+    elif event.wait(max(0, milliseconds) / 1000):
+        raise_if_cancelled()
 
 
 def _get_retry_limit() -> int:
@@ -291,6 +296,7 @@ def _process_sse_event(
     elif event_type == "message_stop":
         yield StreamToken(type="done")
 
+
 def _consume_pending_usage() -> dict[str, int] | None:
     """Read and clear the pending usage stashed by ``_process_sse_event``."""
     usage = getattr(_process_sse_event, "_pending_usage", None)
@@ -454,6 +460,7 @@ class AnthropicModelAdapter:
         max_retries = _get_retry_limit()
         response = None
         for attempt in range(max_retries + 1):
+            raise_if_cancelled()
             try:
                 response = urllib.request.urlopen(request, timeout=60)  # noqa: S310
                 break
@@ -470,7 +477,8 @@ class AnthropicModelAdapter:
         if response is None:
             raise RuntimeError("Model request failed before receiving a response")
 
-        data = _read_json_body(response)
+        with cancellable_response(response):
+            data = _read_json_body(response)
         status = getattr(response, "status", getattr(response, "code", 200))
         return data, status
 
@@ -534,6 +542,7 @@ class AnthropicModelAdapter:
         usage_state: dict[str, int] = {}
         thinking_state: dict[int, dict[str, Any]] = {}
 
+        raise_if_cancelled()
         try:
             response = urllib.request.urlopen(request, timeout=120)  # noqa: S310
         except urllib.error.HTTPError as error:
@@ -553,10 +562,11 @@ class AnthropicModelAdapter:
 
         # Read the SSE stream chunk by chunk, buffering partial event blocks.
         buffer = ""
-        try:
+        with cancellable_response(response):
             # ``iter_chunks`` returns (chunk, consumed_from_buffer); we use
             # ``read`` here for simplicity and to keep memory bounded.
             for raw_chunk in response:
+                raise_if_cancelled()
                 if not raw_chunk:
                     continue
                 buffer += raw_chunk.decode("utf-8", errors="replace")
@@ -574,14 +584,6 @@ class AnthropicModelAdapter:
                             yield token
                             return
                         yield token
-        finally:
-            # Always close the underlying response so the HTTP connection
-            # is released back to the pool.
-            try:
-                response.close()
-            except Exception:  # noqa: BLE001
-                pass
-
         # Drain any trailing bytes that didn't end with a blank line.
         if buffer.strip():
             event = _parse_sse_event(buffer)

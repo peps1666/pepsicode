@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import codecs
 import re
 from dataclasses import dataclass
 from typing import Literal, Union
@@ -33,6 +34,12 @@ class TextEvent:
 
 
 @dataclass(frozen=True)
+class PasteEvent:
+    text: str
+    kind: str = "paste"
+
+
+@dataclass(frozen=True)
 class WheelEvent:
     direction: Literal["up", "down"]
     kind: str = "wheel"
@@ -48,7 +55,7 @@ class MouseEvent:
     kind: str = "mouse"
 
 
-ParsedInputEvent = Union[KeyEvent, TextEvent, WheelEvent, MouseEvent]
+ParsedInputEvent = Union[KeyEvent, TextEvent, PasteEvent, WheelEvent, MouseEvent]
 
 
 def _decode_mouse_button(button: int, x: int, y: int, released: bool) -> ParsedInputEvent | None:
@@ -72,6 +79,20 @@ def _decode_mouse_button(button: int, x: int, y: int, released: bool) -> ParsedI
 class ParseResult:
     events: list[ParsedInputEvent]
     rest: str
+
+
+class TerminalInputDecoder:
+    """Keep partial UTF-8 characters and escape/paste sequences between reads."""
+
+    def __init__(self) -> None:
+        self._decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
+        self._remainder = ""
+
+    def feed(self, chunk: str | bytes) -> list[ParsedInputEvent]:
+        text = self._decoder.decode(chunk) if isinstance(chunk, bytes) else chunk
+        result = parse_input_chunk(self._remainder + text)
+        self._remainder = result.rest
+        return result.events
 
 
 CTRL_CHAR_TO_NAME: dict[str, str] = {
@@ -195,6 +216,24 @@ def parse_input_chunk(chunk: str) -> ParseResult:
     events: list[ParsedInputEvent] = []
     i = 0
     while i < len(chunk):
+        if chunk.startswith("\x1b[200~", i):
+            end = chunk.find("\x1b[201~", i + 6)
+            if end < 0:
+                break  # Keep the entire paste until its closing marker arrives.
+            text = chunk[i + 6 : end].replace("\r\n", "\n").replace("\r", "\n")
+            events.append(PasteEvent(text=text))
+            i = end + 6
+            continue
+
+        # Windows consoles can deliver an unbracketed multiline paste as one read.
+        # Preserve it as text rather than treating its newlines as submissions.
+        if i == 0 and "\x1b" not in chunk and any(c in chunk for c in "\r\n"):
+            text = chunk.rstrip("\r\n")
+            if "\r" in text or "\n" in text:
+                events.append(PasteEvent(text=chunk.replace("\r\n", "\n").replace("\r", "\n")))
+                i = len(chunk)
+                continue
+
         if maybe_need_more_for_escape_sequence(chunk[i:]):
             break
 

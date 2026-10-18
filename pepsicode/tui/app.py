@@ -46,6 +46,7 @@ from pepsicode.core.session import (
     get_latest_session,
     list_sessions,
     load_session,
+    same_workspace,
     save_session,
 )
 from pepsicode.core.state import AppState, Store, create_app_store
@@ -97,9 +98,10 @@ from pepsicode.tui.input_parser import (
     KeyEvent,
     MouseEvent,
     ParsedInputEvent,
+    PasteEvent,
+    TerminalInputDecoder,
     TextEvent,
     WheelEvent,
-    parse_input_chunk,
 )
 from pepsicode.tui.markdown import render_markdownish
 from pepsicode.tui.provider_wizard import ProviderWizard, create_provider_wizard, render_provider_wizard, wizard_event
@@ -319,6 +321,7 @@ class ScreenState:
     agent_thread: Any = None
     agent_result: dict | None = None
     agent_lock: Any = None
+    cancellation_event: threading.Event = field(default_factory=threading.Event, repr=False)
     # Tool execution timing tracker
     tool_start_time: float | None = None
     # Streaming state: the entry currently being streamed into (if any).
@@ -343,6 +346,60 @@ class ScreenState:
 # ---------------------------------------------------------------------------
 # State helpers
 # ---------------------------------------------------------------------------
+
+
+def _snapshot_session(args: TtyAppArgs, state: ScreenState) -> None:
+    """Copy live state before every save, including an in-progress transcript."""
+    if state.session is None:
+        return
+    messages = [dict(message) for message in args.messages]
+    transcript = [
+        {
+            "id": entry.id,
+            "kind": entry.kind,
+            "toolName": entry.toolName,
+            "status": entry.status,
+            "body": entry.body,
+            "collapsed": entry.collapsed,
+            "collapsedSummary": entry.collapsedSummary,
+            "collapsePhase": entry.collapsePhase,
+            "toolSummary": entry.toolSummary,
+        }
+        for entry in list(state.transcript)
+    ]
+    if state.autosave and (
+        state.session.messages != messages
+        or state.session.transcript_entries != transcript
+        or state.session.history != state.history
+    ):
+        state.autosave.mark_dirty()
+    state.session.messages = messages
+    state.session.transcript_entries = transcript
+    state.session.history = list(state.history)
+    state.session.permissions_summary = args.permissions.get_summary()
+    state.session.skills = args.tools.get_skills()
+    state.session.mcp_servers = args.tools.get_mcp_servers()
+    state.session.access_mode = args.permissions.access_mode.value
+    state.session.permission_mode = args.permissions.mode.value
+    state.session.plan_file_path = args.permissions.plan_file_path
+    if args.runtime and not isinstance(args.model, MockModelAdapter):
+        state.session.model_settings = model_settings_snapshot(args.runtime)
+
+
+def _collect_agent_result(args: TtyAppArgs, state: ScreenState) -> bool:
+    result, lock = state.agent_result, state.agent_lock
+    if result is None or lock is None:
+        return False
+    with lock:
+        if not result.get("done"):
+            return False
+        if result.get("messages") is not None:
+            args.messages = result["messages"]
+        result["done"] = False
+    _snapshot_session(args, state)
+    if state.autosave:
+        state.autosave.mark_dirty()
+    return True
 
 
 def _sync_model_settings_state(args: TtyAppArgs, state: ScreenState) -> None:
@@ -563,11 +620,7 @@ def _push_transcript_entry(state: ScreenState, **kwargs: Any) -> int:
 
 
 def _session_rows_for_picker(cwd: str) -> list[SessionMetadata]:
-    sessions = list_sessions()
-    workspace = str(Path(cwd).resolve())
-    current = [session for session in sessions if session.workspace == workspace]
-    other = [session for session in sessions if session.workspace != workspace]
-    return current + other
+    return list_sessions(workspace=cwd)
 
 
 def _restore_model_settings(args: TtyAppArgs, session: SessionData) -> None:
@@ -591,6 +644,8 @@ def _restore_session_into_state(
     state: ScreenState,
     session: SessionData,
 ) -> None:
+    if not same_workspace(args.cwd, session.workspace):
+        raise ValueError(f"Session belongs to {session.workspace}. Change to that directory before resuming it.")
     args.messages = list(session.messages)
     state.latest_usage = None
     state.usage_stats_key = None
@@ -649,7 +704,12 @@ def _resume_session_by_id(args: TtyAppArgs, state: ScreenState, session_id: str)
         state.status = f"Session '{session_id}' not found."
         _push_transcript_entry(state, kind="assistant", body=f"Session '{session_id}' not found.")
         return False
-    _restore_session_into_state(args, state, session)
+    try:
+        _restore_session_into_state(args, state, session)
+    except ValueError as error:
+        state.status = str(error)
+        _push_transcript_entry(state, kind="assistant", body=str(error))
+        return False
     _push_transcript_entry(
         state,
         kind="assistant",
@@ -1183,8 +1243,13 @@ def _render_usage_status(args: TtyAppArgs, state: ScreenState, width: int) -> st
         manager.messages = list(args.messages)
     key = (id(state.latest_usage),)
     if manager is not None:
-        key += (len(manager.messages), manager.actual_input_tokens, manager.actual_output_tokens,
-                manager.context_window, manager.context_window_is_estimate)
+        key += (
+            len(manager.messages),
+            manager.actual_input_tokens,
+            manager.actual_output_tokens,
+            manager.context_window,
+            manager.context_window_is_estimate,
+        )
     # Streaming text repaints at 30fps; only rescan the context when its
     # messages, provider counts, or model capacity actually change.
     if state.usage_stats is None or state.usage_stats_key != key:
@@ -1838,6 +1903,7 @@ def _execute_tool_shortcut(
     rerender: Callable[[], None],
 ) -> None:
     state.is_busy = True
+    state.cancellation_event.clear()
     state.status = f"Running {tool_name}..."
     state.active_tool = tool_name
     entry_id = _push_transcript_entry(
@@ -1849,29 +1915,39 @@ def _execute_tool_shortcut(
     )
     rerender()
 
-    try:
-        result = args.tools.execute(
-            tool_name,
-            tool_input,
-            context=ToolContext(cwd=args.cwd, permissions=args.permissions, hooks=args.hook_engine, memory=args.memory),
-        )
-        state.recent_tools.append(
-            {
-                "name": tool_name,
-                "status": "success" if result.ok else "error",
-            }
-        )
-        output = result.output if result.ok else f"ERROR: {result.output}"
-        _finish_tool_entry(state, entry_id, "success" if result.ok else "error", output)
-        state.transcript_scroll_offset = 0
-        state.user_scrolled_away = False
-        _drain_tty_hook_notifications(args, state)
-    finally:
-        state.is_busy = False
-        state.active_tool = None
-        _finalize_dangling_running_tools(state)
-        if not _get_running_tool_entries(state):
+    state.agent_lock = threading.Lock()
+    state.agent_result = {"messages": None, "done": False}
+
+    def run_shortcut():
+        try:
+            result = args.tools.execute(
+                tool_name,
+                tool_input,
+                context=ToolContext(
+                    cwd=args.cwd,
+                    permissions=args.permissions,
+                    hooks=args.hook_engine,
+                    memory=args.memory,
+                    cancellation_event=state.cancellation_event,
+                ),
+            )
+            state.recent_tools.append({"name": tool_name, "status": "success" if result.ok else "error"})
+            output = result.output if result.ok else f"ERROR: {result.output}"
+            _finish_tool_entry(state, entry_id, "success" if result.ok else "error", output)
+            state.transcript_scroll_offset = 0
+            state.user_scrolled_away = False
+            _drain_tty_hook_notifications(args, state)
+        finally:
+            state.active_tool = None
+            _finalize_dangling_running_tools(state)
             state.status = None
+            with state.agent_lock:
+                state.agent_result["done"] = True
+            state.is_busy = False
+            rerender()
+
+    state.agent_thread = threading.Thread(target=run_shortcut, daemon=True)
+    state.agent_thread.start()
 
 
 # ---------------------------------------------------------------------------
@@ -1886,6 +1962,7 @@ def _handle_input(
     submitted_raw_input: str | None = None,
 ) -> bool:
     """Returns True if /exit was typed."""
+    _collect_agent_result(args, state)
     if state.is_busy:
         state.status = f"Running {state.active_tool}..." if state.active_tool else "Current turn is still running..."
         return False
@@ -2037,6 +2114,7 @@ def _handle_input(
     state.user_scrolled_away = False
     state.status = "Thinking..."
     state.is_busy = True
+    state.cancellation_event.clear()
 
     # Update app state
     if state.app_state:
@@ -2304,12 +2382,11 @@ def _handle_input(
         rerender()
 
     # Run agent turn in background thread to keep UI responsive
-    agent_error = None
     agent_result: dict = {"messages": None}
     agent_thread_lock = threading.Lock()
 
     def _run_agent_background():
-        nonlocal agent_error, agent_result
+        nonlocal agent_result
         try:
             # Use streaming agent turn for real-time token output
             next_messages = run_agent_turn_stream(
@@ -2329,13 +2406,16 @@ def _handle_input(
                 on_usage=on_usage,
                 hook_engine=args.hook_engine,
                 memory=args.memory,
+                cancellation_event=state.cancellation_event,
             )
             if args.context_manager:
                 args.context_manager.messages = [dict(message) for message in next_messages]
             with agent_thread_lock:
                 agent_result["messages"] = next_messages
         except Exception as e:
-            agent_error = e
+            message = f"Task failed: {e}"
+            _push_transcript_entry(state, kind="assistant", body=message, status="error")
+            agent_result["messages"] = [*args.messages, {"role": "assistant", "content": message, "isError": True}]
         finally:
             args.permissions.end_turn()
             # Persist context state to disk so /context can read it
@@ -2453,6 +2533,9 @@ def run_tty_app(
             if not session:
                 print(f"Session '{resume_session}' not found.")
                 return messages
+            if not same_workspace(cwd, session.workspace):
+                print(f"Session belongs to {session.workspace}. Change to that directory before resuming it.")
+                return messages
             print(format_session_resume(session))
     else:
         # Check for existing session in current workspace
@@ -2525,6 +2608,7 @@ def run_tty_app(
 
     def _permission_prompt_handler(request: dict[str, Any]) -> dict[str, Any]:
         nonlocal approval_result
+        approval_event.clear()
         state.pending_approval = PendingApproval(
             request=request,
             resolve=lambda r: None,
@@ -2535,8 +2619,13 @@ def run_tty_app(
         # the terminal display.  request() only sets a pending flag; the main
         # event loop's next flush() will do the actual render safely.
         rerender()
-        approval_event.clear()
-        approval_event.wait()
+        while not approval_event.wait(0.05):
+            if state.cancellation_event.is_set():
+                state.pending_approval = None
+                return {"decision": "deny_once"}
+        if state.cancellation_event.is_set():
+            state.pending_approval = None
+            return {"decision": "deny_once"}
         result = approval_result.copy()
         state.pending_approval = None
         return result
@@ -2550,7 +2639,7 @@ def run_tty_app(
     def rerender() -> None:
         throttled.request()
 
-    input_remainder = ""
+    input_decoder = TerminalInputDecoder()
     should_exit = False
     # Autosave throttle: check at most every ~2 seconds, not every 20ms
     _autosave_counter = 0
@@ -2604,19 +2693,14 @@ def run_tty_app(
                 _autosave_counter += 1
                 if state.autosave and _autosave_counter >= _AUTOSAVE_CHECK_INTERVAL:
                     _autosave_counter = 0
+                    _snapshot_session(args, state)
                     state.autosave.save_if_needed()
 
                 # Animation frame for thinking indicator
                 state._animation_frame += 1
 
                 # Check if background agent thread completed
-                agent_result_data = state.agent_result
-                lock = getattr(state, "agent_lock", None)
-                if agent_result_data is not None and lock is not None and agent_result_data.get("done"):
-                    with lock:
-                        if agent_result_data.get("messages"):
-                            args.messages = agent_result_data["messages"]
-                        agent_result_data["done"] = False  # Reset flag
+                if _collect_agent_result(args, state):
                     plan_followup = args.permissions.consume_plan_followup()
                     if state.session:
                         state.session.access_mode = args.permissions.access_mode.value
@@ -2668,15 +2752,12 @@ def run_tty_app(
                         if not _more:
                             break
                         _raw += _more
-                    chunk = _raw.decode("utf-8", errors="replace")
+                    chunk = _raw
 
                 if not chunk:
                     continue
 
-                parsed = parse_input_chunk(input_remainder + chunk)
-                input_remainder = parsed.rest
-
-                for event in parsed.events:
+                for event in input_decoder.feed(chunk):
                     try:
                         _handle_event(args, state, event, rerender, approval_event, approval_result)
                     except SystemExit:
@@ -2690,6 +2771,12 @@ def run_tty_app(
                 throttled.flush()
 
     finally:
+        if state.is_busy:
+            state.cancellation_event.set()
+            approval_event.set()
+            if state.agent_thread is not None:
+                state.agent_thread.join(timeout=2)
+        _collect_agent_result(args, state)
         # Restore previous SIGWINCH handler on Unix
         if _prev_sigwinch is not None and sys.platform != "win32":
             import signal as _signal
@@ -2702,31 +2789,7 @@ def run_tty_app(
 
         # Final session save
         if state.session:
-            # Update session with current state
-            state.session.messages = list(args.messages)
-            state.session.transcript_entries = [
-                {
-                    "id": e.id,
-                    "kind": e.kind,
-                    "toolName": e.toolName,
-                    "status": e.status,
-                    "body": e.body,
-                    "collapsed": e.collapsed,
-                    "collapsedSummary": e.collapsedSummary,
-                    "collapsePhase": e.collapsePhase,
-                    "toolSummary": e.toolSummary,
-                }
-                for e in state.transcript
-            ]
-            state.session.history = state.history
-            state.session.permissions_summary = args.permissions.get_summary()
-            state.session.skills = args.tools.get_skills()
-            state.session.mcp_servers = args.tools.get_mcp_servers()
-            state.session.access_mode = args.permissions.access_mode.value
-            state.session.permission_mode = args.permissions.mode.value
-            state.session.plan_file_path = args.permissions.plan_file_path
-            if args.runtime and not isinstance(args.model, MockModelAdapter):
-                state.session.model_settings = model_settings_snapshot(args.runtime)
+            _snapshot_session(args, state)
 
             # Force save
             if state.autosave:
@@ -2760,7 +2823,7 @@ def _handle_event(
     """Process a single parsed input event.
 
     Routes the event to the appropriate handler based on current state:
-    - Ctrl+C: Copy a selection, or require a second press to exit
+    - Ctrl+C: Copy a selection, stop the current task, or confirm idle exit
     - Pending approval: Handle permission dialog input
     - Normal mode: Handle input, navigation, and commands
 
@@ -2779,10 +2842,31 @@ def _handle_event(
         state.exit_requested_at = None
         return
     if is_interrupt:
+        if state.is_busy:
+            state.cancellation_event.set()
+            state.exit_requested_at = None
+            state.status = "Stopping current task..."
+            rerender()
+            return
         now = time.monotonic()
         if state.exit_requested_at is not None and now - state.exit_requested_at <= 2:
             raise SystemExit(0)
         state.exit_requested_at = now
+        rerender()
+        return
+
+    if isinstance(event, PasteEvent):
+        # Pasted controls must never submit a message, approve a tool, or select
+        # a slash command. Keep newlines and tabs as part of the draft.
+        text = "".join(char for char in event.text if char >= " " or char in "\n\t")
+        if state.pending_approval is not None:
+            if state.pending_approval.feedback_mode:
+                state.pending_approval.feedback_input += text.replace("\n", " ")
+        elif state.provider_wizard is not None:
+            _handle_provider_wizard_event(args, state, TextEvent(text.strip(), False, False), rerender)
+        elif state.settings_picker is None and state.resume_picker_sessions is None:
+            state.input = state.input[: state.cursor_offset] + text + state.input[state.cursor_offset :]
+            state.cursor_offset += len(text)
         rerender()
         return
 
@@ -3067,6 +3151,10 @@ def _handle_normal_mode_key(
     rerender: Callable[[], None],
 ) -> bool:
     """Handle key events in normal mode. Returns True if handled."""
+    if event.ctrl and event.name in {"a", "e", "u", "p", "n"}:
+        return _handle_normal_mode_text(
+            args, state, TextEvent(text=event.name, ctrl=True, meta=event.meta), visible_commands, rerender
+        )
     # Return -> submit input or select slash command
     if event.name == "return":
         _handle_normal_mode_return(args, state, visible_commands, rerender)
@@ -3117,6 +3205,10 @@ def _handle_normal_mode_return(
     rerender: Callable[[], None],
 ) -> None:
     """Handle Return key in normal mode."""
+    if state.is_busy:
+        state.status = "Current turn is still running. Draft kept; Ctrl+C stops the turn."
+        rerender()
+        return
     if visible_commands and 0 <= state.selected_slash_index < len(visible_commands):
         selected = visible_commands[state.selected_slash_index]
         usage = getattr(selected, "usage", str(selected))

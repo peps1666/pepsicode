@@ -23,6 +23,43 @@ import subprocess
 import sys
 from typing import Any
 
+
+class WindowsProcessJob:
+    """Keep a command's descendants addressable without enumerating other processes."""
+
+    def __init__(self, process: subprocess.Popen) -> None:
+        import ctypes
+        from ctypes import wintypes
+
+        self._kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+        self._kernel.CreateJobObjectW.argtypes = [ctypes.c_void_p, wintypes.LPCWSTR]
+        self._kernel.CreateJobObjectW.restype = wintypes.HANDLE
+        self._kernel.AssignProcessToJobObject.argtypes = [wintypes.HANDLE, wintypes.HANDLE]
+        self._kernel.AssignProcessToJobObject.restype = wintypes.BOOL
+        self._kernel.TerminateJobObject.argtypes = [wintypes.HANDLE, wintypes.UINT]
+        self._kernel.TerminateJobObject.restype = wintypes.BOOL
+        self._kernel.CloseHandle.argtypes = [wintypes.HANDLE]
+        self._kernel.CloseHandle.restype = wintypes.BOOL
+        self._handle = self._kernel.CreateJobObjectW(None, None)
+        if not self._handle:
+            raise ctypes.WinError(ctypes.get_last_error())
+        if not self._kernel.AssignProcessToJobObject(self._handle, int(process._handle)):
+            error = ctypes.WinError(ctypes.get_last_error())
+            self.close()
+            raise error
+
+    def terminate(self) -> None:
+        import ctypes
+
+        if self._handle and not self._kernel.TerminateJobObject(self._handle, 1):
+            raise ctypes.WinError(ctypes.get_last_error())
+
+    def close(self) -> None:
+        if self._handle:
+            self._kernel.CloseHandle(self._handle)
+            self._handle = None
+
+
 # ---------------------------------------------------------------------------
 # Windows startupinfo singleton
 # ---------------------------------------------------------------------------

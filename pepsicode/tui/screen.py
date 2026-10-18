@@ -265,14 +265,14 @@ def enter_alternate_screen() -> None:
         # don't support alternate screen or mouse tracking.
         return
     mouse_tracking = ENABLE_MOUSE_TRACKING if mouse_tracking_enabled() else ""
-    sys.stdout.write(DISABLE_MOUSE_TRACKING + ENTER_ALT_SCREEN + ERASE_SCREEN_AND_HOME + mouse_tracking)
+    sys.stdout.write(DISABLE_MOUSE_TRACKING + ENTER_ALT_SCREEN + ERASE_SCREEN_AND_HOME + mouse_tracking + "\x1b[?2004h")
     sys.stdout.flush()
 
 
 def exit_alternate_screen() -> None:
     if _is_dumb_terminal():
         return
-    sys.stdout.write(DISABLE_MOUSE_TRACKING + EXIT_ALT_SCREEN)
+    sys.stdout.write("\x1b[?2004l" + DISABLE_MOUSE_TRACKING + EXIT_ALT_SCREEN)
     sys.stdout.flush()
     _restore_windows_console_mode()
 

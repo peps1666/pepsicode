@@ -30,6 +30,7 @@ def test_mouse_capture_is_on_by_default_for_wheel_and_drag(terminal_screen, monk
         + terminal_screen.ENTER_ALT_SCREEN
         + terminal_screen.ERASE_SCREEN_AND_HOME
         + terminal_screen.ENABLE_MOUSE_TRACKING
+        + "\x1b[?2004h"
     )
     # Button-event tracking reports drags so the app can select text.
     assert "\x1b[?1002h" in terminal_screen.ENABLE_MOUSE_TRACKING
@@ -46,7 +47,10 @@ def test_exit_disables_mouse_capture(terminal_screen, monkeypatch, capsys):
     terminal_screen.enter_alternate_screen()
     capsys.readouterr()
     terminal_screen.exit_alternate_screen()
-    assert capsys.readouterr().out == terminal_screen.DISABLE_MOUSE_TRACKING + terminal_screen.EXIT_ALT_SCREEN
+    assert (
+        capsys.readouterr().out
+        == "\x1b[?2004l" + terminal_screen.DISABLE_MOUSE_TRACKING + terminal_screen.EXIT_ALT_SCREEN
+    )
 
 
 def test_dumb_terminal_does_not_emit_mouse_modes(terminal_screen, monkeypatch, capsys):

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import shlex
+import signal
 import subprocess
 import time
 from collections.abc import Sequence
@@ -313,32 +314,86 @@ def _run_cancellable_command(
         text=True,
         encoding="utf-8",
         errors="replace",
-        **hide_window_kwargs(),
+        **hide_window_kwargs(
+            {"creationflags": getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)}
+            if os.name == "nt"
+            else {"start_new_session": True}
+        ),
     )
-    deadline = time.monotonic() + timeout
-    while True:
-        if cancellation_event.is_set():
-            _stop_process(process)
-            return ToolResult(ok=False, output=f"Command cancelled during hook shutdown: {display_command}")
-        remaining = deadline - time.monotonic()
-        if remaining <= 0:
-            _stop_process(process)
-            return ToolResult(ok=False, output=f"Command timed out after {timeout} seconds. Command: {display_command}")
+    job = None
+    if os.name == "nt":
+        from pepsicode.subprocess_utils import WindowsProcessJob
+
         try:
-            stdout, stderr = process.communicate(timeout=min(0.1, remaining))
-            output = "\n".join(part for part in [stdout.strip(), stderr.strip()] if part).strip()
-            return ToolResult(ok=process.returncode == 0, output=output)
-        except subprocess.TimeoutExpired:
-            continue
-
-
-def _stop_process(process: subprocess.Popen) -> None:
+            job = WindowsProcessJob(process)
+        except OSError:
+            # Some older Windows/job policies forbid nested jobs. In that
+            # case _stop_process falls back to taskkill for this PID's tree.
+            pass
+    deadline = time.monotonic() + timeout
     try:
-        process.terminate()
+        while True:
+            if cancellation_event.is_set():
+                _stop_process(process, job)
+                return ToolResult(ok=False, output=f"Command cancelled: {display_command}")
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                _stop_process(process, job)
+                return ToolResult(
+                    ok=False, output=f"Command timed out after {timeout} seconds. Command: {display_command}"
+                )
+            try:
+                stdout, stderr = process.communicate(timeout=min(0.1, remaining))
+                output = "\n".join(part for part in [stdout.strip(), stderr.strip()] if part).strip()
+                return ToolResult(ok=process.returncode == 0, output=output)
+            except subprocess.TimeoutExpired:
+                continue
+    finally:
+        if job is not None:
+            job.close()
+
+
+def _stop_process(process: subprocess.Popen, job=None) -> None:
+    # Kill only the process group/tree created for this command. Killing the
+    # shell alone leaves its children running and holding the output pipes.
+    if os.name == "nt":
+        if job is not None:
+            try:
+                job.terminate()
+                process.communicate(timeout=1)
+                return
+            except (OSError, subprocess.TimeoutExpired):
+                pass
+        from pepsicode.subprocess_utils import hide_window_kwargs
+
+        try:
+            result = subprocess.run(
+                ["taskkill", "/PID", str(process.pid), "/T", "/F"],
+                capture_output=True,
+                timeout=2,
+                check=False,
+                **hide_window_kwargs(),
+            )
+            if result.returncode == 0:
+                process.communicate(timeout=1)
+                return
+        except (OSError, subprocess.TimeoutExpired):
+            pass
+    try:
+        if os.name == "nt":
+            process.terminate()
+        else:
+            os.killpg(process.pid, signal.SIGTERM)
         process.communicate(timeout=1)
     except (OSError, subprocess.TimeoutExpired):
-        process.kill()
-        process.communicate()
+        if os.name == "nt":
+            process.kill()
+        else:
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+        process.communicate(timeout=1)
 
 
 run_command_tool = ToolDefinition(

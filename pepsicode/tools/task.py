@@ -209,6 +209,7 @@ def create_task_tool(
                 hook_engine=context.hooks,
                 agent_scope=f"subagent:{definition.name}",
                 memory=context.memory,
+                cancellation_event=context.cancellation_event,
             )
         except Exception as error:  # noqa: BLE001
             if trace_manager is not None and trace_node is not None:

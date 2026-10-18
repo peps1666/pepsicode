@@ -11,6 +11,9 @@ class DummyResponse:
     def read(self) -> bytes:
         return json.dumps(self._payload).encode("utf-8")
 
+    def close(self) -> None:
+        self.closed = True
+
     def __enter__(self):
         return self
 

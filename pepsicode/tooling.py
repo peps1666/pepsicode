@@ -174,6 +174,8 @@ class ToolRegistry:
         return None
 
     def execute(self, tool_name: str, input_data: Any, context: ToolContext) -> ToolResult:
+        if context.cancellation_event is not None and context.cancellation_event.is_set():
+            return ToolResult(ok=False, output="Task stopped by user; tool was not executed.")
         tool = self.find(tool_name)
         if tool is None:
             return ToolResult(ok=False, output=f"Unknown tool: {tool_name}")
@@ -198,6 +200,8 @@ class ToolRegistry:
             permissions = context.permissions
             if permissions is not None and hasattr(permissions, "ensure_tool_allowed"):
                 permissions.ensure_tool_allowed(tool, parsed)
+            if context.cancellation_event is not None and context.cancellation_event.is_set():
+                return ToolResult(ok=False, output="Task stopped by user; tool was not executed.")
             result = tool.run(parsed, context)
             if context.hooks is not None and not context.suppress_hooks:
                 from pepsicode.hooks import HookContext, HookEvent

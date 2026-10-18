@@ -2,9 +2,11 @@ from __future__ import annotations
 
 from collections.abc import Callable, Generator, Sequence
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import closing, nullcontext
 from dataclasses import replace
 from typing import Any, cast
 
+from pepsicode.cancellation import TurnCancelledError, cancellable_turn, raise_if_cancelled
 from pepsicode.context.context_artifacts import ContextArtifactStore, prepare_tool_result
 from pepsicode.context.context_manager import ContextManager
 from pepsicode.hooks import HookContext, HookEngine, HookEvent
@@ -280,6 +282,14 @@ def _finish_hook_turn(
     return messages
 
 
+def _finish_cancelled_turn(messages, hooks, cwd, permissions, scope, notify):
+    message = "Task stopped by user."
+    messages.append({"role": "assistant", "content": message})
+    if notify:
+        notify(message)
+    return _finish_hook_turn(messages, hooks, cwd=cwd, permissions=permissions, agent_scope=scope, status="cancelled")
+
+
 def _execute_calls_in_order(
     calls: Sequence[dict[str, Any]],
     tools: ToolRegistry,
@@ -346,6 +356,7 @@ def _execute_calls_in_order(
     return results
 
 
+@cancellable_turn
 def run_agent_turn(
     *,
     model: ModelAdapter,
@@ -365,6 +376,7 @@ def run_agent_turn(
     hook_engine: HookEngine | None = None,
     agent_scope: str = "main",
     memory: Any | None = None,
+    cancellation_event: Any | None = None,
 ) -> list[ChatMessage]:
     current_messages = list(messages)
     saw_tool_result = False
@@ -419,7 +431,13 @@ def run_agent_turn(
         if context_manager is not None:
             context_manager.messages = cast(list[dict[str, Any]], current_messages)
         try:
+            raise_if_cancelled()
             next_step = model.next(_messages_for_model(current_messages, hook_engine))
+            raise_if_cancelled()
+        except TurnCancelledError:
+            return _finish_cancelled_turn(
+                current_messages, hook_engine, cwd, permissions, agent_scope, on_assistant_message
+            )
         except KeyboardInterrupt:
             raise  # Let Ctrl-C propagate
         except ContextOverflowError as error:
@@ -702,6 +720,7 @@ def run_agent_turn(
             hooks=hook_engine,
             agent_scope=agent_scope,
             memory=memory,
+            cancellation_event=cancellation_event,
         )
         results = _execute_calls_in_order(
             cast(Sequence[dict[str, Any]], next_step.calls),
@@ -866,6 +885,7 @@ def _accumulate_stream_tokens(
     return text, tool_calls if tool_calls else None
 
 
+@cancellable_turn
 def run_agent_turn_stream(
     *,
     model: ModelAdapter,
@@ -887,6 +907,7 @@ def run_agent_turn_stream(
     hook_engine: HookEngine | None = None,
     agent_scope: str = "main",
     memory: Any | None = None,
+    cancellation_event: Any | None = None,
 ) -> list[ChatMessage]:
     """Run an agent turn with streaming token output.
 
@@ -960,21 +981,25 @@ def run_agent_turn_stream(
         parsed_calls: list[dict] | None = None
         thinking_blocks: list[dict[str, Any]] = []
         try:
+            raise_if_cancelled()
             # For the first step we use next_stream(); retries of the same step
             # fall back to the non-streaming path so error handling stays simple.
             if step == 1 or True:  # always stream for now
+
                 def on_stream_token(token: StreamToken) -> None:
+                    raise_if_cancelled()
                     if token.type == "usage" and token.usage is not None and context_manager is not None:
                         context_manager.update_usage(prompt_tokens(token.usage), token.usage.get("output_tokens", 0))
                     if on_token is not None:
                         on_token(token)
 
                 token_stream = model.next_stream(_messages_for_model(current_messages, hook_engine))
-                text_content, parsed_calls = _accumulate_stream_tokens(
-                    token_stream,
-                    on_token=on_stream_token,
-                    thinking_blocks=thinking_blocks,
-                )
+                with closing(token_stream) if hasattr(token_stream, "close") else nullcontext(token_stream):
+                    text_content, parsed_calls = _accumulate_stream_tokens(
+                        token_stream,
+                        on_token=on_stream_token,
+                        thinking_blocks=thinking_blocks,
+                    )
             else:
                 # Fallback non-stream (kept as reference; can be removed later)
                 next_step = model.next(_messages_for_model(current_messages, hook_engine))
@@ -984,7 +1009,12 @@ def run_agent_turn_stream(
                     if next_step.calls
                     else None
                 )
+            raise_if_cancelled()
 
+        except TurnCancelledError:
+            return _finish_cancelled_turn(
+                current_messages, hook_engine, cwd, permissions, agent_scope, on_progress_message
+            )
         except KeyboardInterrupt:
             raise
         except ContextOverflowError as error:
@@ -1157,6 +1187,7 @@ def run_agent_turn_stream(
                 hooks=hook_engine,
                 agent_scope=agent_scope,
                 memory=memory,
+                cancellation_event=cancellation_event,
             )
             results = _execute_calls_in_order(
                 cast(Sequence[dict[str, Any]], parsed_calls),
