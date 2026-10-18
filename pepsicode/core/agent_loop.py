@@ -9,6 +9,7 @@ from pepsicode.context.context_artifacts import ContextArtifactStore, prepare_to
 from pepsicode.context.context_manager import ContextManager
 from pepsicode.hooks import HookContext, HookEngine, HookEvent
 from pepsicode.llm.anthropic_adapter import ContextOverflowError
+from pepsicode.llm.assistant_text import AssistantTextStream, parse_assistant_text
 from pepsicode.llm.cost_tracker import BudgetExceededError, CostTracker
 from pepsicode.logging_config import get_logger
 from pepsicode.permissions import PermissionManager
@@ -793,9 +794,21 @@ def _accumulate_stream_tokens(
     # Current tool being accumulated (None until a tool_use block starts).
     current_tool: dict | None = None
     current_input_json: str = ""
+    visible_text = AssistantTextStream()
+
+    def flush_visible_text() -> None:
+        tail = visible_text.finish()
+        if tail and on_token is not None:
+            on_token(StreamToken(type="text", content=tail))
 
     for token in token_stream:
-        if on_token is not None:
+        if token.type == "done":
+            flush_visible_text()
+        if token.type == "text":
+            delta = visible_text.feed(token.content)
+            if delta and on_token is not None:
+                on_token(replace(token, content=delta))
+        elif on_token is not None:
             on_token(token)
 
         if token.type == "text":
@@ -825,6 +838,8 @@ def _accumulate_stream_tokens(
 
         elif token.type == "done":
             break
+
+    flush_visible_text()
 
     # Flush the last accumulated tool call.
     if current_tool is not None:
@@ -1065,6 +1080,8 @@ def run_agent_turn_stream(
         _record_cost_usage(model, cost_tracker)
         _notify_usage(model, on_usage)
 
+        text_content, text_kind = parse_assistant_text(text_content)
+
         # ------ Handle empty responses ------
         is_empty = len(text_content.strip()) == 0 and not parsed_calls
 
@@ -1171,6 +1188,13 @@ def run_agent_turn_stream(
                 )
 
             # Continue to the next agent step after tool execution.
+            continue
+
+        if text_kind == "progress":
+            if on_progress_message:
+                on_progress_message(text_content)
+            current_messages.append({"role": "assistant_progress", "content": text_content})
+            current_messages.append({"role": "user", "content": NUDGE_CONTINUE})
             continue
 
         # ------ Plain text final answer ------

@@ -4,6 +4,7 @@
   "description": "Desktop client for pepsicode, inspired by DeepSeek Harness UI",
   "main": "dist-electron/main.js",
   "scripts": {
+    "test": "node --test tests/tool-activity.test.cjs",
     "dev": "vite",
     "build": "tsc -b && vite build",
     "electron:dev": "concurrently \"vite\" \"wait-on http://localhost:5173 && electron .\"",

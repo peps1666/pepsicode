@@ -10,21 +10,21 @@ import urllib.request
 from collections.abc import Generator
 from typing import Any, Literal, cast
 
+from pepsicode.llm.assistant_text import parse_assistant_text
+from pepsicode.llm.model_settings import model_capabilities, model_selection_error, reasoning_request_fields
+from pepsicode.llm.providers import auth_headers, messages_url
 from pepsicode.types import AgentStep, ChatMessage, ProviderThinkingBlock, StepDiagnostics, StreamToken, ToolCall
 
 DEFAULT_MAX_RETRIES = 4
 BASE_RETRY_DELAY_MS = 500
 MAX_RETRY_DELAY_MS = 8000
 
-# Status codes that indicate the request body / context exceeded the model
-# limit.  These are NOT retried verbatim - the caller compacts and retries.
-OVERFLOW_STATUSES = {400, 413}
 # Service-overloaded: retry on the configured fallback model if one exists.
 OVERLOAD_STATUS = 529
 
 
 class ContextOverflowError(Exception):
-    """Raised when the API rejects a request because it is too large (400/413).
+    """Raised only for request-size or context-length errors.
 
     The agent loop catches this, compacts the conversation, and retries.
     """
@@ -116,6 +116,33 @@ def _extract_error_message(data: Any, status: int) -> str:
                 message = message[:997].rstrip() + "..."
             return message
     return f"Model request failed: {status}"
+
+
+def _is_context_overflow(data: Any, status: int) -> bool:
+    """A 400 can also mean an invalid model, credentials, or request parameters."""
+    if status == 413:
+        return True
+    if status != 400 or not isinstance(data, dict):
+        return False
+    error = data.get("error", {})
+    if isinstance(error, dict):
+        codes = (error.get("type"), error.get("code"))
+        if any(
+            code in {"context_length_exceeded", "prompt_too_long", "request_too_large"}
+            for code in codes
+            if isinstance(code, str)
+        ):
+            return True
+    message = _extract_error_message(data, status).lower()
+    return bool(
+        re.search(
+            r"prompt (?:is )?too long|request (?:is )?too large|maximum context length|"
+            r"context (?:length|window|limit).{0,80}(?:exceed|too (?:long|large))|"
+            r"exceed.{0,80}(?:context (?:length|window|limit)|input token limit)|"
+            r"input.{0,40}tokens?.{0,40}exceed|too many input tokens",
+            message,
+        )
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -228,22 +255,7 @@ def _consume_pending_usage() -> dict[str, int] | None:
 
 
 def _parse_assistant_text(content: str) -> tuple[str, Literal["final", "progress"] | None]:
-    trimmed = content.strip()
-    if not trimmed:
-        return "", None
-    markers = [
-        ("<final>", "final", "</final>"),
-        ("[FINAL]", "final", None),
-        ("<progress>", "progress", "</progress>"),
-        ("[PROGRESS]", "progress", None),
-    ]
-    for prefix, kind, closing_tag in markers:
-        if trimmed.startswith(prefix):
-            raw = trimmed[len(prefix) :].strip()
-            if closing_tag:
-                raw = raw.replace(closing_tag, "").strip()
-            return raw, kind
-    return trimmed, None
+    return parse_assistant_text(content)
 
 
 def _to_text_block(text: str) -> dict[str, str]:
@@ -333,20 +345,18 @@ class AnthropicModelAdapter:
                 for tool in self.tools.list()
             ],
         }
-        if self.runtime.get("maxOutputTokens") is not None:
-            request_body["max_tokens"] = self.runtime["maxOutputTokens"]
+        request_body["max_tokens"] = self.runtime.get("maxOutputTokens") or min(
+            4096, model_capabilities(self.runtime, model).get("maxOutputTokens", 4096)
+        )
+        request_body.update(reasoning_request_fields(self.runtime, model))
 
         return urllib.request.Request(
-            url=self.runtime["baseUrl"].rstrip("/") + "/v1/messages",
+            url=messages_url(self.runtime),
             data=json.dumps(request_body).encode("utf-8"),
             headers={
                 "content-type": "application/json",
                 "anthropic-version": "2023-06-01",
-                **(
-                    {"x-api-key": self.runtime["apiKey"]}
-                    if self.runtime.get("apiKey")
-                    else {"Authorization": f"Bearer {self.runtime['authToken']}"}
-                ),
+                **auth_headers(self.runtime),
             },
             method="POST",
         )
@@ -374,21 +384,19 @@ class AnthropicModelAdapter:
                 for tool in self.tools.list()
             ],
         }
-        if self.runtime.get("maxOutputTokens") is not None:
-            request_body["max_tokens"] = self.runtime["maxOutputTokens"]
+        request_body["max_tokens"] = self.runtime.get("maxOutputTokens") or min(
+            4096, model_capabilities(self.runtime, model).get("maxOutputTokens", 4096)
+        )
+        request_body.update(reasoning_request_fields(self.runtime, model))
 
         return urllib.request.Request(
-            url=self.runtime["baseUrl"].rstrip("/") + "/v1/messages",
+            url=messages_url(self.runtime),
             data=json.dumps(request_body).encode("utf-8"),
             headers={
                 "content-type": "application/json",
                 "anthropic-version": "2023-06-01",
                 "accept": "text/event-stream",
-                **(
-                    {"x-api-key": self.runtime["apiKey"]}
-                    if self.runtime.get("apiKey")
-                    else {"Authorization": f"Bearer {self.runtime['authToken']}"}
-                ),
+                **auth_headers(self.runtime),
             },
             method="POST",
         )
@@ -467,6 +475,9 @@ class AnthropicModelAdapter:
         updated when the final usage delta arrives, mirroring ``next()`` so
         callers don't have to special-case the streaming path.
         """
+        problem = model_selection_error(self.runtime)
+        if problem:
+            raise RuntimeError(problem)
         system_message, converted_messages = _to_anthropic_messages(messages)
         request = self._build_stream_request(self.runtime["model"], system_message, converted_messages)
 
@@ -485,7 +496,7 @@ class AnthropicModelAdapter:
             except Exception:  # noqa: BLE001
                 data = {}
             status = getattr(error, "code", 0)
-            if status in OVERFLOW_STATUSES:
+            if _is_context_overflow(data, status):
                 raise ContextOverflowError(_extract_error_message(data, status))
             if status == OVERLOAD_STATUS:
                 raise ServiceOverloadError(_extract_error_message(data, status))
@@ -538,6 +549,9 @@ class AnthropicModelAdapter:
         yield StreamToken(type="done")
 
     def next(self, messages: list[ChatMessage]) -> AgentStep:
+        problem = model_selection_error(self.runtime)
+        if problem:
+            raise RuntimeError(problem)
         system_message, converted_messages = _to_anthropic_messages(messages)
         request = self._build_request(self.runtime["model"], system_message, converted_messages)
         data, status = self._send(request)
@@ -552,7 +566,7 @@ class AnthropicModelAdapter:
                 raise ServiceOverloadError(_extract_error_message(data, status))
 
         # Context/request too large: signal the loop to compact and retry.
-        if status in OVERFLOW_STATUSES:
+        if _is_context_overflow(data, status):
             raise ContextOverflowError(_extract_error_message(data, status))
 
         if status >= 400:

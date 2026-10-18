@@ -23,13 +23,26 @@
   display: flex;
   align-items: center;
   gap: 12px;
+  min-width: 0;
 }
 
 .modelName {
+  background: transparent;
+  border: 1px solid var(--dsw-alias-border-l1);
+  border-radius: 7px;
+  padding: 5px 9px;
+  cursor: pointer;
+  max-width: 320px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   font-weight: 600;
   color: var(--dsw-alias-label-primary);
   font-size: 13px;
 }
+
+.modelName:disabled { opacity: .55; cursor: not-allowed; }
+.modelName:focus-visible { outline: 2px solid #2760d8; outline-offset: 2px; }
 
 .planBadge {
   background-color: var(--dsw-alias-state-warn-tertiary);
@@ -45,6 +58,7 @@
   display: flex;
   align-items: center;
   gap: 8px;
+  min-width: 0;
 }
 
 .cwd {

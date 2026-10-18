@@ -1,6 +1,7 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import type { ChatMessage } from "../stores/session";
 import ToolActivityItem from "./ToolActivityItem";
+import { buildToolActivities } from "./toolActivity";
 import styles from "./ThinkingGroup.module.css";
 
 export function isThinkingMessage(message: ChatMessage): boolean {
@@ -13,22 +14,24 @@ interface ThinkingGroupProps {
 }
 
 export default function ThinkingGroup({ messages, autoExpanded }: ThinkingGroupProps) {
-  const [expanded, setExpanded] = useState(autoExpanded);
+  const failures = messages.filter((message) => message.role === "tool_result" && message.isError).length;
+  const [expanded, setExpanded] = useState(autoExpanded || failures > 0);
   const wasAutoExpanded = useRef(autoExpanded);
+  const contentId = useId();
+  const activities = buildToolActivities(messages);
 
   useEffect(() => {
     if (autoExpanded) {
       setExpanded(true);
     } else if (wasAutoExpanded.current) {
-      setExpanded(false);
+      setExpanded(failures > 0);
     }
     wasAutoExpanded.current = autoExpanded;
-  }, [autoExpanded]);
+  }, [autoExpanded, failures]);
 
   const toolCalls = messages.filter((message) => message.role === "tool_call").length;
-  const failures = messages.filter((message) => message.role === "tool_result" && message.isError).length;
   const summary = [
-    toolCalls > 0 ? `${toolCalls} tool ${toolCalls === 1 ? "call" : "calls"}` : null,
+    toolCalls > 0 ? `${toolCalls} ${toolCalls === 1 ? "tool" : "tools"}` : null,
     failures > 0 ? `${failures} failed` : null,
   ].filter(Boolean).join(" · ");
 
@@ -39,15 +42,16 @@ export default function ThinkingGroup({ messages, autoExpanded }: ThinkingGroupP
         className={styles.header}
         onClick={() => setExpanded((value) => !value)}
         aria-expanded={expanded}
+        aria-controls={contentId}
       >
-        <span className={`${styles.chevron} ${expanded ? styles.chevronOpen : ""}`}>›</span>
         <span className={`${styles.indicator} ${autoExpanded ? styles.indicatorActive : ""}`} />
-        <span className={styles.title}>{autoExpanded ? "Thinking…" : "Thought process"}</span>
-        {summary && <span className={styles.summary}>{summary}</span>}
+        <span className={styles.title}>{autoExpanded ? "Working…" : "Activity"}</span>
+        {summary && <span className={`${styles.summary} ${failures ? styles.hasFailures : ""}`}>{summary}</span>}
+        <svg className={`${styles.chevron} ${expanded ? styles.chevronOpen : ""}`} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true"><path d="m6 4 4 4-4 4" /></svg>
       </button>
       {expanded && (
-        <div className={styles.content}>
-          {messages.map((message) => <ToolActivityItem key={message.id} message={message} />)}
+        <div className={styles.content} id={contentId}>
+          {activities.map((activity) => <ToolActivityItem key={activity.message.id} activity={activity} active={autoExpanded} />)}
         </div>
       )}
     </section>

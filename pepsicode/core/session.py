@@ -58,6 +58,7 @@ class SessionData:
     mcp_servers: list[dict[str, Any]] = field(default_factory=list)
     permission_mode: str = "default"
     plan_file_path: str | None = None
+    model_settings: dict[str, str] = field(default_factory=dict)
     metadata: SessionMetadata = field(default=None)
 
     def __post_init__(self):
@@ -176,6 +177,7 @@ def save_session(session: SessionData) -> None:
         "mcp_servers": session.mcp_servers,
         "permission_mode": session.permission_mode,
         "plan_file_path": session.plan_file_path,
+        "model_settings": session.model_settings,
         "metadata": {
             "session_id": session.metadata.session_id,
             "created_at": session.metadata.created_at,
@@ -224,6 +226,7 @@ def load_session(session_id: str) -> SessionData | None:
             mcp_servers=data.get("mcp_servers", []),
             permission_mode=data.get("permission_mode", "default"),
             plan_file_path=data.get("plan_file_path"),
+            model_settings=data.get("model_settings", {}),
             metadata=metadata,
         )
     except (json.JSONDecodeError, KeyError, TypeError):

@@ -28,7 +28,7 @@ from typing import Any
 
 from pepsicode.agents.trace import TraceManager
 from pepsicode.approval import ApprovalBackend, ApprovalDecision, ApprovalOutcome, ApprovalRequest
-from pepsicode.config import load_runtime_config
+from pepsicode.config import load_runtime_config, save_mini_code_settings
 from pepsicode.context.context_manager import ContextManager
 from pepsicode.context.prompt import build_session_prompt
 from pepsicode.core.agent_loop import run_agent_turn_stream
@@ -45,6 +45,16 @@ from pepsicode.hooks import HookContext, HookEvent, create_hook_engine
 from pepsicode.llm.anthropic_adapter import AnthropicModelAdapter
 from pepsicode.llm.cost_tracker import CostTracker
 from pepsicode.llm.mock_model import MockModelAdapter
+from pepsicode.llm.model_discovery import refresh_model_catalog
+from pepsicode.llm.model_settings import (
+    apply_model_settings,
+    model_capabilities,
+    model_catalog,
+    model_selection_error,
+    validate_model_settings,
+)
+from pepsicode.llm.provider_setup import probe_provider_setup, public_setup_result, save_provider_setup
+from pepsicode.llm.providers import model_settings_snapshot, provider_catalog, provider_runtime
 from pepsicode.logging_config import get_logger, setup_logging
 from pepsicode.permissions import PermissionManager, PermissionMode
 from pepsicode.server import protocol
@@ -154,6 +164,8 @@ class ClientSession:
         self.memory_manager: Any = None
         self._turn_lock = asyncio.Lock()
         self._current_turn_task: asyncio.Task | None = None
+        self._worker_active = threading.Event()
+        self._provider_setup: dict | None = None
 
     def initialize(self, *, force: bool = False) -> None:
         """Initialize workspace-bound services, rebuilding them when requested."""
@@ -166,6 +178,7 @@ class ClientSession:
                 logger.warning("Failed to dispose tools while switching workspace: %s", error)
 
         self.messages = []
+        self._provider_setup = None
         self.runtime = None
         self.model = None
         self.tools = None
@@ -182,6 +195,8 @@ class ClientSession:
             self.runtime = None
 
         self.cost_tracker = CostTracker()
+        if self.runtime is not None and os.environ.get("PEPSI_CODE_MODEL_MODE") != "mock":
+            refresh_model_catalog(self.runtime)
         self.trace_manager = TraceManager()
         self.tools = create_default_tool_registry(
             self.cwd, runtime=self.runtime, cost_tracker=self.cost_tracker, trace_manager=self.trace_manager
@@ -236,6 +251,57 @@ class ClientSession:
         assert self.permissions is not None
         # RemotePermissionBridge now implements ApprovalBackend directly.
         self.permissions.approval = handler
+
+    def model_settings(self, provider: str | None = None) -> dict[str, Any]:
+        """Return public model settings only; credentials never cross the socket."""
+        active = self.runtime or {"model": "mock"}
+        runtime = provider_runtime(active, provider)
+        return {
+            "provider": runtime.get("provider", ""),
+            "providers": provider_catalog(active),
+            "model": runtime["model"],
+            "reasoningEffort": runtime.get("reasoningEffort", "default"),
+            "models": model_catalog(runtime),
+            "catalogError": runtime.get("catalogError", ""),
+            "catalogSource": "api" if runtime.get("_catalogAuthoritative") else "config",
+            "isMock": isinstance(self.model, MockModelAdapter),
+        }
+
+    def update_model(self, params: dict[str, Any]) -> dict[str, Any]:
+        if self._turn_lock.locked() or self._worker_active.is_set():
+            raise ValueError("Wait for the current turn to finish before changing model settings")
+        if not self.runtime or isinstance(self.model, MockModelAdapter):
+            raise ValueError("Model settings are unavailable in mock mode. Configure an API and restart the server.")
+        provider = params.get("provider")
+        candidate = provider_runtime(self.runtime, provider)
+        model = params.get("model", candidate["model"])
+        # A model change resets effort unless the caller explicitly picks a compatible level.
+        effort = params.get(
+            "reasoningEffort",
+            "default"
+            if model != self.runtime["model"] or candidate is not self.runtime
+            else self.runtime.get("reasoningEffort", "default"),
+        )
+        if self.permissions:
+            self.permissions.ensure_local_command_allowed(f"/model {model}")
+        validate_model_settings(candidate, model, effort)
+        problem = model_selection_error(candidate, model)
+        if problem:
+            raise ValueError(problem)
+        updates = {"model": model, "reasoningEffort": effort}
+        if candidate.get("provider"):
+            updates["provider"] = candidate["provider"]
+        persist = params.get("persist", False)
+        if not isinstance(persist, bool):
+            raise ValueError("persist must be a boolean")
+        if persist:
+            save_mini_code_settings(updates)
+        apply_model_settings(
+            self.runtime, model, effort, messages=self.messages, context_manager=self.context_manager, provider=provider
+        )
+        if self.session_data:
+            self.session_data.model_settings = updates
+        return self.model_settings()
 
 
 # ---------------------------------------------------------------------------
@@ -359,6 +425,8 @@ class PepsiCodeServer:
             return {"status": "ok", "cwd": session.cwd}
 
         if method == "session/create":
+            if session._turn_lock.locked() or session._worker_active.is_set():
+                raise ValueError("Wait for the current turn to finish before creating a session")
             cwd = normalize_workspace(params.get("cwd", str(Path.cwd())))
             session.cwd = cwd
             session.initialize(force=session.tools is not None)
@@ -367,7 +435,7 @@ class PepsiCodeServer:
             return {
                 "session_id": session.session_data.session_id,
                 "cwd": session.cwd,
-                "model": session.runtime.get("model") if session.runtime else "mock",
+                **session.model_settings(),
                 "tools": [t.name for t in session.tools.list()],
                 "permissions": session.permissions.get_summary() if session.permissions else [],
             }
@@ -390,6 +458,8 @@ class PepsiCodeServer:
             }
 
         if method == "session/resume":
+            if session._turn_lock.locked() or session._worker_active.is_set():
+                raise ValueError("Wait for the current turn to finish before resuming a session")
             session_id = params.get("session_id", "")
             loaded = load_session(session_id)
             if loaded is None:
@@ -405,6 +475,11 @@ class PepsiCodeServer:
             session.set_permission_handler(bridge)
             session.session_data = loaded
             session.messages = list(loaded.messages)
+            if loaded.model_settings and session.runtime and not isinstance(session.model, MockModelAdapter):
+                try:
+                    session.update_model(loaded.model_settings)
+                except ValueError as error:
+                    logger.warning("Could not restore session model settings: %s", error)
             if session.permissions and loaded.permission_mode == PermissionMode.PLAN.value:
                 session.permissions.restore_plan_state(loaded.permission_mode, loaded.plan_file_path)
             session._rebuild_system_prompt()
@@ -414,10 +489,74 @@ class PepsiCodeServer:
                 "message_count": len(session.messages),
                 "history": protocol.serialize_session_history(session.messages),
                 "workspace": session.cwd,
-                "model": session.runtime.get("model") if session.runtime else "mock",
+                **session.model_settings(),
                 "permission_mode": session.permissions.mode.value if session.permissions else "default",
                 "plan_file": session.permissions.plan_file_path if session.permissions else None,
             }
+
+        if method == "model/settings":
+            candidate = provider_runtime(session.runtime or {"model": "mock"}, params.get("provider"))
+            if (
+                (params.get("refresh") or params.get("provider"))
+                and session.runtime
+                and not isinstance(session.model, MockModelAdapter)
+            ):
+                await asyncio.to_thread(refresh_model_catalog, candidate, force=bool(params.get("refresh")))
+            settings = session.model_settings(params.get("provider"))
+            model = params.get("model")
+            if model is not None:
+                validate_model_settings(candidate, model, "default")
+                settings["capabilities"] = model_capabilities(candidate, model)
+            return settings
+
+        if method == "model/update":
+            if params.get("provider") and session.runtime:
+                await asyncio.to_thread(refresh_model_catalog, provider_runtime(session.runtime, params["provider"]))
+            return session.update_model(params)
+
+        if method in {"provider/probe", "provider/save", "provider/cancel"}:
+            if session._turn_lock.locked() or session._worker_active.is_set():
+                raise ValueError("请等待当前对话结束后再配置厂商")
+            if session.permissions:
+                session.permissions.ensure_local_command_allowed("/provider add")
+            if method == "provider/cancel":
+                session._provider_setup = None
+                return {"cancelled": True}
+            if method == "provider/probe":
+                session._provider_setup = None
+                draft = params.get("draft")
+                if not isinstance(draft, dict):
+                    raise ValueError("配置内容必须为对象")
+                candidate = await asyncio.to_thread(probe_provider_setup, dict(draft))
+                token = uuid.uuid4().hex
+                session._provider_setup = {"token": token, "draft": dict(draft), "candidate": candidate}
+                return {"token": token, **public_setup_result(candidate)}
+            pending = session._provider_setup
+            if not pending or params.get("token") != pending["token"]:
+                raise ValueError("请先读取模型列表，再确认保存")
+            draft = {**pending["draft"], "model": params.get("model")}
+            runtime = session.runtime if session.runtime is not None else {"model": ""}
+            save_provider_setup(runtime, draft, pending["candidate"])
+            session.runtime = runtime
+            if isinstance(session.model, MockModelAdapter) or session.model is None:
+                old_tools = session.tools
+                session.tools = create_default_tool_registry(
+                    session.cwd, runtime=runtime, cost_tracker=session.cost_tracker, trace_manager=session.trace_manager
+                )
+                session.model = AnthropicModelAdapter(runtime, session.tools)
+                if old_tools:
+                    old_tools.dispose()
+            session.messages[:] = [
+                message for message in session.messages if message.get("role") != "assistant_thinking"
+            ]
+            if session.context_manager is None:
+                session.context_manager = ContextManager(model=runtime["model"])
+            apply_model_settings(runtime, runtime["model"], "default", context_manager=session.context_manager)
+            session.context_manager.summarizer = session.model.summarize
+            if session.session_data:
+                session.session_data.model_settings = model_settings_snapshot(runtime)
+            session._provider_setup = None
+            return session.model_settings()
 
         if method == "session/delete":
             from pepsicode.core.session import delete_session
@@ -554,6 +693,8 @@ class PepsiCodeServer:
             raise RuntimeError("Session not initialized. Call session/create first.")
 
         async with session._turn_lock:
+            if session._worker_active.is_set():
+                raise ValueError("The previous turn is still finishing")
             user_input = params.get("input", "").strip()
             if not user_input:
                 raise ValueError("Missing 'input' parameter")
@@ -620,27 +761,36 @@ class PepsiCodeServer:
                 asyncio.run_coroutine_threadsafe(emit("cost/update", usage), loop)
 
             def run_turn_sync() -> list[ChatMessage]:
-                return run_agent_turn_stream(
-                    model=session.model,
-                    tools=session.tools,
-                    messages=list(session.messages),
-                    cwd=session.cwd,
-                    permissions=session.permissions,
-                    context_manager=session.context_manager,
-                    cost_tracker=session.cost_tracker,
-                    on_token=on_token,
-                    on_tool_start=on_tool_start,
-                    on_tool_result=on_tool_result,
-                    on_assistant_message=on_assistant_message,
-                    on_error_message=on_error_message,
-                    on_progress_message=on_progress_message,
-                    on_usage=on_usage,
-                    hook_engine=session.hook_engine,
-                    memory=session.memory_manager,
-                )
+                try:
+                    return run_agent_turn_stream(
+                        model=session.model,
+                        tools=session.tools,
+                        messages=list(session.messages),
+                        cwd=session.cwd,
+                        permissions=session.permissions,
+                        context_manager=session.context_manager,
+                        cost_tracker=session.cost_tracker,
+                        on_token=on_token,
+                        on_tool_start=on_tool_start,
+                        on_tool_result=on_tool_result,
+                        on_assistant_message=on_assistant_message,
+                        on_error_message=on_error_message,
+                        on_progress_message=on_progress_message,
+                        on_usage=on_usage,
+                        hook_engine=session.hook_engine,
+                        memory=session.memory_manager,
+                    )
+                finally:
+                    session._worker_active.clear()
 
             executor = ThreadPoolExecutor(max_workers=1)
-            future = loop.run_in_executor(executor, run_turn_sync)
+            session._worker_active.set()
+            try:
+                future = loop.run_in_executor(executor, run_turn_sync)
+            except Exception:
+                session._worker_active.clear()
+                executor.shutdown(wait=False)
+                raise
             session._current_turn_task = asyncio.wrap_future(future)
 
             try:
@@ -658,6 +808,8 @@ class PepsiCodeServer:
                 session.session_data.messages = list(session.messages)
                 session.session_data.permission_mode = session.permissions.mode.value
                 session.session_data.plan_file_path = session.permissions.plan_file_path
+                if session.runtime and not isinstance(session.model, MockModelAdapter):
+                    session.session_data.model_settings = model_settings_snapshot(session.runtime)
                 try:
                     save_session(session.session_data)
                     await emit("session/saved", {"session_id": session.session_data.session_id})
@@ -695,8 +847,23 @@ class PepsiCodeServer:
         try:
             from pepsicode.cli.cli_commands import try_handle_local_command
 
-            result = try_handle_local_command(user_input, tools=session.tools, permissions=session.permissions)
+            result = try_handle_local_command(
+                user_input,
+                tools=session.tools,
+                permissions=session.permissions,
+                runtime=session.runtime,
+                model_adapter=session.model,
+                messages=session.messages,
+                context_manager=session.context_manager,
+            )
             if result is not None:
+                if user_input.split()[0] in {"/model", "/effort", "/provider"}:
+                    if session.session_data and session.runtime and not isinstance(session.model, MockModelAdapter):
+                        session.session_data.model_settings = model_settings_snapshot(session.runtime)
+                    await emit("model/settings", session.model_settings())
+                    await emit("message/start", {})
+                    await emit("message/end", {"content": result})
+                    await emit("turn/end", {"status": "ok"})
                 return {"output": result}
         except Exception as error:  # noqa: BLE001
             logger.warning("Local command failed: %s", error)

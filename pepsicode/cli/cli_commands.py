@@ -2,13 +2,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from pepsicode.cli.model_commands import handle_model_command
 from pepsicode.config import (
     CLAUDE_SETTINGS_PATH,
     PEPSI_CODE_MCP_PATH,
     PEPSI_CODE_PERMISSIONS_PATH,
     PEPSI_CODE_SETTINGS_PATH,
     load_runtime_config,
-    save_mini_code_settings,
 )
 from pepsicode.hooks.loader import LOCAL_HOOKS_FILE, PROJECT_HOOKS_FILE, USER_HOOKS_PATH
 
@@ -40,7 +40,14 @@ SLASH_COMMANDS = [
     # Status
     SlashCommand("/status", "/status", "Show application state summary.", "Status"),
     SlashCommand("/model", "/model", "Show the current model.", "Status"),
-    SlashCommand("/model", "/model <model-name>", "Persist a model override into settings.", "Status"),
+    SlashCommand(
+        "/model", "/model <model-name>", "Switch the current session model; append --save for defaults.", "Status"
+    ),
+    SlashCommand("/model", "/model list", "List configured model candidates and reasoning levels.", "Status"),
+    SlashCommand("/model", "/model refresh", "从当前 API 重新读取模型名称与能力。", "Status"),
+    SlashCommand("/provider", "/provider", "选择 DeepSeek（默认）、Kimi、GLM 或千问及其模型。", "Status"),
+    SlashCommand("/provider", "/provider add", "逐步配置自定义厂商：地址、Key、模型和保存。", "Status"),
+    SlashCommand("/effort", "/effort", "选择思考强度，查看所有档位与当前值。", "Status"),
     SlashCommand("/cost", "/cost [--detailed]", "Show API cost and usage report.", "Status"),
     SlashCommand("/context", "/context", "Show context window usage.", "Status"),
     SlashCommand("/tasks", "/tasks", "Show current task list.", "Status"),
@@ -95,6 +102,9 @@ def format_slash_commands() -> str:
         "\U0001f4ca Status & Info": [
             ("/status", "Show application state summary"),
             ("/model", "Show or change current model"),
+            ("/provider", "选择国内模型服务商（默认 DeepSeek）"),
+            ("/model list", "List model candidates and reasoning levels"),
+            ("/effort [level] [--save]", "Show or change reasoning effort"),
             ("/cost", "Show API cost and usage report"),
             ("/context", "Show context window usage"),
             ("/tasks", "Show current task list"),
@@ -155,7 +165,25 @@ def complete_slash_command(line: str) -> tuple[list[str], str]:
     return (hits if hits else [command.usage for command in SLASH_COMMANDS], line)
 
 
-def try_handle_local_command(user_input: str, tools=None, permissions=None) -> str | None:
+def try_handle_local_command(
+    user_input: str,
+    tools=None,
+    permissions=None,
+    *,
+    runtime=None,
+    model_adapter=None,
+    messages=None,
+    context_manager=None,
+) -> str | None:
+    if user_input.split() and user_input.split()[0] in {"/model", "/effort", "/provider"}:
+        if permissions is not None:
+            try:
+                permissions.ensure_local_command_allowed(user_input)
+            except RuntimeError as error:
+                return str(error)
+        return handle_model_command(
+            user_input, runtime=runtime, model_adapter=model_adapter, messages=messages, context_manager=context_manager
+        )
     if user_input in {"/", "/help"}:
         return format_slash_commands()
 
@@ -267,36 +295,23 @@ def try_handle_local_command(user_input: str, tools=None, permissions=None) -> s
 
     if user_input == "/status":
         try:
-            runtime = load_runtime_config()
+            runtime = runtime if runtime is not None else load_runtime_config()
         except Exception as error:  # noqa: BLE001
             return f"runtime not configured: {error}"
         auth = "ANTHROPIC_AUTH_TOKEN" if runtime.get("authToken") else "ANTHROPIC_API_KEY"
         lines = [
             f"model: {runtime['model']}",
+            f"reasoning effort: {runtime.get('reasoningEffort', 'default')}",
             f"baseUrl: {runtime['baseUrl']}",
             f"auth: {auth}",
             f"mcp servers: {len(runtime.get('mcpServers', {}))}",
-            runtime["sourceSummary"],
+            runtime.get("sourceSummary", "active session settings"),
         ]
         if permissions is not None:
             lines.append(f"permission mode: {permissions.mode.value}")
             if permissions.plan_file_path:
                 lines.append(f"plan file: {permissions.plan_file_path}")
         return "\n".join(lines)
-
-    if user_input == "/model":
-        try:
-            runtime = load_runtime_config()
-        except Exception as error:  # noqa: BLE001
-            return f"runtime not configured: {error}"
-        return f"current model: {runtime['model']}"
-
-    if user_input.startswith("/model "):
-        model = user_input[len("/model ") :].strip()
-        if not model:
-            return "usage: /model <model-name>"
-        save_mini_code_settings({"model": model})
-        return f"saved model={model} to {PEPSI_CODE_SETTINGS_PATH}"
 
     return None
 

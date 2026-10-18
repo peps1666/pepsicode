@@ -38,7 +38,34 @@ class WheelEvent:
     kind: str = "wheel"
 
 
-ParsedInputEvent = Union[KeyEvent, TextEvent, WheelEvent]
+@dataclass(frozen=True)
+class MouseEvent:
+    """Left-button press/drag/release at a 0-based screen cell."""
+
+    action: Literal["press", "drag", "release"]
+    x: int
+    y: int
+    kind: str = "mouse"
+
+
+ParsedInputEvent = Union[KeyEvent, TextEvent, WheelEvent, MouseEvent]
+
+
+def _decode_mouse_button(button: int, x: int, y: int, released: bool) -> ParsedInputEvent | None:
+    # Wheel events (button & 0x43 == 0x40 → up, 0x41 → down)
+    if (button & 0x43) == 0x40:
+        return WheelEvent(direction="up")
+    if (button & 0x43) == 0x41:
+        return WheelEvent(direction="down")
+    if button & 0x40:
+        return None
+    low = button & 0x03
+    if released:
+        return MouseEvent(action="release", x=x, y=y)
+    if low != 0:
+        # Middle/right buttons, or motion without a held button.
+        return None
+    return MouseEvent(action="drag" if button & 0x20 else "press", x=x, y=y)
 
 
 @dataclass(frozen=True)
@@ -105,22 +132,16 @@ def parse_escape_sequence(chunk: str) -> tuple[ParsedInputEvent | None, int]:
     # SGR Mouse: ESC[<button;x;yM/m
     sgr_match = _SGR_MOUSE_RE.match(chunk)
     if sgr_match:
-        button = int(sgr_match.group(1))
-        # wheel events (button & 0x43 == 0x40 → up, 0x41 → down)
-        if (button & 0x43) == 0x40:
-            return WheelEvent(direction="up"), sgr_match.end()
-        elif (button & 0x43) == 0x41:
-            return WheelEvent(direction="down"), sgr_match.end()
-        return None, sgr_match.end()
+        button, x, y = (int(sgr_match.group(n)) for n in (1, 2, 3))
+        released = sgr_match.group(4) == "m"
+        return _decode_mouse_button(button, x - 1, y - 1, released), sgr_match.end()
 
-    # Legacy mouse: ESC[M...
+    # Legacy mouse: ESC[M + three bytes offset by 32; button 3 means release.
     if chunk.startswith("\x1b[M") and len(chunk) >= 6:
-        button = ord(chunk[3])
-        if (button & 0x43) == 0x40:
-            return WheelEvent(direction="up"), 6
-        elif (button & 0x43) == 0x41:
-            return WheelEvent(direction="down"), 6
-        return None, 6
+        button = ord(chunk[3]) - 32
+        x, y = ord(chunk[4]) - 33, ord(chunk[5]) - 33
+        released = (button & 0x43) == 0x03
+        return _decode_mouse_button(button, x, y, released), 6
 
     # CSI cursor: ESC[{1;modifier}A/B/C/D/H/F
     csi_cursor_match = _CSI_CURSOR_RE.match(chunk)

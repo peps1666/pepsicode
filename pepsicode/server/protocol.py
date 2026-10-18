@@ -13,6 +13,8 @@ from __future__ import annotations
 
 from typing import Any, Literal, TypedDict
 
+from pepsicode.llm.assistant_text import parse_assistant_text
+
 # ---------------------------------------------------------------------------
 # Envelope
 # ---------------------------------------------------------------------------
@@ -64,6 +66,11 @@ RequestMethod = Literal[
     "context/query",
     "tools/list",
     "config/validate",
+    "model/settings",
+    "model/update",
+    "provider/probe",
+    "provider/save",
+    "provider/cancel",
     "status",
 ]
 
@@ -72,6 +79,7 @@ RequestMethod = Literal[
 # ---------------------------------------------------------------------------
 
 EventName = Literal[
+    "model/settings",
     "connection/ready",
     "message/start",
     "message/delta",
@@ -124,17 +132,21 @@ def serialize_session_history(messages: list[dict[str, Any]]) -> list[dict[str, 
             continue
 
         if role in {"user", "assistant"}:
+            content = str(message.get("content", ""))
+            if role == "assistant" and not message.get("isError"):
+                content, _ = parse_assistant_text(content)
             history.append(
                 {
                     "role": role,
-                    "content": str(message.get("content", "")),
+                    "content": content,
                     "is_error": bool(message.get("isError", False)),
                 }
             )
             continue
 
         if role == "assistant_progress":
-            history.append({"role": "progress", "content": str(message.get("content", ""))})
+            content, _ = parse_assistant_text(str(message.get("content", "")))
+            history.append({"role": "progress", "content": content})
             continue
 
         if role == "assistant_tool_call":

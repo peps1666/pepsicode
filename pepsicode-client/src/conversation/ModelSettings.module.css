@@ -1,0 +1,42 @@
+.dialog {
+  margin: auto;
+  padding: 24px;
+  width: min(440px, calc(100vw - 32px));
+  max-height: calc(100vh - 32px);
+  overflow: auto;
+  border: 1px solid var(--dsw-alias-border-l1);
+  border-radius: 14px;
+  background: var(--dsw-alias-bg-layer-1);
+  color: var(--dsw-alias-label-primary);
+  box-shadow: 0 16px 60px #0003;
+}
+.dialog::backdrop { background: #0005; }
+.dialog h2 { font-size: 18px; margin: 0 0 8px; }
+.dialog p { font-size: 12px; line-height: 1.6; color: var(--dsw-alias-label-secondary); margin: 8px 0 16px; }
+.field { display: flex; flex-direction: column; gap: 8px; font-size: 13px; margin-top: 16px; }
+.field input, .field select {
+  padding: 9px 10px;
+  width: 100%;
+  border: 1px solid var(--dsw-alias-border-l1);
+  border-radius: 7px;
+  background: var(--dsw-alias-bg-layer-1);
+  color: inherit;
+  font: inherit;
+}
+.checkbox { display: flex; align-items: center; gap: 8px; margin-top: 18px; font-size: 13px; }
+.actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 20px; }
+.actions button {
+  border: 1px solid var(--dsw-alias-border-l1);
+  border-radius: 7px;
+  padding: 8px 16px;
+  background: var(--dsw-alias-bg-layer-1);
+  color: inherit;
+  cursor: pointer;
+}
+.actions button[type="submit"] { background: #2760d8; color: white; border-color: #2760d8; }
+.actions button:disabled, .field input:disabled, .field select:disabled { opacity: .5; cursor: not-allowed; }
+.dialog .error { color: var(--dsw-alias-state-error-primary); }
+.field span { font-size: 12px; line-height: 1.6; color: var(--dsw-alias-label-secondary); }
+.summary { font-size: 13px; line-height: 1.6; }
+.summary dt { margin-top: 12px; color: var(--dsw-alias-label-secondary); }
+.summary dd { margin: 3px 0 0; overflow-wrap: anywhere; }

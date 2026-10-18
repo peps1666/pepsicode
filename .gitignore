@@ -28,6 +28,8 @@ pepsicode-client/release/
 
 # Testing
 .pytest_cache/
+.pytest_tmp/
+.pytest_codex_tmp/
 .coverage
 htmlcov/
 

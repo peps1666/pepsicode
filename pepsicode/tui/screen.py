@@ -1,9 +1,87 @@
 from __future__ import annotations
 
 import os
+import re
 import sys
+from dataclasses import dataclass
 
-from .chrome import truncate_plain
+from .chrome import char_display_width, strip_ansi, truncate_plain
+
+# DEC mode 2026: the terminal buffers everything between begin/end and shows
+# it in one paint, so multi-row updates never appear half-drawn. Terminals
+# without support ignore the unknown private mode.
+BEGIN_SYNCHRONIZED_UPDATE = "\x1b[?2026h"
+END_SYNCHRONIZED_UPDATE = "\x1b[?2026l"
+REVERSE_ON = "\x1b[7m"
+REVERSE_OFF = "\x1b[27m"
+_CSI_RE = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
+
+
+@dataclass
+class Selection:
+    """A text selection in 0-based screen cells; ``focus`` is inclusive."""
+
+    anchor: tuple[int, int]
+    focus: tuple[int, int]
+
+    def ordered(self) -> tuple[tuple[int, int], tuple[int, int]]:
+        return (self.anchor, self.focus) if self.anchor <= self.focus else (self.focus, self.anchor)
+
+    @property
+    def is_empty(self) -> bool:
+        return self.anchor == self.focus
+
+    def columns_for_row(self, row: int) -> tuple[int, int] | None:
+        """Selected ``[start, end)`` columns on ``row``, or None."""
+        (start_row, start_col), (end_row, end_col) = self.ordered()
+        if row < start_row or row > end_row:
+            return None
+        start = start_col if row == start_row else 0
+        end = end_col + 1 if row == end_row else 1 << 30
+        return start, end
+
+
+def highlight_columns(line: str, start: int, end: int) -> str:
+    """Reverse-video display columns ``[start, end)`` while keeping styling."""
+    out: list[str] = []
+    col = 0
+    inside = False
+    i = 0
+    while i < len(line):
+        match = _CSI_RE.match(line, i)
+        if match:
+            out.append(match.group())
+            # Style resets inside the range would cancel the highlight.
+            if inside:
+                out.append(REVERSE_ON)
+            i = match.end()
+            continue
+        width = char_display_width(line[i])
+        if not inside and start <= col < end and width:
+            out.append(REVERSE_ON)
+            inside = True
+        elif inside and col >= end:
+            out.append(REVERSE_OFF)
+            inside = False
+        out.append(line[i])
+        col += width
+        i += 1
+    if inside:
+        out.append(REVERSE_OFF)
+    return "".join(out)
+
+
+def slice_columns(text: str, start: int, end: int) -> str:
+    """Plain characters whose display cell starts within ``[start, end)``."""
+    out: list[str] = []
+    col = 0
+    for char in text:
+        if col >= end:
+            break
+        if start <= col:
+            out.append(char)
+        col += char_display_width(char)
+    return "".join(out)
 
 
 class FrameRenderer:
@@ -11,13 +89,21 @@ class FrameRenderer:
 
     def __init__(self) -> None:
         self._lines: list[str] = []
+        self._content: list[str] = []
         self._size: tuple[int, int] | None = None
+        self.selection: Selection | None = None
 
     def draw(self, lines: list[str], cols: int, rows: int) -> None:
         cols, rows = max(2, cols), max(1, rows)
         # Leave the final column unused to avoid autowrap on the bottom row.
-        frame = [truncate_plain(line, cols - 1) for line in lines[:rows]]
-        frame += [""] * (rows - len(frame))
+        content = [truncate_plain(line, cols - 1) for line in lines[:rows]]
+        content += [""] * (rows - len(content))
+        frame = list(content)
+        if self.selection is not None and not self.selection.is_empty:
+            for index, line in enumerate(frame):
+                span = self.selection.columns_for_row(index)
+                if span is not None:
+                    frame[index] = highlight_columns(line, *span)
         previous = self._lines if self._size == (cols, rows) else []
         updates: list[str] = []
         for index, line in enumerate(frame):
@@ -27,20 +113,34 @@ class FrameRenderer:
             # works even when raw mode disables LF -> CRLF conversion.
             updates.append(f"\x1b[{index + 1};1H\x1b[0m{line}\x1b[0m\x1b[K")
         if updates:
-            sys.stdout.write("".join(updates))
+            sys.stdout.write(BEGIN_SYNCHRONIZED_UPDATE + "".join(updates) + END_SYNCHRONIZED_UPDATE)
             sys.stdout.flush()
         self._lines = frame
+        self._content = content
         self._size = (cols, rows)
+
+    def selected_text(self) -> str:
+        """Plain text under the current selection, as last drawn."""
+        if self.selection is None or self.selection.is_empty:
+            return ""
+        (start_row, _), (end_row, _) = self.selection.ordered()
+        picked: list[str] = []
+        for row in range(start_row, min(end_row, len(self._content) - 1) + 1):
+            span = self.selection.columns_for_row(row)
+            if span is not None:
+                picked.append(slice_columns(strip_ansi(self._content[row]), *span).rstrip())
+        return "\n".join(picked).strip("\n")
 
 
 ENTER_ALT_SCREEN = "\u001b[?1049h"
 EXIT_ALT_SCREEN = "\u001b[?1049l"
 ERASE_SCREEN_AND_HOME = "\u001b[2J\u001b[H"
-# Use SGR extended mouse mode (?1006) for coordinates > 223 and better
-# cross-platform compatibility.  We still enable basic tracking (?1000) to
-# activate mouse events, then upgrade the encoding to SGR.
-ENABLE_MOUSE_TRACKING = "\u001b[?1000h\u001b[?1006h"
-DISABLE_MOUSE_TRACKING = "\u001b[?1006l\u001b[?1000l"
+# Basic tracking (?1000) reports clicks and the wheel, button-event tracking
+# (?1002) adds drags so the app can select and copy text itself, and SGR
+# encoding (?1006) handles coordinates > 223. PEPSI_CODE_MOUSE=0 hands the
+# mouse back to the terminal (native selection, but no wheel scrolling).
+ENABLE_MOUSE_TRACKING = "\u001b[?1000h\u001b[?1002h\u001b[?1006h"
+DISABLE_MOUSE_TRACKING = "\u001b[?1006l\u001b[?1002l\u001b[?1000l"
 
 # Terminal types that do not support alternate screen or mouse tracking.
 _DUMB_TERMS = frozenset({"dumb", "linux", ""})
@@ -114,7 +214,7 @@ def _restore_windows_console_mode() -> None:
     sending ANSI escape sequences for special keys instead of normal Windows
     key events (arrow keys show as ^[[A instead of command history).
     """
-    global _original_input_mode
+    global _original_input_mode, _vt_enabled
     if _original_input_mode is None:
         return
     try:
@@ -125,6 +225,7 @@ def _restore_windows_console_mode() -> None:
         h_in = kernel32.GetStdHandle(STD_INPUT_HANDLE)
         kernel32.SetConsoleMode(h_in, _original_input_mode)
         _original_input_mode = None
+        _vt_enabled = False
     except Exception:
         pass
 
@@ -152,13 +253,19 @@ def _is_dumb_terminal() -> bool:
     return os.environ.get("TERM", "") in _DUMB_TERMS
 
 
+def mouse_tracking_enabled() -> bool:
+    """Mouse capture is on unless PEPSI_CODE_MOUSE explicitly disables it."""
+    return os.environ.get("PEPSI_CODE_MOUSE", "").strip().lower() not in {"0", "false", "no", "off"}
+
+
 def enter_alternate_screen() -> None:
     _enable_windows_vt_processing()
     if _is_dumb_terminal():
         # Dumb terminals (e.g. 'linux' console, 'dumb', piped output)
         # don't support alternate screen or mouse tracking.
         return
-    sys.stdout.write(DISABLE_MOUSE_TRACKING + ENTER_ALT_SCREEN + ERASE_SCREEN_AND_HOME + ENABLE_MOUSE_TRACKING)
+    mouse_tracking = ENABLE_MOUSE_TRACKING if mouse_tracking_enabled() else ""
+    sys.stdout.write(DISABLE_MOUSE_TRACKING + ENTER_ALT_SCREEN + ERASE_SCREEN_AND_HOME + mouse_tracking)
     sys.stdout.flush()
 
 
@@ -167,6 +274,7 @@ def exit_alternate_screen() -> None:
         return
     sys.stdout.write(DISABLE_MOUSE_TRACKING + EXIT_ALT_SCREEN)
     sys.stdout.flush()
+    _restore_windows_console_mode()
 
 
 def clear_screen() -> None:

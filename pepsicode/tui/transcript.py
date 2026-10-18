@@ -1,20 +1,23 @@
 from __future__ import annotations
 
+from pepsicode.llm.assistant_text import parse_assistant_text
+
 from .chrome import (
     ACCENT,
     BOLD,
     BRIGHT_RED,
-    BRIGHT_YELLOW,
     DIM,
     GREEN,
     ICON_DIVIDER,
     ICON_DOT,
-    ICON_ERROR,
-    ICON_SUCCESS,
-    ITALIC,
     RESET,
     SUBTLE,
+    YELLOW,
     _cached_terminal_size,
+    string_display_width,
+    strip_ansi,
+    truncate_plain,
+    wrap_text,
 )
 from .markdown import render_markdownish
 from .types import TranscriptEntry
@@ -48,6 +51,75 @@ def preview_tool_body(tool_name: str, body: str) -> str:
     return limited
 
 
+_TOOL_LABELS = {
+    "read_file": "Read file",
+    "write_file": "Write file",
+    "edit_file": "Edit file",
+    "patch_file": "Patch file",
+    "run_command": "Run command",
+    "search_files": "Search files",
+    "list_files": "List files",
+    "file_tree": "Explore files",
+    "web_fetch": "Fetch page",
+    "task": "Run agent",
+    "load_skill": "Load skill",
+}
+
+
+def render_tool_activity(entry: TranscriptEntry, cols: int) -> list[str]:
+    """Render a stable operation row and a bounded result preview in either TUI."""
+    cols = max(8, cols)
+    name = entry.toolName or "tool"
+    label = _TOOL_LABELS.get(name, name)
+    running = entry.status == "running"
+    failed = entry.status == "error"
+    color, icon, status = (
+        (YELLOW, "·", "running") if running else ((BRIGHT_RED, "!", "failed") if failed else (GREEN, "✓", "done"))
+    )
+    summary = entry.toolSummary or (entry.body if running else "")
+    summary = " ".join(strip_ansi(summary).split())
+    if summary == name:
+        summary = ""
+    elif summary.startswith(name + " "):
+        summary = summary[len(name) + 1 :].removeprefix("path=")
+    suffix = f"  {color}{status}{RESET}"
+    left = f"  {color}{icon}{RESET} {BOLD}{label}{RESET}"
+    budget = max(1, cols - string_display_width(suffix))
+    remaining = budget - string_display_width(left) - 2
+    if summary and remaining > 4:
+        left += f"  {SUBTLE}{truncate_plain(summary, remaining)}{RESET}"
+    lines = [truncate_plain(truncate_plain(left, budget) + suffix, cols)]
+    if running:
+        return lines
+
+    if entry.collapsed and not failed:
+        body = entry.collapsedSummary or "No output"
+        lines.append(f"    {SUBTLE}└ {truncate_plain(body, max(1, cols - 6))}{RESET}")
+        return lines
+    if entry.collapsePhase and not failed:
+        phase = truncate_plain(f"└ collapsing{'.' * entry.collapsePhase}", max(1, cols - 4))
+        lines.append(f"    {SUBTLE}{phase}{RESET}")
+        return lines
+
+    # Bound physical rows, including a single very long line on a narrow screen.
+    max_rows = 8 if failed else 6
+    output: list[str] = []
+    truncated = False
+    for raw in (entry.body or "No output").splitlines():
+        parts = wrap_text(raw, max(2, cols - 6)).split("\n")
+        output.extend(parts[: max_rows + 1 - len(output)])
+        if len(output) > max_rows:
+            truncated = True
+            break
+    for index, part in enumerate(output[:max_rows]):
+        marker = "└ " if index == 0 else "  "
+        lines.append(f"    {SUBTLE}{marker}{part}{RESET}")
+    if truncated:
+        hint = "… full output: /transcript-save <path>"
+        lines.append(f"    {SUBTLE}{truncate_plain(hint, max(1, cols - 4))}{RESET}")
+    return lines
+
+
 def _render_transcript_entry(entry: TranscriptEntry) -> str:
     """Claude-style: minimal icons, clean labels."""
     if entry.kind == "user":
@@ -55,33 +127,19 @@ def _render_transcript_entry(entry: TranscriptEntry) -> str:
         return f"{label}\n{_indent_block(entry.body)}"
 
     if entry.kind == "assistant":
-        return render_markdownish(entry.body)
+        if entry.status == "error":
+            return f"{BRIGHT_RED}{BOLD}Error{RESET}\n{_indent_block(render_markdownish(entry.body))}"
+        content, _ = parse_assistant_text(entry.body)
+        return render_markdownish(content)
 
     if entry.kind == "progress":
         label = f"{ACCENT}{ICON_DOT}{RESET} {SUBTLE}progress{RESET}"
-        return f"{label}\n{_indent_block(render_markdownish(entry.body))}"
+        content, _ = parse_assistant_text(entry.body)
+        return f"{label}\n{_indent_block(render_markdownish(content))}"
 
     if entry.kind == "tool":
-        if entry.status == "running":
-            status_label = f"{BRIGHT_YELLOW}running{RESET}"
-        elif entry.status == "success":
-            status_label = f"{GREEN}{ICON_SUCCESS} ok{RESET}"
-        else:
-            status_label = f"{BRIGHT_RED}{ICON_ERROR} err{RESET}"
-
-        label = f"{SUBTLE}{ICON_DIVIDER}{RESET} {BOLD}{entry.toolName}{RESET} {status_label}"
-
-        if entry.status == "running":
-            body = entry.body
-        elif entry.collapsed:
-            body = f"{SUBTLE}{ITALIC}{entry.collapsedSummary or 'output collapsed'}{RESET}"
-        elif entry.collapsePhase:
-            dots = f"{ACCENT}{ICON_DOT}{RESET}" * (entry.collapsePhase or 0)
-            body = f"{SUBTLE}collapsing{dots}{RESET}"
-        else:
-            body = preview_tool_body(entry.toolName or "", render_markdownish(entry.body))
-
-        return f"{label}\n{_indent_block(body)}"
+        cols, _ = _cached_terminal_size()
+        return "\n".join(render_tool_activity(entry, max(8, cols - 4)))
 
     return ""
 
@@ -111,6 +169,8 @@ def _get_entry_lines(entry: TranscriptEntry) -> list[str]:
         entry.collapsePhase,
         entry.collapsedSummary,
         entry.toolName,
+        entry.toolSummary,
+        _cached_terminal_size()[0] if entry.kind == "tool" else None,
     )
 
     entry_id = id(entry)
@@ -146,6 +206,8 @@ def _get_entry_line_count(entry: TranscriptEntry) -> int:
         entry.collapsePhase,
         entry.collapsedSummary,
         entry.toolName,
+        entry.toolSummary,
+        _cached_terminal_size()[0] if entry.kind == "tool" else None,
     )
     entry_id = id(entry)
 
@@ -277,6 +339,8 @@ def format_transcript_text(entries: list[TranscriptEntry]) -> str:
         if entry.kind == "tool":
             status_text = f" ({entry.status})" if entry.status else ""
             label = f"{entry.toolName or 'tool'}{status_text}"
+            if entry.toolSummary:
+                label += f"\n  Input: {entry.toolSummary}"
         indented = "\n".join("  " + line for line in entry.body.splitlines())
         parts.append(f"{label}\n{indented}")
     return "\n\n---\n\n".join(parts)

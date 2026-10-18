@@ -237,7 +237,19 @@ class PermissionManager:
         command_parts = text.casefold().split()
         is_hook_trust = len(command_parts) >= 2 and command_parts[:2] == ["/hooks", "trust"]
         blocked = (
-            text.startswith("/model ")
+            (
+                bool(command_parts)
+                and command_parts[0] == "/model"
+                and len(command_parts) > 1
+                and command_parts[1:] not in (["list"], ["refresh"])
+            )
+            or (bool(command_parts) and command_parts[0] == "/effort" and len(command_parts) > 1)
+            or (
+                bool(command_parts)
+                and command_parts[0] == "/provider"
+                and len(command_parts) > 1
+                and command_parts[1:] != ["list"]
+            )
             or text.startswith("/transcript-save")
             or text.startswith("/resume")
             or text.startswith("/worktree create")

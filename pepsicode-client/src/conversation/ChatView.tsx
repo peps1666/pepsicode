@@ -3,6 +3,7 @@ import { useSessionStore, type ChatMessage } from "../stores/session";
 import MessageItem from "./MessageItem";
 import Composer from "./Composer";
 import ThinkingGroup, { isThinkingMessage } from "./ThinkingGroup";
+import ModelSettings, { effortLabels } from "./ModelSettings";
 import styles from "./ChatView.module.css";
 
 type TimelineBlock =
@@ -32,7 +33,9 @@ function buildTimeline(messages: ChatMessage[]): TimelineBlock[] {
 }
 
 export default function ChatView({ onSend }: { onSend: (input: string) => void }) {
-  const { messages, isRunning, cwd, model, planMode } = useSessionStore();
+  const { messages, isRunning, cwd, model, models, reasoningEffort, isMock, modelUpdating, sessionId, planMode } = useSessionStore();
+  const modelName = models.find((item) => item.id === model)?.name || model;
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
   const [autoScroll, setAutoScroll] = useState(true);
   const timeline = buildTimeline(messages);
@@ -64,7 +67,12 @@ export default function ChatView({ onSend }: { onSend: (input: string) => void }
     <div className={styles.container}>
       <header className={styles.header}>
         <div className={styles.headerLeft}>
-          <span className={styles.modelName}>{model}</span>
+          <button className={styles.modelName} type="button" onClick={() => setSettingsOpen(true)}
+            disabled={isRunning || modelUpdating || !sessionId}
+            title={isMock ? "添加厂商并配置 API" : "选择模型与思考深度"}
+            aria-haspopup="dialog">
+            {isMock ? "配置模型与服务商" : `${modelName} · ${effortLabels[reasoningEffort] || reasoningEffort}`} ▾
+          </button>
           {planMode && <span className={styles.planBadge}>PLAN MODE</span>}
         </div>
         <div className={styles.headerRight}>
@@ -91,7 +99,8 @@ export default function ChatView({ onSend }: { onSend: (input: string) => void }
           </div>
         )}
       </div>
-      <Composer onSend={onSend} disabled={isRunning} />
+      <Composer onSend={onSend} disabled={isRunning || modelUpdating} />
+      {settingsOpen && <ModelSettings onClose={() => setSettingsOpen(false)} />}
     </div>
   );
 }

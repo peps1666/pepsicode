@@ -19,7 +19,7 @@ import threading
 import time
 from collections import defaultdict
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
@@ -29,6 +29,8 @@ from pepsicode.cli.cli_commands import (
     try_handle_local_command,
 )
 from pepsicode.cli.local_tool_shortcuts import parse_local_tool_shortcut
+from pepsicode.cli.model_commands import update_session_model_settings
+from pepsicode.context.context_manager import ContextManager
 from pepsicode.context.history import load_history_entries, save_history_entries
 from pepsicode.context.prompt import build_session_prompt
 from pepsicode.core.agent_loop import run_agent_turn_stream
@@ -48,19 +50,25 @@ from pepsicode.core.session import (
 )
 from pepsicode.core.state import AppState, Store, create_app_store
 from pepsicode.hooks import HookContext, HookEngine, HookEvent
+from pepsicode.llm.anthropic_adapter import AnthropicModelAdapter
+from pepsicode.llm.assistant_text import parse_assistant_text
 from pepsicode.llm.cost_tracker import CostTracker
+from pepsicode.llm.mock_model import MockModelAdapter
+from pepsicode.llm.model_discovery import refresh_model_catalog
+from pepsicode.llm.model_settings import apply_model_settings, model_display_name, model_selection_error
+from pepsicode.llm.provider_setup import probe_provider_setup, save_provider_setup
+from pepsicode.llm.providers import PROVIDERS, model_settings_snapshot, provider_runtime
 from pepsicode.permissions import PermissionManager
 from pepsicode.tooling import ToolContext, ToolRegistry
+from pepsicode.tools import create_default_tool_registry
 from pepsicode.tui.chrome import (
     ACCENT,
     BOLD,
-    BRIGHT_GREEN,
     BRIGHT_RED,
     BRIGHT_WHITE,
     DIM,
     HIGHLIGHT_BG,
     ICON_ARROW,
-    ICON_DIVIDER,
     ICON_DOT,
     RESET,
     SUBTLE,
@@ -77,24 +85,30 @@ from pepsicode.tui.chrome import (
     truncate_plain,
     wrap_text,
 )
+from pepsicode.tui.clipboard import copy_to_clipboard
 from pepsicode.tui.input import render_input_prompt
 from pepsicode.tui.input_parser import (
     KeyEvent,
+    MouseEvent,
     ParsedInputEvent,
     TextEvent,
     WheelEvent,
     parse_input_chunk,
 )
 from pepsicode.tui.markdown import render_markdownish
+from pepsicode.tui.provider_wizard import ProviderWizard, create_provider_wizard, render_provider_wizard, wizard_event
 from pepsicode.tui.screen import (
     FrameRenderer,
+    Selection,
     enter_alternate_screen,
     exit_alternate_screen,
     hide_cursor,
     show_cursor,
 )
+from pepsicode.tui.settings_picker import SettingsPicker, create_settings_picker, render_settings_picker
 from pepsicode.tui.transcript import (
     get_transcript_max_scroll_offset,
+    render_tool_activity,
     render_transcript,
 )
 from pepsicode.tui.types import TranscriptEntry
@@ -260,6 +274,9 @@ class ScreenState:
     transcript: list[TranscriptEntry] = field(default_factory=list)
     transcript_scroll_offset: int = 0
     transcript_total_lines: int = 0
+    # Rows and width of the last rendered stream transcript viewport.
+    transcript_view_height: int = 0
+    transcript_layout_cols: int = 0
     user_scrolled_away: bool = False
     _animation_frame: int = 0
     selected_slash_index: int = 0
@@ -273,6 +290,8 @@ class ScreenState:
     pending_approval: PendingApproval | None = None
     resume_picker_sessions: list[SessionMetadata] | None = None
     resume_picker_index: int = 0
+    settings_picker: SettingsPicker | None = None
+    provider_wizard: ProviderWizard | None = None
     is_busy: bool = False
     # Session persistence
     session: SessionData | None = None
@@ -291,11 +310,176 @@ class ScreenState:
     streaming_entry_id: int | None = None
     streaming_text: str = ""
     frame_renderer: FrameRenderer = field(default_factory=FrameRenderer, repr=False)
+    # Mouse text selection (drawn by frame_renderer.selection).
+    selection_dragging: bool = False
+    selection_notice: str | None = None
+    exit_requested_at: float | None = None
 
 
 # ---------------------------------------------------------------------------
 # State helpers
 # ---------------------------------------------------------------------------
+
+
+def _sync_model_settings_state(args: TtyAppArgs, state: ScreenState) -> None:
+    if not args.runtime or isinstance(args.model, MockModelAdapter):
+        return
+    if state.session:
+        state.session.model_settings = model_settings_snapshot(args.runtime)
+        state.session.messages = list(args.messages)
+        if state.autosave:
+            state.autosave.mark_dirty()
+    if state.app_state:
+        state.app_state.set_state(lambda current: replace(current, model=args.runtime["model"]))
+
+
+def _open_settings_picker(
+    args: TtyAppArgs,
+    state: ScreenState,
+    kind: str,
+    *,
+    notice: str = "",
+    return_input: str = "",
+    provider: str | None = None,
+) -> None:
+    if kind != "provider" and (not args.runtime or isinstance(args.model, MockModelAdapter)):
+        _push_transcript_entry(
+            state, kind="assistant", status="error", body="Mock 模式下无法选择模型或思考强度，请先配置 API。"
+        )
+        return
+    try:
+        candidate = provider_runtime(args.runtime or {"model": "mock"}, provider)
+        if kind != "provider":
+            refresh_model_catalog(candidate)
+        state.settings_picker = create_settings_picker(candidate, kind, notice=notice, return_input=return_input)
+    except ValueError as error:
+        _push_transcript_entry(state, kind="assistant", status="error", body=str(error))
+        return
+    state.input = ""
+    state.cursor_offset = 0
+
+
+def _handle_settings_picker_event(
+    args: TtyAppArgs, state: ScreenState, event: ParsedInputEvent, rerender: Callable[[], None]
+) -> None:
+    picker = state.settings_picker
+    if picker is None:
+        return
+    if isinstance(event, TextEvent) and not event.ctrl and event.text.lower() == "r":
+        candidate = provider_runtime(args.runtime or {"model": "mock"}, picker.provider)
+        if picker.kind != "provider":
+            refresh_model_catalog(candidate, force=True)
+        updated = create_settings_picker(candidate, picker.kind, return_input=picker.return_input)
+        updated.persist = picker.persist
+        state.settings_picker = updated
+        rerender()
+        return
+    if isinstance(event, TextEvent) and not event.ctrl and event.text.lower() == "s":
+        picker.persist = not picker.persist
+    elif isinstance(event, KeyEvent):
+        if event.name == "escape":
+            state.input = picker.return_input
+            state.cursor_offset = len(state.input)
+            state.settings_picker = None
+        elif event.name in {"up", "down"} and picker.options:
+            picker.selected = (picker.selected + (-1 if event.name == "up" else 1)) % len(picker.options)
+        elif event.name == "return" and picker.options:
+            option = picker.options[picker.selected]
+            if picker.kind == "provider":
+                if option.value == "__add__":
+                    state.settings_picker = None
+                    state.provider_wizard = create_provider_wizard("custom")
+                    rerender()
+                    return
+                try:
+                    candidate = provider_runtime(args.runtime or {"model": "mock"}, option.value)
+                    refresh_model_catalog(candidate)
+                    updated = create_settings_picker(candidate, "model", return_input=picker.return_input)
+                    updated.persist = picker.persist
+                    state.settings_picker = updated
+                except ValueError as error:
+                    state.settings_picker = None
+                    state.provider_wizard = create_provider_wizard(option.value)
+                rerender()
+                return
+            model = option.value if picker.kind == "model" else args.runtime["model"]
+            effort = (
+                option.value
+                if picker.kind == "effort"
+                else (
+                    args.runtime.get("reasoningEffort", "default")
+                    if model == args.runtime["model"] and picker.provider == args.runtime.get("provider")
+                    else "default"
+                )
+            )
+            try:
+                args.permissions.ensure_local_command_allowed(f"/{picker.kind} {option.value}")
+                update_session_model_settings(
+                    runtime=args.runtime,
+                    model_adapter=args.model,
+                    model=model,
+                    effort=effort,
+                    persist=picker.persist,
+                    messages=args.messages,
+                    context_manager=args.context_manager,
+                    provider=picker.provider,
+                )
+            except (ValueError, OSError, RuntimeError) as error:
+                picker.error = str(error)
+            else:
+                _sync_model_settings_state(args, state)
+                label = f"模型：{model}" if picker.kind == "model" else f"思考强度：{option.label}（{option.value}）"
+                scope = "已保存为新会话默认设置。" if picker.persist else "仅用于当前会话。"
+                _push_transcript_entry(state, kind="assistant", body=f"{label}。下一轮生效，{scope}")
+                state.input = picker.return_input
+                state.cursor_offset = len(state.input)
+                state.settings_picker = None
+    rerender()
+
+
+def _handle_provider_wizard_event(
+    args: TtyAppArgs, state: ScreenState, event: ParsedInputEvent, rerender: Callable[[], None]
+) -> None:
+    wizard = state.provider_wizard
+    action = wizard_event(wizard, event)
+    if action == "cancel":
+        state.provider_wizard = None
+    elif action in {"probe", "save"}:
+        try:
+            args.permissions.ensure_local_command_allowed("/provider add")
+            if action == "probe":
+                wizard.candidate = probe_provider_setup(wizard.draft)
+                wizard.move(5)
+            else:
+                if state.is_busy:
+                    raise ValueError("请等待当前对话结束后再保存")
+                runtime = args.runtime if args.runtime is not None else {"model": ""}
+                save_provider_setup(runtime, wizard.draft, wizard.candidate)
+                args.runtime = runtime
+                # Bootstrap first-run mock fallback into a real adapter without dropping history.
+                if isinstance(args.model, MockModelAdapter):
+                    old_tools = args.tools
+                    args.tools = create_default_tool_registry(
+                        args.cwd, runtime=runtime, cost_tracker=args.cost_tracker, trace_manager=args.trace_manager
+                    )
+                    args.model = AnthropicModelAdapter(runtime, args.tools)
+                    old_tools.dispose()
+                args.messages[:] = [message for message in args.messages if message.get("role") != "assistant_thinking"]
+                if args.context_manager is None:
+                    args.context_manager = ContextManager(model=runtime["model"])
+                apply_model_settings(runtime, runtime["model"], "default", context_manager=args.context_manager)
+                args.context_manager.summarizer = args.model.summarize
+                _sync_model_settings_state(args, state)
+                _push_transcript_entry(
+                    state, kind="assistant", body=f"已保存并启用 {runtime['providerName']}，模型：{runtime['model']}。"
+                )
+                wizard.draft.clear()
+                wizard.candidate = None
+                wizard.text, wizard.cursor = "", 0
+                state.provider_wizard = None
+        except (ValueError, OSError, RuntimeError) as error:
+            wizard.error = str(error)
+    rerender()
 
 
 def _get_session_stats(args: TtyAppArgs, state: ScreenState) -> dict[str, int]:
@@ -318,6 +502,8 @@ def _push_transcript_entry(state: ScreenState, **kwargs: Any) -> int:
     """
     entry_id = state.next_entry_id
     state.next_entry_id += 1
+    if kwargs.get("kind") == "tool":
+        kwargs.setdefault("toolSummary", kwargs.get("body"))
     state.transcript.append(TranscriptEntry(id=entry_id, **kwargs))
     return entry_id
 
@@ -330,12 +516,29 @@ def _session_rows_for_picker(cwd: str) -> list[SessionMetadata]:
     return current + other
 
 
+def _restore_model_settings(args: TtyAppArgs, session: SessionData) -> None:
+    if not session.model_settings or not args.runtime or isinstance(args.model, MockModelAdapter):
+        return
+    try:
+        apply_model_settings(
+            args.runtime,
+            session.model_settings["model"],
+            session.model_settings.get("reasoningEffort", "default"),
+            context_manager=args.context_manager,
+            provider=session.model_settings.get("provider"),
+        )
+    except (KeyError, ValueError) as error:
+        # A removed provider profile must not make an old conversation impossible to open.
+        logging.getLogger(__name__).warning("Could not restore session model settings: %s", error)
+
+
 def _restore_session_into_state(
     args: TtyAppArgs,
     state: ScreenState,
     session: SessionData,
 ) -> None:
     args.messages = list(session.messages)
+    _restore_model_settings(args, session)
     state.session = session
     state.autosave = AutosaveManager(session)
     state.transcript = [TranscriptEntry(**entry) for entry in session.transcript_entries]
@@ -354,6 +557,7 @@ def _restore_session_into_state(
             app_state.session_id = session.session_id
             app_state.workspace = session.workspace
             app_state.message_count = len(session.messages)
+            app_state.model = args.runtime.get("model", "unknown") if args.runtime else "unknown"
             app_state.update_timestamp()
             return app_state
 
@@ -483,25 +687,21 @@ def _summarize_collapsed_tool_body(output: str) -> str:
     return line[:140] + "..." if len(line) > 140 else line
 
 
-def _schedule_tool_auto_collapse(
-    state: ScreenState,
-    entry_id: int,
-    output: str,
-    rerender: Callable[[], None],
-) -> None:
-    """Collapse tool output with a brief animation. Optimized to use a single
-    combined delay instead of 3 separate sleep+rerender cycles."""
-    summary = _summarize_collapsed_tool_body(output)
+def _finish_tool_entry(state: ScreenState, entry_id: int, status: str, body: str) -> None:
+    """Store successful output collapsed, keeping failures visible.
 
-    def _do_collapse() -> None:
-        # Single delay then jump straight to collapsed state
-        # (avoids 3 separate rerender() calls for an animation most users barely see)
-        time.sleep(0.05)
-        _collapse_tool_entry(state, entry_id, summary)
-        rerender()
-
-    t = threading.Thread(target=_do_collapse, daemon=True)
-    t.start()
+    Called from the agent thread while the UI thread renders. Collapsing
+    before the status/body change means no frame ever shows the full output
+    for an instant and then shrinks it, which made the screen jump.
+    """
+    for entry in state.transcript:
+        if entry.id == entry_id and entry.kind == "tool":
+            entry.collapsedSummary = _summarize_collapsed_tool_body(body) if status == "success" else None
+            entry.collapsePhase = None
+            entry.collapsed = status == "success"
+            entry.body = body
+            entry.status = status
+            return
 
 
 def _get_contextual_help(state: ScreenState, args: TtyAppArgs) -> str | None:
@@ -603,6 +803,8 @@ def _get_transcript_body_lines(args: TtyAppArgs, state: ScreenState) -> int:
 
 def _get_stream_max_scroll_offset(args: TtyAppArgs, state: ScreenState) -> int:
     """Compute max scroll offset using the stream renderer's actual line counts."""
+    if state.transcript_view_height > 0:
+        return max(0, state.transcript_total_lines - state.transcript_view_height)
     _, rows = _get_terminal_size()
     rows = max(10, rows)
     # Reserve space for input (2 lines), slash menu if visible, separator, footer
@@ -867,7 +1069,7 @@ def _render_home_brand(cols: int, rows: int) -> list[str]:
 def _render_home_screen(args: TtyAppArgs, state: ScreenState, cols: int, rows: int) -> None:
     """Welcome block with input and workspace always visible."""
     runtime = args.runtime or {}
-    model = runtime.get("model", "unknown")
+    model = f"{model_display_name(runtime) if runtime else 'unknown'} · {runtime.get('reasoningEffort', 'default')}"
     visible_commands = _get_visible_commands(state.input)
     block_width = max(4, min(72, cols - 4))
     margin = " " * max(0, (cols - block_width) // 2)
@@ -902,7 +1104,10 @@ def _render_home_screen(args: TtyAppArgs, state: ScreenState, cols: int, rows: i
     while len(frame) < rows - 2:
         frame.append("")
     frame.append(f"  {SUBTLE}{Path(args.cwd)}{RESET}")
-    frame.append(f"  {SUBTLE}/help for commands · ctrl+c to exit{RESET}")
+    exit_hint = (
+        "Press Ctrl+C again to exit" if state.exit_requested_at is not None else "/help for commands · /exit to quit"
+    )
+    frame.append(f"  {SUBTLE}{exit_hint}{RESET}")
     frame = _truncate_frame_lines(frame, cols, rows)
     state.frame_renderer.draw(frame, cols, rows)
 
@@ -976,7 +1181,11 @@ def _render_stream_transcript(
     """
     if not entries:
         return ([f"{SUBTLE}Type a message to get started.{RESET}"][:height], 0)
+    rendered = _build_stream_transcript_lines(entries, cols)
+    return (_window_stream_transcript(rendered, scroll_offset, height), len(rendered))
 
+
+def _build_stream_transcript_lines(entries: list[TranscriptEntry], cols: int) -> list[str]:
     rendered: list[str] = []
     for entry in entries:
         body_lines = (entry.body or "").splitlines() or [""]
@@ -988,13 +1197,17 @@ def _render_stream_transcript(
             continue
 
         if entry.kind == "assistant":
-            rendered.append(f"  {ACCENT}{ICON_DOT}{RESET} {BOLD}pepsicode{RESET}")
-            for line in render_markdownish(entry.body).splitlines() or [""]:
+            label = f"{BRIGHT_RED}{BOLD}Error{RESET}" if entry.status == "error" else f"{BOLD}pepsicode{RESET}"
+            rendered.append(f"  {ACCENT}{ICON_DOT}{RESET} {label}")
+            content, _ = parse_assistant_text(entry.body)
+            for line in render_markdownish(content).splitlines() or [""]:
                 rendered.extend(f"  {part}" for part in wrap_text(line, max(2, cols - 4)).split("\n"))
             rendered.append("")
             continue
 
         if entry.kind == "progress":
+            content, _ = parse_assistant_text(entry.body)
+            body_lines = content.splitlines() or [""]
             for index, line in enumerate(body_lines):
                 prefix = f"{ACCENT}{ICON_DOT}{RESET} " if index == 0 else "  "
                 for part_index, part in enumerate(wrap_text(line, max(2, cols - 5)).split("\n")):
@@ -1004,29 +1217,13 @@ def _render_stream_transcript(
             continue
 
         if entry.kind == "tool":
-            name = entry.toolName or "tool"
-            status = entry.status or ""
-            if status == "success":
-                status_color = BRIGHT_GREEN
-            elif status == "running":
-                status_color = YELLOW
-            else:
-                status_color = BRIGHT_RED
-            rendered.append(f"  {SUBTLE}{ICON_DIVIDER}{RESET} {BOLD}{name}{RESET} {status_color}{status}{RESET}")
-            if entry.collapsed and entry.collapsedSummary:
-                rendered.append(f"     {SUBTLE}{truncate_plain(entry.collapsedSummary, cols - 7)}{RESET}")
-            elif not entry.collapsed:
-                body = entry.body or ""
-                body_output_lines = body.splitlines()
-                max_visible = 30
-                for i, line in enumerate(body_output_lines[:max_visible]):
-                    rendered.extend(
-                        f"     {SUBTLE}{part}{RESET}" for part in wrap_text(line, max(2, cols - 7)).split("\n")
-                    )
-                if len(body_output_lines) > max_visible:
-                    rendered.append(f"     {SUBTLE}... {len(body_output_lines) - max_visible} more lines ...{RESET}")
+            rendered.extend(render_tool_activity(entry, cols))
             rendered.append("")
+    return rendered
 
+
+def _window_stream_transcript(rendered: list[str], scroll_offset: int, height: int) -> list[str]:
+    """The ``height`` rows ending ``scroll_offset`` rows above the bottom."""
     total = len(rendered)
     max_offset = max(0, total - height)
     offset = max(0, min(scroll_offset, max_offset))
@@ -1038,7 +1235,7 @@ def _render_stream_transcript(
         marker = f"{SUBTLE}-- {offset}/{max_offset} ({pct}%) --{RESET}"
         window = [marker] + window
         window = window[:height]
-    return (window[-height:] if window else [], total)
+    return window[-height:] if window else []
 
 
 def _render_stream_screen(args: TtyAppArgs, state: ScreenState) -> None:
@@ -1046,6 +1243,12 @@ def _render_stream_screen(args: TtyAppArgs, state: ScreenState) -> None:
     cols, rows = _get_terminal_size()
     cols = max(8, cols)
     rows = max(8, rows)
+    if state.provider_wizard is not None:
+        state.frame_renderer.draw(render_provider_wizard(state.provider_wizard, cols, rows), cols, rows)
+        return
+    if state.settings_picker is not None:
+        state.frame_renderer.draw(render_settings_picker(state.settings_picker, cols, rows), cols, rows)
+        return
     if state.resume_picker_sessions is not None:
         frame = _render_resume_picker_lines(
             state.resume_picker_sessions,
@@ -1061,43 +1264,70 @@ def _render_stream_screen(args: TtyAppArgs, state: ScreenState) -> None:
         _render_home_screen(args, state, cols, rows)
         return
 
-    model_name = args.runtime.get("model", "unknown") if args.runtime else "unknown"
+    model_name = (
+        f"{model_display_name(args.runtime)} · {args.runtime.get('reasoningEffort', 'default')}"
+        if args.runtime
+        else "unknown"
+    )
 
-    visible_commands = _get_visible_commands(state.input)
-    input_lines = _render_stream_input(state, model_name, cols, visible_commands)
+    pending = state.pending_approval
+    if pending is not None:
+        # Swap only the composer for the approval prompt; switching to a
+        # different full-screen layout for every tool approval flashed.
+        input_lines = render_permission_prompt(
+            pending.request,
+            expanded=pending.details_expanded,
+            scroll_offset=pending.details_scroll_offset,
+            selected_choice_index=pending.selected_choice_index,
+            feedback_mode=pending.feedback_mode,
+            feedback_input=pending.feedback_input,
+        ).splitlines()
+    else:
+        visible_commands = _get_visible_commands(state.input)
+        input_lines = _render_stream_input(state, model_name, cols, visible_commands)
 
-    # Render slash menu if visible
-    if visible_commands and state.input:
-        menu = render_slash_menu(
-            visible_commands,
-            min(state.selected_slash_index, len(visible_commands) - 1),
-            max_rows=max(1, min(10, rows - len(input_lines) - 5)),
-            width=max(2, cols - 1),
-        )
-        input_lines.append("")
-        input_lines.extend(menu.splitlines())
+        # Render slash menu if visible
+        if visible_commands and state.input:
+            menu = render_slash_menu(
+                visible_commands,
+                min(state.selected_slash_index, len(visible_commands) - 1),
+                max_rows=max(1, min(10, rows - len(input_lines) - 5)),
+                width=max(2, cols - 1),
+            )
+            input_lines.append("")
+            input_lines.extend(menu.splitlines())
 
     msg_count = len(state.transcript)
     sep = f"  {SUBTLE}{'─' * max(1, cols - 4)}{RESET}"
 
-    reserved = len(input_lines) + 2
-    transcript_height = max(1, rows - reserved)
-    transcript_snapshot = list(state.transcript)
-    transcript_lines, total = _render_stream_transcript(
-        transcript_snapshot,
-        state.transcript_scroll_offset,
-        transcript_height,
-        cols,
-    )
-    state.transcript_total_lines = total
-    # Anchor the composer while new output streams in.
-    transcript_lines += [""] * max(0, transcript_height - len(transcript_lines))
-
     cwd_name = Path(args.cwd).name or args.cwd
     mode_label = f"  {YELLOW}PLAN{RESET}" if args.permissions.is_plan_mode else ""
-    footer = (
-        f"  {SUBTLE}{cwd_name}{RESET}  {SUBTLE}{msg_count} events{RESET}{mode_label}  {SUBTLE}{DISPLAY_VERSION}{RESET}"
-    )
+    notice = f"  {ACCENT}{state.selection_notice}{RESET}" if state.selection_notice else ""
+    footer = f"  {SUBTLE}{cwd_name}{RESET}  {SUBTLE}{msg_count} events{RESET}{mode_label}  {SUBTLE}{DISPLAY_VERSION}{RESET}{notice}"
+    if state.exit_requested_at is not None:
+        footer = f"  {YELLOW}Press Ctrl+C again within 2s to exit · /exit to quit{RESET}"
+
+    reserved = len(input_lines) + 2
+    transcript_height = rows - reserved
+    if transcript_height < 1:
+        # A prompt taller than the screen keeps its bottom (the choices) visible.
+        state.frame_renderer.draw(_truncate_frame_lines((input_lines + [footer])[-rows:], cols, rows), cols, rows)
+        return
+
+    rendered = _build_stream_transcript_lines(list(state.transcript), cols)
+    total = len(rendered)
+    if state.transcript_scroll_offset > 0 and cols == state.transcript_layout_cols:
+        # Offsets count from the bottom, so keep a scrolled-back view on the
+        # same text while new output is appended below it.
+        state.transcript_scroll_offset += total - state.transcript_total_lines
+    state.transcript_scroll_offset = max(0, min(state.transcript_scroll_offset, total - transcript_height))
+    state.user_scrolled_away = state.transcript_scroll_offset > 0
+    state.transcript_total_lines = total
+    state.transcript_view_height = transcript_height
+    state.transcript_layout_cols = cols
+    transcript_lines = _window_stream_transcript(rendered, state.transcript_scroll_offset, transcript_height)
+    # Anchor the composer while new output streams in.
+    transcript_lines += [""] * max(0, transcript_height - len(transcript_lines))
 
     frame = _truncate_frame_lines(transcript_lines, cols, transcript_height) + [sep] + input_lines + [footer]
     frame = _truncate_frame_lines(frame, cols, rows)
@@ -1106,7 +1336,7 @@ def _render_stream_screen(args: TtyAppArgs, state: ScreenState) -> None:
 
 
 def _render_screen(args: TtyAppArgs, state: ScreenState) -> None:
-    if not state.pending_approval and os.environ.get("pepsicode_LEGACY_TUI") != "1":
+    if os.environ.get("pepsicode_LEGACY_TUI") != "1" or state.settings_picker or state.provider_wizard:
         _render_stream_screen(args, state)
         return
 
@@ -1307,6 +1537,8 @@ class _RawModeContext:
     def __init__(self) -> None:
         self._old_settings: Any = None
         self._old_cp: int | None = None
+        self._old_input_mode: int | None = None
+        self._input_handle: Any = None
 
     def __enter__(self) -> _RawModeContext:
         if sys.platform == "win32":
@@ -1317,8 +1549,20 @@ class _RawModeContext:
             # Switch console to UTF-8 code page for proper Unicode handling
             try:
                 import ctypes
+                import ctypes.wintypes as wintypes
 
                 kernel32 = ctypes.windll.kernel32  # type: ignore[attr-defined]
+                kernel32.GetStdHandle.restype = wintypes.HANDLE
+                kernel32.GetConsoleMode.argtypes = [wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD)]
+                kernel32.SetConsoleMode.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+                self._input_handle = kernel32.GetStdHandle(-10)
+                mode = wintypes.DWORD()
+                if kernel32.GetConsoleMode(self._input_handle, ctypes.byref(mode)):
+                    self._old_input_mode = mode.value
+                    # Receive Ctrl+C as input, so selection handling runs before
+                    # exit handling. QuickEdit must not intercept mouse drags.
+                    raw_mode = (mode.value & ~(0x0001 | 0x0002 | 0x0004 | 0x0040)) | 0x0080
+                    kernel32.SetConsoleMode(self._input_handle, raw_mode)
                 self._old_cp = kernel32.GetConsoleOutputCP()
                 kernel32.SetConsoleOutputCP(65001)  # UTF-8
             except Exception:
@@ -1351,11 +1595,15 @@ class _RawModeContext:
 
     def __exit__(self, *_: Any) -> None:
         if sys.platform == "win32":
-            if self._old_cp is not None:
+            if self._old_cp is not None or self._old_input_mode is not None:
                 try:
                     import ctypes
 
-                    ctypes.windll.kernel32.SetConsoleOutputCP(self._old_cp)  # type: ignore[attr-defined]
+                    kernel32 = ctypes.windll.kernel32  # type: ignore[attr-defined]
+                    if self._old_input_mode is not None:
+                        kernel32.SetConsoleMode(self._input_handle, self._old_input_mode)
+                    if self._old_cp is not None:
+                        kernel32.SetConsoleOutputCP(self._old_cp)
                 except Exception:
                     pass
         elif self._old_settings is not None:
@@ -1401,8 +1649,7 @@ def _execute_tool_shortcut(
             }
         )
         output = result.output if result.ok else f"ERROR: {result.output}"
-        _update_tool_entry(state, entry_id, "success" if result.ok else "error", output)
-        _collapse_tool_entry(state, entry_id, _summarize_collapsed_tool_body(output))
+        _finish_tool_entry(state, entry_id, "success" if result.ok else "error", output)
         state.transcript_scroll_offset = 0
         state.user_scrolled_away = False
         _drain_tty_hook_notifications(args, state)
@@ -1474,6 +1721,40 @@ def _handle_input(
             _push_transcript_entry(state, kind="assistant", body=str(error))
             return False
 
+    if input_text == "/provider add":
+        state.settings_picker = None
+        state.provider_wizard = create_provider_wizard("custom")
+        state.input, state.cursor_offset = "", 0
+        rerender()
+        return False
+
+    if input_text.startswith("/provider ") and len(input_text.split()) == 2 and input_text.split()[1] != "list":
+        identifier = input_text.split()[1]
+        try:
+            provider_runtime(args.runtime or {"model": "mock"}, identifier)
+        except ValueError:
+            if identifier in PROVIDERS:
+                # A preset without a Key goes straight to its setup instead of an error.
+                state.provider_wizard = create_provider_wizard(identifier)
+                state.input, state.cursor_offset = "", 0
+                rerender()
+                return False
+        _open_settings_picker(args, state, "model", provider=identifier)
+        rerender()
+        return False
+
+    if input_text in {"/model", "/effort", "/provider"}:
+        _open_settings_picker(args, state, input_text[1:])
+        rerender()
+        return False
+
+    if not input_text.startswith("/") and args.runtime and not isinstance(args.model, MockModelAdapter):
+        problem = model_selection_error(args.runtime)
+        if problem:
+            _open_settings_picker(args, state, "model", notice=problem, return_input=input_text)
+            rerender()
+            return False
+
     # /tools
     if input_text == "/tools":
         _push_transcript_entry(
@@ -1500,8 +1781,17 @@ def _handle_input(
         return False
 
     # Local commands
-    local_result = try_handle_local_command(input_text, tools=args.tools, permissions=args.permissions)
+    local_result = try_handle_local_command(
+        input_text,
+        tools=args.tools,
+        permissions=args.permissions,
+        runtime=args.runtime,
+        model_adapter=args.model,
+        messages=args.messages,
+        context_manager=args.context_manager,
+    )
     if local_result is not None:
+        _sync_model_settings_state(args, state)
         _push_transcript_entry(state, kind="assistant", body=local_result)
         return False
 
@@ -1590,6 +1880,12 @@ def _handle_input(
             pass
 
     def on_assistant_message(content: str) -> None:
+        finish_assistant_message(content, is_error=False)
+
+    def on_error_message(content: str) -> None:
+        finish_assistant_message(content, is_error=True)
+
+    def finish_assistant_message(content: str, *, is_error: bool) -> None:
         if state.streaming_entry_id is not None:
             # Streaming already displayed this content in a transcript entry.
             # Update the entry body (idempotent for normal flow, overwrites
@@ -1597,12 +1893,13 @@ def _handle_input(
             for entry in state.transcript:
                 if entry.id == state.streaming_entry_id:
                     entry.body = content
+                    entry.status = "error" if is_error else None
                     break
             state.streaming_entry_id = None
             state.streaming_text = ""
         else:
             # No streaming happened (error path, etc.) -- push a new entry.
-            _push_transcript_entry(state, kind="assistant", body=content)
+            _push_transcript_entry(state, kind="assistant", body=content, status="error" if is_error else None)
         _reset_scroll_if_needed(state)
         rerender()
 
@@ -1710,16 +2007,13 @@ def _handle_input(
                     if done
                     else f"Aggregated {tool_name} for {aggregated.path}\nCompleted: {aggregated.completed}/{aggregated.total}"
                 )
-                _update_tool_entry(
-                    state,
-                    entry_id,
-                    "error" if aggregated.errors > 0 else ("success" if done else "running"),
-                    body,
-                )
+                status = "error" if aggregated.errors > 0 else ("success" if done else "running")
                 if done:
-                    _collapse_tool_entry(state, entry_id, _summarize_collapsed_tool_body(body))
+                    _finish_tool_entry(state, entry_id, status, body)
                     aggregated_edit_by_entry_id.pop(entry_id, None)
                     aggregated_edit_by_key.pop(f"{tool_name}:{aggregated.path}", None)
+                else:
+                    _update_tool_entry(state, entry_id, status, body)
             else:
                 state.recent_tools.append(
                     {
@@ -1745,18 +2039,7 @@ def _handle_input(
                     else:
                         display_output = f"ERROR: {output}"
 
-                _update_tool_entry(
-                    state,
-                    entry_id,
-                    "error" if is_error else "success",
-                    display_output,
-                )
-                _schedule_tool_auto_collapse(
-                    state,
-                    entry_id,
-                    display_output,
-                    rerender,
-                )
+                _finish_tool_entry(state, entry_id, "error" if is_error else "success", display_output)
 
         state.active_tool = None
         remaining = sum(len(v) for v in pending_tool_entries.values())
@@ -1788,6 +2071,7 @@ def _handle_input(
                 on_tool_start=on_tool_start,
                 on_tool_result=on_tool_result,
                 on_assistant_message=on_assistant_message,
+                on_error_message=on_error_message,
                 on_progress_message=on_progress_message,
                 context_manager=args.context_manager,
                 hook_engine=args.hook_engine,
@@ -1925,6 +2209,7 @@ def run_tty_app(
         session = create_new_session(workspace=str(Path(cwd).resolve()))
 
     permissions.restore_plan_state(session.permission_mode, session.plan_file_path)
+    _restore_model_settings(args, session)
 
     # Initialize AppState store (Zustand-style)
     app_state_store = create_app_store(
@@ -1948,6 +2233,11 @@ def run_tty_app(
         cost_tracker=cost_tracker,
     )
     state.history_index = len(state.history)
+
+    if args.runtime and not isinstance(args.model, MockModelAdapter):
+        problem = model_selection_error(args.runtime)
+        if problem:
+            _open_settings_picker(args, state, "model", notice=problem)
 
     # Restore session state if resuming
     if session.messages:
@@ -2129,8 +2419,6 @@ def run_tty_app(
                 for event in parsed.events:
                     try:
                         _handle_event(args, state, event, rerender, approval_event, approval_result)
-                        if state.input == "/exit" or (isinstance(event, KeyEvent) and event.name == "c" and event.ctrl):
-                            raise SystemExit(0)
                     except SystemExit:
                         should_exit = True
                         break
@@ -2166,6 +2454,7 @@ def run_tty_app(
                     "collapsed": e.collapsed,
                     "collapsedSummary": e.collapsedSummary,
                     "collapsePhase": e.collapsePhase,
+                    "toolSummary": e.toolSummary,
                 }
                 for e in state.transcript
             ]
@@ -2175,6 +2464,8 @@ def run_tty_app(
             state.session.mcp_servers = args.tools.get_mcp_servers()
             state.session.permission_mode = args.permissions.mode.value
             state.session.plan_file_path = args.permissions.plan_file_path
+            if args.runtime and not isinstance(args.model, MockModelAdapter):
+                state.session.model_settings = model_settings_snapshot(args.runtime)
 
             # Force save
             if state.autosave:
@@ -2208,7 +2499,7 @@ def _handle_event(
     """Process a single parsed input event.
 
     Routes the event to the appropriate handler based on current state:
-    - Ctrl+C: Exit immediately
+    - Ctrl+C: Copy a selection, or require a second press to exit
     - Pending approval: Handle permission dialog input
     - Normal mode: Handle input, navigation, and commands
 
@@ -2220,9 +2511,19 @@ def _handle_event(
         approval_event: Threading event for approval synchronization
         approval_result: Dict to store approval decision
     """
-    # ---------- Ctrl+C -> exit ----------
-    if isinstance(event, TextEvent) and event.ctrl and event.text == "c":
-        raise SystemExit(0)
+    is_interrupt = _is_ctrl_c(event)
+    if not is_interrupt:
+        state.exit_requested_at = None
+    if _handle_selection_event(state, event, rerender):
+        state.exit_requested_at = None
+        return
+    if is_interrupt:
+        now = time.monotonic()
+        if state.exit_requested_at is not None and now - state.exit_requested_at <= 2:
+            raise SystemExit(0)
+        state.exit_requested_at = now
+        rerender()
+        return
 
     # ---------- Pending approval mode ----------
     # Capture locally to avoid TOCTOU -- the agent thread may clear
@@ -2478,6 +2779,12 @@ def _handle_normal_mode_event(
     rerender: Callable[[], None],
 ) -> None:
     """Handle input events in normal mode (no pending approval)."""
+    if state.provider_wizard is not None:
+        _handle_provider_wizard_event(args, state, event, rerender)
+        return
+    if state.settings_picker is not None:
+        _handle_settings_picker_event(args, state, event, rerender)
+        return
     visible_commands = _get_visible_commands(state.input)
 
     if isinstance(event, KeyEvent):
@@ -2514,12 +2821,13 @@ def _handle_normal_mode_key(
         return True
 
     # Ctrl shortcuts (P, N handled in text handler)
-    # PageUp/PageDown -> scroll transcript
-    if event.name == "pageup" and _scroll_transcript_by(args, state, 8):
+    # PageUp/PageDown -> scroll transcript by most of a screen
+    page = max(1, state.transcript_view_height - 2) if state.transcript_view_height else 8
+    if event.name == "pageup" and _scroll_transcript_by(args, state, page):
         rerender()
         return True
 
-    if event.name == "pagedown" and _scroll_transcript_by(args, state, -8):
+    if event.name == "pagedown" and _scroll_transcript_by(args, state, -page):
         rerender()
         return True
 
@@ -2546,9 +2854,9 @@ def _handle_normal_mode_return(
         selected = visible_commands[state.selected_slash_index]
         usage = getattr(selected, "usage", str(selected))
         # If input already matches the command exactly, submit instead of completing
-        if state.input.strip() == usage:
+        if state.input.strip() == usage or usage in {"/model", "/effort"}:
             state.selected_slash_index = 0
-            submitted = state.input
+            submitted = usage if usage in {"/model", "/effort"} else state.input
             state.input = ""
             state.cursor_offset = 0
             rerender()
@@ -2747,6 +3055,61 @@ def _handle_normal_mode_wheel(
         rerender()
         return True
     return False
+
+
+def _is_ctrl_c(event: ParsedInputEvent) -> bool:
+    if not isinstance(event, (KeyEvent, TextEvent)):
+        return False
+    return event.ctrl and (
+        (isinstance(event, KeyEvent) and event.name == "c")
+        or (isinstance(event, TextEvent) and event.text.lower() == "c")
+    )
+
+
+def _copy_selection(state: ScreenState) -> None:
+    text = state.frame_renderer.selected_text()
+    if text:
+        copy_to_clipboard(text)
+        state.selection_notice = f"Copied {len(text)} chars"
+
+
+def _handle_selection_event(state: ScreenState, event: ParsedInputEvent, rerender: Callable[[], None]) -> bool:
+    """Drag to select screen text, release to copy it. Returns True if consumed.
+
+    Mouse capture (needed for wheel scrolling) stops the terminal from
+    selecting text itself, so the app draws and copies the selection.
+    """
+    renderer = state.frame_renderer
+    if isinstance(event, MouseEvent):
+        cell = (event.y, event.x)
+        if event.action == "press":
+            renderer.selection = Selection(anchor=cell, focus=cell)
+            state.selection_dragging = True
+            state.selection_notice = None
+        elif state.selection_dragging and renderer.selection is not None:
+            renderer.selection.focus = cell
+            if event.action == "release":
+                state.selection_dragging = False
+                if renderer.selection.is_empty:
+                    renderer.selection = None
+                else:
+                    _copy_selection(state)
+        rerender()
+        return True
+
+    if renderer.selection is None and state.selection_notice is None:
+        return False
+    # Ctrl+C right after selecting is a copy, not a request to quit.
+    is_copy = _is_ctrl_c(event) and renderer.selection is not None and not renderer.selection.is_empty
+    if is_copy:
+        _copy_selection(state)
+    else:
+        renderer.selection = None
+    state.selection_dragging = False
+    if not is_copy:
+        state.selection_notice = None
+    rerender()
+    return is_copy
 
 
 # ---------------------------------------------------------------------------

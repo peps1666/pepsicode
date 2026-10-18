@@ -13,7 +13,9 @@ from .chrome import (
 )
 
 
-def render_input_prompt(current_input: str, cursor_offset: int, width: int | None = None) -> str:
+def render_input_prompt(
+    current_input: str, cursor_offset: int, width: int | None = None, hint: str = "Ask anything..."
+) -> str:
     """A prompt with a horizontal viewport that always includes the cursor."""
     offset = max(0, min(cursor_offset, len(current_input)))
     # Show pasted newlines on one row without changing the submitted input.
@@ -40,7 +42,6 @@ def render_input_prompt(current_input: str, cursor_offset: int, width: int | Non
             used += char_display_width(char)
         after = "".join(tail) + ("›" if len(tail) < len(after) and remaining else "")
 
-    hint = "Ask anything..."
     if available is not None:
         hint = truncate_plain(hint, max(0, available - 1))
     placeholder = f"{DIM}{hint}{RESET}" if not current_input else ""

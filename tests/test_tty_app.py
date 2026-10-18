@@ -20,7 +20,7 @@ from pepsicode.tui.types import TranscriptEntry
 
 
 def _initial_frame_text(output: str) -> str:
-    frame = strip_ansi(output).replace("\x1b[K", "")
+    frame = re.sub(r"\x1b\[\?\d+[hl]", "", strip_ansi(output)).replace("\x1b[K", "")
     return re.sub(r"\x1b\[\d+;1H", "\n", frame).removeprefix("\n")
 
 
@@ -156,7 +156,7 @@ def test_stream_transcript_renders_conversation_timeline() -> None:
 
     assert "fix tests" in plain
     assert "Sure, I will check them." in plain
-    assert "pytest success" in plain
+    assert "pytest  done" in plain
     assert "pytest passed" in plain
 
 

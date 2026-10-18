@@ -33,8 +33,8 @@ def test_render_transcript_shows_tool_entry() -> None:
         TranscriptEntry(id=2, kind="tool", body="done", toolName="read_file", status="success"),
     ]
     rendered = render_transcript(transcript, scroll_offset=0)
-    assert "read_file" in rendered
-    assert "ok" in rendered
+    assert "Read file" in rendered
+    assert "done" in rendered
 
 
 def test_render_transcript_shows_intermediate_collapse_phase() -> None:
@@ -51,7 +51,7 @@ def test_render_transcript_shows_intermediate_collapse_phase() -> None:
 
     rendered = render_transcript(transcript, scroll_offset=0)
 
-    assert "run_command" in rendered
+    assert "Run command" in rendered
     assert "collapsing" in rendered
 
 
@@ -71,7 +71,7 @@ def test_render_transcript_shows_collapsed_summary_when_fully_collapsed() -> Non
 
     rendered = render_transcript(transcript, scroll_offset=0)
 
-    assert "run_command" in rendered
+    assert "Run command" in rendered
     assert "short summary" in rendered
     assert "full output here" not in rendered
 

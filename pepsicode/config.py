@@ -2,8 +2,11 @@ from __future__ import annotations
 
 import json
 import os
+import tempfile
 from pathlib import Path
 from typing import Any
+
+from pepsicode.llm.providers import configure_providers
 
 PEPSI_CODE_DIR = Path.home() / ".pepsi-code"
 PEPSI_CODE_SETTINGS_PATH = PEPSI_CODE_DIR / "settings.json"
@@ -11,38 +14,6 @@ PEPSI_CODE_HISTORY_PATH = PEPSI_CODE_DIR / "history.json"
 PEPSI_CODE_PERMISSIONS_PATH = PEPSI_CODE_DIR / "permissions.json"
 PEPSI_CODE_MCP_PATH = PEPSI_CODE_DIR / "mcp.json"
 CLAUDE_SETTINGS_PATH = Path.home() / ".claude" / "settings.json"
-
-# 已知的合法模型名称（用于拼写检查提示）
-KNOWN_MODELS = [
-    "deepseek-v4-pro",
-    "deepseek-v4-flash",
-    "deepseek-chat",
-    "deepseek-reasoner",
-    "claude-sonnet-4-20250514",
-    "claude-opus-4-20250514",
-    "claude-haiku-3-20240307",
-    "gpt-4o",
-    "gpt-4o-mini",
-    "gpt-4-turbo",
-]
-
-
-def _suggest_model_name(typed: str) -> str:
-    """根据输入建议最接近的合法模型名称"""
-    if not typed:
-        return ""
-
-    # 简单的前缀匹配
-    for model in KNOWN_MODELS:
-        if model.startswith(typed.lower()):
-            return model
-
-    # 模糊匹配：包含输入字符的模型
-    for model in KNOWN_MODELS:
-        if typed.lower() in model:
-            return model
-
-    return ""
 
 
 def _truthy(value: Any) -> bool:
@@ -112,23 +83,41 @@ def load_effective_settings(cwd: str | Path | None = None) -> dict[str, Any]:
     project_mcp = read_mcp_config_file(project_mcp_path(cwd))
     mini_code_settings = read_settings_file(PEPSI_CODE_SETTINGS_PATH)
 
-    return merge_settings(
+    effective = merge_settings(
         merge_settings(
             merge_settings(claude_settings, {"mcpServers": global_mcp}),
             {"mcpServers": project_mcp},
         ),
         mini_code_settings,
     )
+    if mini_code_settings.get("model"):
+        effective["_modelSource"] = str(PEPSI_CODE_SETTINGS_PATH)
+    elif claude_settings.get("model"):
+        effective["_modelSource"] = str(CLAUDE_SETTINGS_PATH)
+    if "providers" in mini_code_settings:
+        # A Claude alias / thinking default must never leak into a domestic provider profile.
+        for key in ("model", "reasoningEffort", "fallbackModel", "models", "modelsUrl", "maxOutputTokens"):
+            if key not in mini_code_settings:
+                effective.pop(key, None)
+    return effective
 
 
 def save_mini_code_settings(updates: dict[str, Any]) -> None:
     PEPSI_CODE_DIR.mkdir(parents=True, exist_ok=True)
     existing = read_settings_file(PEPSI_CODE_SETTINGS_PATH)
     next_settings = merge_settings(existing, updates)
-    PEPSI_CODE_SETTINGS_PATH.write_text(
-        json.dumps(next_settings, indent=2) + "\n",
-        encoding="utf-8",
-    )
+    # Setup may save credentials: a failed write must not truncate the existing configuration.
+    temporary = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w", encoding="utf-8", dir=PEPSI_CODE_SETTINGS_PATH.parent, delete=False
+        ) as handle:
+            temporary = Path(handle.name)
+            handle.write(json.dumps(next_settings, indent=2) + "\n")
+        os.replace(temporary, PEPSI_CODE_SETTINGS_PATH)
+    finally:
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
 
 
 def load_runtime_config(cwd: str | Path | None = None) -> dict[str, Any]:
@@ -151,11 +140,6 @@ def load_runtime_config(cwd: str | Path | None = None) -> dict[str, Any]:
                 max_output_tokens = parsed
         except (TypeError, ValueError):
             max_output_tokens = None
-
-    if not model:
-        raise RuntimeError("No model configured. Set ~/.pepsi-code/settings.json or ANTHROPIC_MODEL.")
-    if not auth_token and not api_key:
-        raise RuntimeError("No auth configured. Set ANTHROPIC_AUTH_TOKEN or ANTHROPIC_API_KEY.")
 
     fallback_model = (
         os.environ.get("PEPSI_CODE_FALLBACK_MODEL")
@@ -186,8 +170,29 @@ def load_runtime_config(cwd: str | Path | None = None) -> dict[str, Any]:
 
     verifier_enabled = _truthy(os.environ.get("PEPSI_CODE_VERIFIER_ENABLED") or effective.get("verifierEnabled"))
 
-    return {
+    reasoning_effort = os.environ.get("PEPSI_CODE_REASONING_EFFORT") or effective.get("reasoningEffort", "default")
+    models = effective.get("models", [])
+    if not isinstance(models, list) or any(
+        not isinstance(item, (str, dict)) or (isinstance(item, dict) and not isinstance(item.get("id"), str))
+        for item in models
+    ):
+        raise ValueError("models must be a list of model IDs or objects with an id")
+    # Capability validation happens after discovery. Providers may add new IDs or effort levels.
+    if not isinstance(reasoning_effort, str) or not reasoning_effort or any(c.isspace() for c in reasoning_effort):
+        raise ValueError("reasoningEffort must be a non-empty API effort level")
+
+    runtime = {
         "model": model,
+        "modelSource": (
+            "环境变量 PEPSI_CODE_MODEL"
+            if os.environ.get("PEPSI_CODE_MODEL")
+            else effective.get("_modelSource", "settings.json")
+            if effective.get("model")
+            else "ANTHROPIC_MODEL"
+        ),
+        "reasoningEffort": reasoning_effort,
+        "models": models,
+        "modelsUrl": effective.get("modelsUrl"),
         "fallbackModel": fallback_model,
         "baseUrl": base_url,
         "authToken": auth_token,
@@ -200,6 +205,12 @@ def load_runtime_config(cwd: str | Path | None = None) -> dict[str, Any]:
         "verifierEnabled": verifier_enabled,
         "sourceSummary": f"config: {PEPSI_CODE_SETTINGS_PATH} > {CLAUDE_SETTINGS_PATH} > process.env",
     }
+    configure_providers(runtime, effective, env)
+    if not runtime["model"] and not runtime.get("_providerRuntimes"):
+        raise RuntimeError("No model configured. Set ~/.pepsi-code/settings.json or ANTHROPIC_MODEL.")
+    if not runtime.get("authToken") and not runtime.get("apiKey"):
+        raise RuntimeError("No auth configured. Configure the selected provider's API Key.")
+    return runtime
 
 
 def get_mcp_config_path(scope: str, cwd: str | Path | None = None) -> Path:
@@ -243,23 +254,15 @@ def validate_config(cwd: str | Path | None = None) -> tuple[bool, list[str]]:
     检查项：
     1. 模型名称是否配置
     2. API key 是否配置
-    3. 模型名称拼写是否正确
-    4. MCP 配置文件是否合法
+    3. MCP 配置文件是否合法
+
+    模型是否可用由运行时读取的 API 列表判断，不维护静态模型名称表。
     """
     errors: list[str] = []
     warnings: list[str] = []
 
     try:
         config = load_runtime_config(cwd)
-
-        # 检查模型名称拼写
-        model = config.get("model", "")
-        if model and not any(model.lower() == km.lower() for km in KNOWN_MODELS):
-            suggestion = _suggest_model_name(model)
-            if suggestion:
-                warnings.append(f"Unknown model '{model}'. Did you mean '{suggestion}'")
-            else:
-                warnings.append(f"Unknown model '{model}'. Known models: {', '.join(KNOWN_MODELS[:3])}...")
 
         # 检查 MCP 配置
         mcp_servers = config.get("mcpServers", {})
@@ -274,17 +277,13 @@ def validate_config(cwd: str | Path | None = None) -> tuple[bool, list[str]]:
 
         # 提供友好的错误消息
         if "No model configured" in error_msg:
-            suggestion = _suggest_model_name(os.environ.get("PEPSI_CODE_MODEL", ""))
             help_msg = (
                 f"Error: {error_msg}\n\n"
                 "How to fix:\n"
-                "  1. Set model name: export ANTHROPIC_MODEL=deepseek-v4-flash\n"
+                "  1. Set a model ID returned by your provider's /models endpoint\n"
                 "  2. Or edit ~/.pepsi-code/settings.json:\n"
-                f'     {{"model": "deepseek-v4-flash"}}\n'
+                '     {"model": "<provider-model-id>"}\n'
             )
-            if suggestion:
-                help_msg += f"\n  Did you mean: {suggestion}?\n"
-            help_msg += f"\n  Known models: {', '.join(KNOWN_MODELS[:3])}..."
             errors.append(help_msg)
 
         elif "No auth configured" in error_msg:

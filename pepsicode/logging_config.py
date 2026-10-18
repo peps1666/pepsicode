@@ -42,9 +42,13 @@ def setup_logging(
 
     root_logger = logging.getLogger("pepsicode")
     root_logger.setLevel(getattr(logging, level.upper(), logging.WARNING))
+    # An embedding application's root StreamHandler must not bypass our console setting.
+    root_logger.propagate = False
 
     # configure handlers
-    root_logger.handlers.clear()
+    for handler in root_logger.handlers[:]:
+        root_logger.removeHandler(handler)
+        handler.close()
 
     # File handler
     if log_to_file:
@@ -59,6 +63,10 @@ def setup_logging(
         console_handler.setLevel(getattr(logging, level.upper(), logging.WARNING))
         console_handler.setFormatter(logging.Formatter(CONSOLE_FORMAT))
         root_logger.addHandler(console_handler)
+
+    if not root_logger.handlers:
+        # Prevent logging.lastResort from writing warnings to stderr when both outputs are disabled.
+        root_logger.addHandler(logging.NullHandler())
 
     # Reduce noise from third-party libraries
     for noisy_lib in ["urllib3", "httpx", "openai"]:

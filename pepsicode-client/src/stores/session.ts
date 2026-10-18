@@ -44,6 +44,20 @@ interface SessionState {
   sessionId: string | null;
   cwd: string;
   model: string;
+  provider: string;
+  providers: Array<{ id: string; name: string; configured: boolean }>;
+  loadProviderModels: (provider: string, refresh?: boolean) => Promise<{ models: ModelCapabilities[]; catalogError: string }>;
+  probeProvider: (draft: ProviderDraft) => Promise<{ token: string; models: ModelCapabilities[]; catalogError: string; verified: boolean }>;
+  saveProvider: (token: string, model: string) => Promise<void>;
+  cancelProviderSetup: () => Promise<void>;
+  reasoningEffort: string;
+  models: ModelCapabilities[];
+  catalogError: string;
+  refreshModels: () => Promise<void>;
+  isMock: boolean;
+  modelUpdating: boolean;
+  inspectModel: (model: string) => Promise<ModelCapabilities>;
+  updateModel: (model: string, reasoningEffort: string, persist: boolean, provider?: string) => Promise<void>;
   pendingPermission: PermissionRequest | null;
   sessions: SessionMeta[];
   sessionsLoading: boolean;
@@ -62,6 +76,34 @@ interface SessionState {
   contextData: any;
   planMode: boolean;
   planFile: string | null;
+}
+
+export interface ModelCapabilities {
+  id: string;
+  name: string;
+  reasoningMode: string;
+  reasoningLevels: string[];
+}
+
+export interface ProviderDraft {
+  provider: string;
+  name: string;
+  baseUrl: string;
+  authType: string;
+  apiKey: string;
+  modelsUrl: string | false;
+}
+
+function modelSettings(result: any) {
+  return {
+    model: result.model || "unknown",
+    provider: result.provider || "",
+    providers: result.providers || [],
+    reasoningEffort: result.reasoningEffort || "default",
+    models: result.models || [],
+    catalogError: result.catalogError || "",
+    isMock: Boolean(result.isMock),
+  };
 }
 
 let messageIdCounter = 0;
@@ -122,6 +164,13 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   sessionId: null,
   cwd: "",
   model: "",
+  provider: "",
+  providers: [],
+  reasoningEffort: "default",
+  models: [],
+  catalogError: "",
+  isMock: false,
+  modelUpdating: false,
   pendingPermission: null,
   sessions: [],
   sessionsLoading: false,
@@ -138,7 +187,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       set({
         sessionId: result.session_id,
         cwd: result.cwd,
-        model: result.model || "unknown",
+        ...modelSettings(result),
       });
       await get().refreshSessions();
     } catch (e) {
@@ -151,6 +200,10 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       const { event, data } = message;
 
       switch (event) {
+        case "model/settings": {
+          set(modelSettings(data));
+          break;
+        }
         case "message/start": {
           const id = nextMsgId();
           set((state) => ({
@@ -278,12 +331,12 @@ export const useSessionStore = create<SessionState>((set, get) => ({
 
   createSession: async () => {
     const { ws } = useConnectionStore.getState();
-    if (!ws || get().isRunning) return;
+    if (!ws || get().isRunning || get().modelUpdating) return;
     const result = await sendRequest(ws, "session/create", { cwd: get().cwd || undefined });
     set({
       sessionId: result.session_id,
       cwd: result.cwd,
-      model: result.model || "unknown",
+      ...modelSettings(result),
       messages: [],
       isRunning: false,
       pendingPermission: null,
@@ -297,7 +350,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
 
   runTurn: async (input: string) => {
     const { ws } = useConnectionStore.getState();
-    if (!ws || get().isRunning) return;
+    if (!ws || get().isRunning || get().modelUpdating) return;
 
     // Add user message
     const userMsg: ChatMessage = {
@@ -357,7 +410,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
 
   resumeSession: async (sessionId: string) => {
     const { ws } = useConnectionStore.getState();
-    if (!ws || get().isRunning) return;
+    if (!ws || get().isRunning || get().modelUpdating) return;
     set({ isRunning: true, pendingPermission: null });
     try {
       const result = await sendRequest(ws, "session/resume", {
@@ -367,7 +420,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       set({
         sessionId: result.session_id,
         cwd: result.workspace,
-        model: result.model || get().model,
+        ...modelSettings(result),
         messages: hydrateSessionHistory(result.history),
         isRunning: false,
         pendingPermission: null,
@@ -424,14 +477,14 @@ export const useSessionStore = create<SessionState>((set, get) => ({
 
   switchCwd: async (cwd: string) => {
     const { ws } = useConnectionStore.getState();
-    if (!ws || get().isRunning) return;
+    if (!ws || get().isRunning || get().modelUpdating) return;
     // Re-create the session on the server with the new cwd. The server's
     // session/create reinitializes tools/permissions/model for the new workspace.
     const result = await sendRequest(ws, "session/create", { cwd });
     set({
       sessionId: result.session_id,
       cwd: result.cwd,
-      model: result.model || "unknown",
+      ...modelSettings(result),
       messages: [],
       isRunning: false,
       pendingPermission: null,
@@ -442,5 +495,62 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       sessions: [],
     });
     await get().refreshSessions();
+  },
+
+  refreshModels: async () => {
+    const { ws } = useConnectionStore.getState();
+    if (!ws) throw new Error("Server disconnected");
+    const result = await sendRequest(ws, "model/settings", { refresh: true });
+    set(modelSettings(result));
+  },
+
+  loadProviderModels: async (provider: string, refresh = false) => {
+    const { ws } = useConnectionStore.getState();
+    if (!ws) throw new Error("Server disconnected");
+    return await sendRequest(ws, "model/settings", { ...(provider ? { provider } : {}), refresh });
+  },
+
+  probeProvider: async (draft: ProviderDraft) => {
+    const { ws } = useConnectionStore.getState();
+    if (!ws) throw new Error("Server disconnected");
+    return await sendRequest(ws, "provider/probe", { draft });
+  },
+
+  saveProvider: async (token: string, model: string) => {
+    const { ws } = useConnectionStore.getState();
+    if (!ws) throw new Error("Server disconnected");
+    if (get().isRunning || get().modelUpdating) throw new Error("请等待当前请求结束");
+    set({ modelUpdating: true });
+    try {
+      const result = await sendRequest(ws, "provider/save", { token, model });
+      set(modelSettings(result));
+      void get().refreshContext();
+    } finally { set({ modelUpdating: false }); }
+  },
+
+  cancelProviderSetup: async () => {
+    const { ws } = useConnectionStore.getState();
+    if (ws) await sendRequest(ws, "provider/cancel", {});
+  },
+
+  inspectModel: async (model: string) => {
+    const { ws } = useConnectionStore.getState();
+    if (!ws) throw new Error("Server disconnected");
+    const result = await sendRequest(ws, "model/settings", { model });
+    return result.capabilities;
+  },
+
+  updateModel: async (model: string, reasoningEffort: string, persist: boolean, provider?: string) => {
+    const { ws } = useConnectionStore.getState();
+    if (!ws) throw new Error("Server disconnected");
+    if (get().isRunning || get().modelUpdating) throw new Error("Wait for the current request to finish");
+    set({ modelUpdating: true });
+    try {
+      const result = await sendRequest(ws, "model/update", { model, reasoningEffort, persist, ...(provider ? { provider } : {}) });
+      set(modelSettings(result));
+      void get().refreshContext();
+    } finally {
+      set({ modelUpdating: false });
+    }
   },
 }));

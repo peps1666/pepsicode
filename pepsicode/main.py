@@ -16,6 +16,7 @@ from pepsicode.core.agent_loop import run_agent_turn
 from pepsicode.hooks import HookContext, HookEvent, create_hook_engine
 from pepsicode.llm.anthropic_adapter import AnthropicModelAdapter
 from pepsicode.llm.mock_model import MockModelAdapter
+from pepsicode.llm.model_discovery import refresh_model_catalog
 from pepsicode.permissions import PermissionManager
 from pepsicode.tooling import ToolContext
 from pepsicode.tools import create_default_tool_registry
@@ -27,12 +28,30 @@ from pepsicode.workspace import resolve_tool_path
 
 
 # 当地命令处理器：处理以 "/" 开头的命令，如 "/tools" 列出可用工具，或其他自定义命令
-def _handle_local_command(user_input: str, tools, permissions=None, hook_engine=None) -> str | None:
+def _handle_local_command(
+    user_input: str,
+    tools,
+    permissions=None,
+    hook_engine=None,
+    *,
+    runtime=None,
+    model_adapter=None,
+    messages=None,
+    context_manager=None,
+) -> str | None:
     if user_input == "/tools":
         return "\n".join(f"{tool.name}: {tool.description}" for tool in tools.list())
     if user_input == "/hooks" or user_input.startswith("/hooks "):
         return hook_engine.handle_command(user_input) if hook_engine is not None else "Hooks are unavailable."
-    local_result = try_handle_local_command(user_input, tools=tools, permissions=permissions)
+    local_result = try_handle_local_command(
+        user_input,
+        tools=tools,
+        permissions=permissions,
+        runtime=runtime,
+        model_adapter=model_adapter,
+        messages=messages,
+        context_manager=context_manager,
+    )
     return local_result
 
 
@@ -161,7 +180,8 @@ def main() -> None:
     # Initialize logging
     from pepsicode.logging_config import setup_logging
 
-    setup_logging(level=args.log_level)
+    # The interactive renderer owns the terminal; diagnostics remain in pepsicode.log.
+    setup_logging(level=args.log_level, log_to_console=not sys.stdin.isatty())
 
     # Run config validation if requested
     if args.validate_config:
@@ -197,15 +217,19 @@ def main() -> None:
         )
         print(
             "📝 How to fix this:\n"
-            "  1. Set your model name: export ANTHROPIC_MODEL=deepseek-v4-flash\n"
+            "  1. Select a model ID returned by your provider's /models endpoint\n"
             "  2. Set your API key: export ANTHROPIC_API_KEY=<your-provider-key>\n"
             "  3. Or edit ~/.pepsi-code/settings.json:\n"
-            '     {"model": "deepseek-v4-flash", "env": {"ANTHROPIC_BASE_URL": "https://api.deepseek.com/anthropic", "ANTHROPIC_API_KEY": "<your-provider-key>"}}\n'
-            "  4. Restart pepsicode\n\n"
+            '     {"model": "<provider-model-id>", "env": {"ANTHROPIC_BASE_URL": "<provider-api-url>", "ANTHROPIC_API_KEY": "<your-provider-key>"}}\n'
+            "  4. Restart pepsicode\n"
+            "  Or type /provider in pepsicode to set up DeepSeek (default), Kimi, GLM or Qwen.\n\n"
             "📖 For more info: https://github.com/peps1666/pepsicode\n"
             "   Falling back to mock model for now...\n",
             file=sys.stderr,
         )
+
+    if runtime is not None and os.environ.get("PEPSI_CODE_MODEL_MODE") != "mock":
+        refresh_model_catalog(runtime)
 
     prompt_handler = (
         _make_cli_permission_prompt() if sys.stdin.isatty() else None
@@ -366,7 +390,16 @@ def main() -> None:
                     saved_path = _save_transcript_file(cwd, permissions, transcript, output_path)
                     print(f"Saved transcript to {saved_path}")
                     continue
-                local_result = _handle_local_command(user_input, tools, permissions, hook_engine)
+                local_result = _handle_local_command(
+                    user_input,
+                    tools,
+                    permissions,
+                    hook_engine,
+                    runtime=runtime,
+                    model_adapter=model,
+                    messages=messages,
+                    context_manager=context_mgr,
+                )
                 if local_result is not None:
                     _append_transcript(transcript, kind="user", body=user_input)
                     _append_transcript(transcript, kind="assistant", body=local_result)
@@ -379,9 +412,7 @@ def main() -> None:
                     result = tools.execute(
                         shortcut["toolName"],
                         shortcut["input"],
-                        context=ToolContext(
-                            cwd=cwd, permissions=permissions, hooks=hook_engine, memory=memory_mgr
-                        ),
+                        context=ToolContext(cwd=cwd, permissions=permissions, hooks=hook_engine, memory=memory_mgr),
                     )
                     _append_transcript(
                         transcript,

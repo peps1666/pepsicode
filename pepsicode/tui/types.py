@@ -14,6 +14,7 @@ class TranscriptEntry:
     collapsed: bool = False
     collapsedSummary: str | None = None
     collapsePhase: Literal[1, 2, 3] | None = None
+    toolSummary: str | None = None
 
 
 # TranscriptEntry 对象池，减少频繁创建和 GC 压力
@@ -31,6 +32,7 @@ def _create_transcript_entry(
     collapsed: bool = False,
     collapsedSummary: str | None = None,
     collapsePhase: Literal[1, 2, 3] | None = None,
+    toolSummary: str | None = None,
 ) -> TranscriptEntry:
     """创建 TranscriptEntry，使用对象池减少 GC 压力"""
     if _entry_pool:
@@ -43,6 +45,7 @@ def _create_transcript_entry(
         entry.collapsed = collapsed
         entry.collapsedSummary = collapsedSummary
         entry.collapsePhase = collapsePhase
+        entry.toolSummary = toolSummary
         return entry
     else:
         return TranscriptEntry(
@@ -54,6 +57,7 @@ def _create_transcript_entry(
             collapsed=collapsed,
             collapsedSummary=collapsedSummary,
             collapsePhase=collapsePhase,
+            toolSummary=toolSummary,
         )
 
 

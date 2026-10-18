@@ -1,0 +1,19 @@
+{
+  "provider": "deepseek",
+  "providers": {
+    "kimi": {
+      "apiKeyEnv": "MOONSHOT_API_KEY"
+    },
+    "glm": {
+      "apiKeyEnv": "ZHIPU_API_KEY"
+    },
+    "deepseek": {
+      "apiKeyEnv": "DEEPSEEK_API_KEY"
+    },
+    "qwen": {
+      "apiKeyEnv": "DASHSCOPE_API_KEY",
+      "modelsUrl": false,
+      "models": []
+    }
+  }
+}
