@@ -47,12 +47,20 @@ class Event(TypedDict, total=False):
 # ---------------------------------------------------------------------------
 
 RequestMethod = Literal[
+    "connection/auth",
     "session/create",
     "session/list",
     "session/resume",
     "session/delete",
+    "session/tree",
+    "session/checkout",
+    "session/fork",
+    "session/clone",
+    "turn/regenerate",
     "turn/run",
     "turn/cancel",
+    "turn/enqueue",
+    "turn/dequeue",
     "tool/approve",
     "hooks/list",
     "hooks/reload",
@@ -65,6 +73,7 @@ RequestMethod = Literal[
     "cost/query",
     "context/query",
     "tools/list",
+    "commands/list",
     "config/validate",
     "model/settings",
     "model/update",
@@ -92,11 +101,13 @@ EventName = Literal[
     "hook/context",
     "session/saved",
     "session/created",
+    "session/view",
     "cost/update",
     "usage/update",
     "context/compact",
     "error",
     "turn/end",
+    "input/queue",
     "status",
 ]
 
@@ -128,12 +139,16 @@ def serialize_session_history(messages: list[dict[str, Any]]) -> list[dict[str, 
     """Convert persisted agent messages into the desktop timeline contract."""
     history: list[dict[str, Any]] = []
     for message in messages:
+        if message.get("internal"):
+            continue
         role = message.get("role")
         if role == "system" or role == "assistant_thinking":
             continue
 
         if role in {"user", "assistant"}:
             content = str(message.get("content", ""))
+            if role == "user":
+                content = str(message.get("displayContent", content))
             if role == "assistant" and not message.get("isError"):
                 content, _ = parse_assistant_text(content)
             history.append(
@@ -141,6 +156,7 @@ def serialize_session_history(messages: list[dict[str, Any]]) -> list[dict[str, 
                     "role": role,
                     "content": content,
                     "is_error": bool(message.get("isError", False)),
+                    "entry_id": message.get("entryId"),
                 }
             )
             continue

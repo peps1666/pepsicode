@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState, useCallback } from "react";
-import { useSessionStore, type ChatMessage } from "../stores/session";
+import { useSessionStore, type ChatMessage, type InputMode } from "../stores/session";
 import MessageItem from "./MessageItem";
 import Composer from "./Composer";
 import ThinkingGroup, { isThinkingMessage } from "./ThinkingGroup";
 import ModelSettings, { effortLabels } from "./ModelSettings";
+import SessionTree from "./SessionTree";
 import styles from "./ChatView.module.css";
 
 type TimelineBlock =
@@ -32,8 +33,9 @@ function buildTimeline(messages: ChatMessage[]): TimelineBlock[] {
   return blocks;
 }
 
-export default function ChatView({ onSend }: { onSend: (input: string) => void }) {
-  const { messages, isRunning, cwd, model, models, reasoningEffort, isMock, modelUpdating, permissionUpdating, sessionId, planMode, verification } = useSessionStore();
+export default function ChatView({ onSend }: { onSend: (input: string, mode?: InputMode) => Promise<void> }) {
+  const { messages, isRunning, cwd, model, models, reasoningEffort, isMock, modelUpdating, permissionUpdating, sessionId, planMode, verification, branchUpdating, branchError } = useSessionStore();
+  const [treeOpen, setTreeOpen] = useState(false);
   const modelName = models.find((item) => item.id === model)?.name || model;
   const [settingsOpen, setSettingsOpen] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -68,7 +70,7 @@ export default function ChatView({ onSend }: { onSend: (input: string) => void }
       <header className={styles.header}>
         <div className={styles.headerLeft}>
           <button className={styles.modelName} type="button" onClick={() => setSettingsOpen(true)}
-            disabled={isRunning || modelUpdating || !sessionId}
+            disabled={isRunning || modelUpdating || branchUpdating || !sessionId}
             title={isMock ? "添加厂商并配置 API" : "选择模型与思考深度"}
             aria-haspopup="dialog">
             {isMock ? "配置模型与服务商" : `${modelName} · ${effortLabels[reasoningEffort] || reasoningEffort}`} ▾
@@ -76,9 +78,12 @@ export default function ChatView({ onSend }: { onSend: (input: string) => void }
           {planMode && <span className={styles.planBadge}>PLAN MODE</span>}
         </div>
         <div className={styles.headerRight}>
+          <button type="button" onClick={() => setTreeOpen(!treeOpen)} disabled={branchUpdating || !sessionId}>对话分支</button>
           <span className={styles.cwd} title={cwd}>{cwd}</span>
         </div>
       </header>
+      {treeOpen && <SessionTree onClose={() => setTreeOpen(false)} />}
+      {branchError && !treeOpen && <p role="alert">{branchError}</p>}
       <div className={styles.messageList} ref={scrollRef} onScroll={handleScroll}>
         {messages.length === 0 ? (
           <div className={styles.emptyState}>
@@ -105,7 +110,7 @@ export default function ChatView({ onSend }: { onSend: (input: string) => void }
           {verification.details && <pre>{verification.details}</pre>}
         </details>
       )}
-      <Composer onSend={onSend} disabled={isRunning || modelUpdating || permissionUpdating} />
+      <Composer onSend={onSend} disabled={modelUpdating || permissionUpdating || branchUpdating} running={isRunning} />
       {settingsOpen && <ModelSettings onClose={() => setSettingsOpen(false)} />}
     </div>
   );

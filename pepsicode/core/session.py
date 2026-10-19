@@ -8,10 +8,12 @@ from __future__ import annotations
 
 import json
 import os
+import threading
 import time
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
+from tempfile import NamedTemporaryFile
 from typing import Any
 
 from pepsicode.config import PEPSI_CODE_DIR
@@ -22,6 +24,21 @@ from pepsicode.config import PEPSI_CODE_DIR
 
 SESSIONS_DIR = PEPSI_CODE_DIR / "sessions"
 AUTOSAVE_INTERVAL_SECONDS = 30  # Minimum seconds between autosaves
+_STORE_LOCK = threading.RLock()
+
+
+def _atomic_write(path: Path, content: str) -> None:
+    temporary = None
+    try:
+        with NamedTemporaryFile(mode="w", encoding="utf-8", dir=path.parent, suffix=".tmp", delete=False) as stream:
+            temporary = Path(stream.name)
+            stream.write(content)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, path)
+    finally:
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
 
 
 # ---------------------------------------------------------------------------
@@ -60,6 +77,11 @@ class SessionData:
     access_mode: str = "auto"
     plan_file_path: str | None = None
     model_settings: dict[str, str] = field(default_factory=dict)
+    verification_state: dict[str, Any] | None = None
+    tree: dict[str, Any] = field(default_factory=dict)
+    parent_session_id: str | None = None
+    parent_entry_id: str | None = None
+    _tree_lock: Any = field(default_factory=threading.RLock, repr=False, compare=False)
     metadata: SessionMetadata = field(default=None)
 
     def __post_init__(self):
@@ -81,7 +103,7 @@ class SessionData:
         # Extract first user message (truncated)
         for msg in self.messages:
             if msg.get("role") == "user":
-                content = msg.get("content", "")
+                content = msg.get("displayContent", msg.get("content", ""))
                 self.metadata.first_message = content[:100]
                 break
 
@@ -152,14 +174,19 @@ def _save_session_index(index: dict[str, SessionMetadata]) -> None:
         }
         for sid, meta in index.items()
     }
-    _session_index_file().write_text(
-        json.dumps(serializable, indent=2) + "\n",
-        encoding="utf-8",
-    )
+    _atomic_write(_session_index_file(), json.dumps(serializable, indent=2) + "\n")
 
 
 def save_session(session: SessionData) -> None:
     """Persist a complete session to disk."""
+    with session._tree_lock, _STORE_LOCK:
+        _save_session_locked(session)
+
+
+def _save_session_locked(session: SessionData) -> None:
+    from pepsicode.core.session_tree import record_messages
+
+    record_messages(session, session.messages)
     session.update_metadata()
     SESSIONS_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -180,6 +207,10 @@ def save_session(session: SessionData) -> None:
         "access_mode": session.access_mode,
         "plan_file_path": session.plan_file_path,
         "model_settings": session.model_settings,
+        "verification_state": session.verification_state,
+        "tree": session.tree,
+        "parent_session_id": session.parent_session_id,
+        "parent_entry_id": session.parent_entry_id,
         "metadata": {
             "session_id": session.metadata.session_id,
             "created_at": session.metadata.created_at,
@@ -190,10 +221,7 @@ def save_session(session: SessionData) -> None:
             "workspace": session.metadata.workspace,
         },
     }
-    session_path.write_text(
-        json.dumps(serializable, indent=2, ensure_ascii=False) + "\n",
-        encoding="utf-8",
-    )
+    _atomic_write(session_path, json.dumps(serializable, indent=2, ensure_ascii=False) + "\n")
 
     # Update index
     index = _load_session_index()
@@ -215,6 +243,9 @@ def load_session(session_id: str) -> SessionData | None:
         raw = session_path.read_text(encoding="utf-8")
         data = json.loads(raw)
         metadata = SessionMetadata(**data.get("metadata", {}))
+        from pepsicode.core.session_tree import validate_tree
+
+        validate_tree(data.get("tree", {}))
         return SessionData(
             session_id=data["session_id"],
             created_at=data["created_at"],
@@ -230,9 +261,13 @@ def load_session(session_id: str) -> SessionData | None:
             access_mode=data.get("access_mode", "auto"),
             plan_file_path=data.get("plan_file_path"),
             model_settings=data.get("model_settings", {}),
+            verification_state=data.get("verification_state"),
+            tree=data.get("tree", {}),
+            parent_session_id=data.get("parent_session_id"),
+            parent_entry_id=data.get("parent_entry_id"),
             metadata=metadata,
         )
-    except (json.JSONDecodeError, KeyError, TypeError):
+    except (json.JSONDecodeError, KeyError, TypeError, ValueError):
         return None
 
 

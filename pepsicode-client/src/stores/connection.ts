@@ -7,7 +7,7 @@ interface ConnectionState {
   port: number | null;
   error: string | null;
   ws: WebSocket | null;
-  connect: (port: number) => Promise<void>;
+  connect: (port: number, token: string) => Promise<void>;
   disconnect: () => void;
   send: (message: object) => void;
   setWS: (ws: WebSocket | null) => void;
@@ -15,6 +15,8 @@ interface ConnectionState {
 
 let messageHandlers: ((message: any) => void)[] = [];
 let nextRequestId = 1;
+let generation = 0;
+let currentSocket: WebSocket | null = null;
 const pendingRequests = new Map<number, { resolve: (v: any) => void; reject: (e: any) => void; ws: WebSocket; timer: ReturnType<typeof setTimeout> | null }>();
 
 export function onMessage(handler: (message: any) => void): () => void {
@@ -24,21 +26,24 @@ export function onMessage(handler: (message: any) => void): () => void {
   };
 }
 
-export function sendRequest(ws: WebSocket | null, method: string, params: object = {}): Promise<any> {
+export function sendRequest(
+  ws: WebSocket | null, method: string, params: object = {}, options: { timeoutMs?: number | null } = {},
+): Promise<any> {
   if (!ws || ws.readyState !== WebSocket.OPEN) {
     return Promise.reject(new Error("WebSocket not connected"));
   }
   const id = nextRequestId++;
   const message = { kind: "request", id, method, params };
   return new Promise((resolve, reject) => {
-    // An agent turn can include several verification/build passes. Its
-    // lifecycle ends with the response or a closed socket, not a 60s timer.
-    const timer = method === "turn/run" ? null : setTimeout(() => {
+    // Callers choose a deadline; null keeps a streaming task alive until its
+    // response or a closed socket, including future long-running RPCs.
+    const timeoutMs = options.timeoutMs === undefined ? 60000 : options.timeoutMs;
+    const timer = timeoutMs === null ? null : setTimeout(() => {
       if (pendingRequests.has(id)) {
         pendingRequests.delete(id);
         reject(new Error(`Request ${method} timed out`));
       }
-    }, 60000);
+    }, timeoutMs);
     pendingRequests.set(id, { resolve, reject, ws, timer });
     try {
       ws.send(JSON.stringify(message));
@@ -56,27 +61,35 @@ export const useConnectionStore = create<ConnectionState>((set, get) => ({
   error: null,
   ws: null,
 
-  connect: async (port: number) => {
-    set({ status: "connecting", port, error: null });
+  connect: async (port: number, token: string) => {
+    if (!token) throw new Error("Connection token is required");
+    const attempt = ++generation;
+    currentSocket?.close();
+    const ws = new WebSocket(`ws://127.0.0.1:${port}`);
+    currentSocket = ws;
+    set({ status: "connecting", port, error: null, ws: null });
     return new Promise<void>((resolve, reject) => {
-      const ws = new WebSocket(`ws://127.0.0.1:${port}`);
-      const timeout = setTimeout(() => {
-        reject(new Error("Connection timeout"));
-        set({ status: "error", error: "Connection timeout" });
-      }, 10000);
+      let authenticated = false;
+      const active = () => attempt === generation && currentSocket === ws;
+      const fail = (error: Error) => {
+        clearTimeout(timeout);
+        if (active()) set({ status: "error", error: error.message, ws: null });
+        reject(error);
+        ws.close();
+      };
+      const timeout = setTimeout(() => fail(new Error("Connection authentication timed out")), 10000);
 
       ws.onopen = () => {
-        clearTimeout(timeout);
-        set({ status: "connected", ws, error: null });
-        resolve();
+        if (!active()) return;
+        try {
+          ws.send(JSON.stringify({ kind: "request", id: 0, method: "connection/auth", params: { token } }));
+        } catch {
+          fail(new Error("Connection authentication failed"));
+        }
       };
-
       ws.onerror = () => {
-        clearTimeout(timeout);
-        set({ status: "error", error: "WebSocket connection failed", ws: null });
-        reject(new Error("WebSocket connection failed"));
+        if (active()) fail(new Error("WebSocket connection failed"));
       };
-
       ws.onclose = () => {
         clearTimeout(timeout);
         for (const [id, pending] of pendingRequests) {
@@ -86,46 +99,53 @@ export const useConnectionStore = create<ConnectionState>((set, get) => ({
             pending.reject(new Error("WebSocket connection closed"));
           }
         }
-        if (get().ws === ws) set({ status: "disconnected", ws: null });
+        if (active()) {
+          currentSocket = null;
+          if (get().status !== "error") set({ status: "disconnected", ws: null });
+        }
         reject(new Error("WebSocket connection closed"));
       };
-
       ws.onmessage = (event) => {
+        if (!active()) return;
         try {
           const message = JSON.parse(event.data);
-          // Route responses to pending requests
-          if (message.kind === "response" && pendingRequests.has(message.id)) {
-            const pending = pendingRequests.get(message.id)!;
-            pendingRequests.delete(message.id);
-            if (pending.timer !== null) clearTimeout(pending.timer);
-            if (message.error) {
-              pending.reject(new Error(message.error.message || "Unknown error"));
-            } else {
-              pending.resolve(message.result);
+          if (!authenticated) {
+            if (message.kind !== "response" || message.id !== 0) return;
+            if (message.error || message.result?.authenticated !== true) {
+              fail(new Error("Connection authentication failed"));
+              return;
             }
+            authenticated = true;
+            clearTimeout(timeout);
+            set({ status: "connected", ws, error: null });
+            resolve();
             return;
           }
-          // Dispatch events and other messages to handlers
-          for (const handler of messageHandlers) {
-            try {
-              handler(message);
-            } catch (e) {
-              console.error("Message handler error:", e);
-            }
+          if (message.kind === "response" && pendingRequests.has(message.id)) {
+            const pending = pendingRequests.get(message.id)!;
+            if (pending.ws !== ws) return;
+            pendingRequests.delete(message.id);
+            if (pending.timer !== null) clearTimeout(pending.timer);
+            if (message.error) pending.reject(new Error(message.error.message || "Unknown error"));
+            else pending.resolve(message.result);
+            return;
           }
-        } catch (e) {
-          console.error("Failed to parse message:", e);
+          for (const handler of messageHandlers) {
+            try { handler(message); }
+            catch (error) { console.error("Message handler error:", error); }
+          }
+        } catch (error) {
+          console.error("Failed to parse message:", error);
         }
       };
     });
   },
 
   disconnect: () => {
-    const { ws } = get();
-    if (ws) {
-      ws.close();
-    }
-    set({ status: "disconnected", ws: null });
+    ++generation;
+    currentSocket?.close();
+    currentSocket = null;
+    set({ status: "disconnected", ws: null, error: null });
   },
 
   send: (message: object) => {

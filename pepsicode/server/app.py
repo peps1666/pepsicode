@@ -19,6 +19,7 @@ import argparse
 import asyncio
 import json
 import os
+import secrets
 import sys
 import threading
 import uuid
@@ -28,10 +29,12 @@ from typing import Any
 
 from pepsicode.agents.trace import TraceManager
 from pepsicode.approval import ApprovalBackend, ApprovalDecision, ApprovalOutcome, ApprovalRequest
+from pepsicode.cli.cli_commands import expand_prompt_command, get_slash_commands, prompt_catalog
 from pepsicode.config import load_runtime_config, save_mini_code_settings
 from pepsicode.context.context_manager import ContextManager
 from pepsicode.context.prompt import build_session_prompt
 from pepsicode.core.agent_loop import run_agent_turn_stream
+from pepsicode.core.input_queue import TurnInputQueue
 from pepsicode.core.session import (
     SessionData,
     create_new_session,
@@ -41,7 +44,17 @@ from pepsicode.core.session import (
     same_workspace,
     save_session,
 )
-from pepsicode.core.verification import run_verified_turn
+from pepsicode.core.session_tree import (
+    branch_path,
+    checkout_entry,
+    copy_session,
+    format_tree,
+    prepare_regeneration,
+    record_messages,
+    recording_session,
+    tree_view,
+)
+from pepsicode.core.verification import restore_verification_state, run_verified_turn, snapshot_verification_state
 from pepsicode.hooks import HookContext, HookEvent, create_hook_engine
 from pepsicode.llm.anthropic_adapter import AnthropicModelAdapter
 from pepsicode.llm.cost_tracker import CostTracker
@@ -59,6 +72,7 @@ from pepsicode.llm.providers import model_settings_snapshot, provider_catalog, p
 from pepsicode.logging_config import get_logger, setup_logging
 from pepsicode.permissions import PermissionManager, PermissionMode
 from pepsicode.server import protocol
+from pepsicode.server.security import authenticate
 from pepsicode.tools import create_default_tool_registry
 from pepsicode.types import ChatMessage
 from pepsicode.usage import cache_hit_percentage, usage_snapshot
@@ -84,11 +98,13 @@ class RemotePermissionBridge(ApprovalBackend):
     without going through the legacy ``prompt`` callable.
     """
 
-    def __init__(self, loop: asyncio.AbstractEventLoop, emit: Any) -> None:
+    def __init__(self, loop: asyncio.AbstractEventLoop, emit: Any, cancellation_event=None) -> None:
         self._loop = loop
         self._emit = emit  # async callable: emit(event_name, data)
         self._pending: dict[str, Future[dict[str, Any]]] = {}
         self._lock = threading.Lock()
+        self._cancellation_event = cancellation_event
+        self._closed = False
 
     def __call__(self, request: dict[str, Any]) -> dict[str, Any]:
         """Legacy callable entry point — kept for backward compatibility."""
@@ -110,6 +126,8 @@ class RemotePermissionBridge(ApprovalBackend):
         prompt_id = uuid.uuid4().hex[:12]
         future: Future[dict[str, Any]] = Future()
         with self._lock:
+            if self._closed or (self._cancellation_event is not None and self._cancellation_event.is_set()):
+                return {"decision": "deny_once"}
             self._pending[prompt_id] = future
 
         # Emit the permission request to the client (thread-safe schedule).
@@ -137,10 +155,17 @@ class RemotePermissionBridge(ApprovalBackend):
         """Resolve a pending permission prompt (called from async context)."""
         with self._lock:
             future = self._pending.get(prompt_id)
-        if future is None:
-            return False
-        future.set_result(response)
+            if future is None or future.done():
+                return False
+            future.set_result(response)
         return True
+
+    def cancel_pending(self, *, close: bool = False) -> None:
+        with self._lock:
+            self._closed = self._closed or close
+            for future in self._pending.values():
+                if not future.done():
+                    future.set_result({"decision": "deny_once", "feedback": "Turn cancelled or connection closed"})
 
 
 # ---------------------------------------------------------------------------
@@ -169,6 +194,11 @@ class ClientSession:
         self._worker_active = threading.Event()
         self._cancellation_event = threading.Event()
         self._provider_setup: dict | None = None
+        self._closing = False
+        self._background_tasks: set[asyncio.Task] = set()
+        self._close_task: asyncio.Task | None = None
+        self._bridge: RemotePermissionBridge | None = None
+        self.input_queue = TurnInputQueue()
 
     def initialize(self, *, force: bool = False) -> None:
         """Initialize workspace-bound services, rebuilding them when requested."""
@@ -254,10 +284,44 @@ class ClientSession:
         else:
             self.messages.insert(0, {"role": "system", "content": prompt})
 
+    def snapshot(self) -> None:
+        if self.session_data is None:
+            raise ValueError("Create a session first")
+        record_messages(self.session_data, self.messages)
+        self.session_data.verification_state = snapshot_verification_state(self.tools, self.runtime)
+        if self.permissions:
+            self.session_data.permission_mode = self.permissions.mode.value
+            self.session_data.access_mode = self.permissions.access_mode.value
+            self.session_data.plan_file_path = self.permissions.plan_file_path
+        if self.runtime and not isinstance(self.model, MockModelAdapter):
+            self.session_data.model_settings = model_settings_snapshot(self.runtime)
+        save_session(self.session_data)
+
+    def conversation_view(self, draft: str = "") -> dict:
+        data = self.session_data
+        view = tree_view(data)
+        return {
+            "session_id": data.session_id,
+            "workspace": self.cwd,
+            "history": protocol.serialize_session_history([node["message"] for node in branch_path(data)]),
+            "tree": view,
+            "draft": draft,
+            "verification": (self.runtime or {}).get("_lastVerification"),
+        }
+
     def set_permission_handler(self, handler: RemotePermissionBridge) -> None:
         assert self.permissions is not None
         # RemotePermissionBridge now implements ApprovalBackend directly.
         self.permissions.approval = handler
+        self._bridge = handler
+
+    def dispose(self) -> None:
+        try:
+            if self.tools is not None:
+                self.tools.dispose()
+        finally:
+            if self.hook_engine is not None:
+                self.hook_engine.close()
 
     def cost_snapshot(self) -> dict[str, Any]:
         tracker = self.cost_tracker
@@ -337,10 +401,49 @@ class ClientSession:
 
 
 class PepsiCodeServer:
-    def __init__(self, port: int = 8765, host: str = "127.0.0.1") -> None:
+    def __init__(
+        self, port: int = 8765, host: str = "127.0.0.1", *, token: str | None = None, allowed_origins=None
+    ) -> None:
         self.port = port
         self.host = host
-        self._clients: set[asyncio.Task] = set()
+        self.token = token or os.environ.get("PEPSI_CODE_SERVER_TOKEN") or secrets.token_urlsafe(32)
+        if allowed_origins is None:
+            allowed_origins = json.loads(os.environ.get("PEPSI_CODE_SERVER_ORIGINS", '["null", "file://"]'))
+        if not isinstance(allowed_origins, (list, set, tuple)) or not all(
+            isinstance(origin, str) and origin and origin != "*" for origin in allowed_origins
+        ):
+            raise ValueError("Server origins must be an explicit array of origins")
+        self.allowed_origins = set(allowed_origins)
+        self._sessions: set[ClientSession] = set()
+
+    async def _close_session(self, session: ClientSession, bridge: RemotePermissionBridge) -> None:
+        session._closing = True
+        session._cancellation_event.set()
+        bridge.cancel_pending(close=True)
+        if session._close_task is None:
+
+            async def drain():
+                try:
+                    if session._background_tasks:
+                        await asyncio.gather(*list(session._background_tasks), return_exceptions=True)
+                finally:
+                    try:
+                        # Cancelling the asyncio wrapper doesn't terminate its
+                        # executor thread. Wait for the actual worker to exit.
+                        while session._worker_active.is_set():
+                            await asyncio.sleep(0.02)
+                        await asyncio.to_thread(session.dispose)
+                    except Exception as error:  # noqa: BLE001
+                        logger.warning("Session resource cleanup failed: %s", error)
+                    self._sessions.discard(session)
+
+            session._close_task = asyncio.create_task(drain())
+        try:
+            await asyncio.wait_for(asyncio.shield(session._close_task), timeout=5)
+        except TimeoutError:
+            # Keep cleanup attached to the still-running worker; never dispose
+            # its tools while it can still be using them.
+            logger.warning("Cancelled session worker is still finishing; cleanup remains scheduled")
 
     async def handle_client(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         """Handle a single raw TCP client (fallback when websockets is absent)."""
@@ -349,6 +452,8 @@ class PepsiCodeServer:
 
     async def handle_ws(self, websocket: Any) -> None:
         """Main WebSocket message loop for one client connection."""
+        if not await authenticate(websocket, self.token, self.allowed_origins):
+            return
         cwd = str(Path.cwd())
         session = ClientSession(cwd)
         loop = asyncio.get_running_loop()
@@ -360,7 +465,9 @@ class PepsiCodeServer:
             except Exception as error:  # noqa: BLE001
                 logger.warning("Failed to send event %s: %s", event_name, error)
 
-        bridge = RemotePermissionBridge(loop, emit)
+        bridge = RemotePermissionBridge(loop, emit, session._cancellation_event)
+        session._bridge = bridge
+        self._sessions.add(session)
 
         # Defer initialization until the first session/create request so the
         # client can pick a cwd.  But we need a default cwd to start.
@@ -369,26 +476,31 @@ class PepsiCodeServer:
         except Exception:
             pass
 
-        async for raw in websocket:
-            try:
-                message = json.loads(raw)
-            except json.JSONDecodeError:
-                await websocket.send(
-                    json.dumps(
-                        protocol.make_response(0, error=protocol.make_error(protocol.ERR_PARSE_ERROR, "Invalid JSON"))
+        try:
+            async for raw in websocket:
+                try:
+                    message = json.loads(raw)
+                except json.JSONDecodeError:
+                    await websocket.send(
+                        json.dumps(
+                            protocol.make_response(
+                                0, error=protocol.make_error(protocol.ERR_PARSE_ERROR, "Invalid JSON")
+                            )
+                        )
                     )
-                )
-                continue
+                    continue
 
-            kind = message.get("kind", "request")
-            if kind == "request":
-                await self._handle_request(message, session, bridge, emit, websocket, loop)
-            elif kind == "response":
-                # Client replying to a permission request
-                prompt_id = message.get("id")
-                result = message.get("result", {})
-                if prompt_id and isinstance(result, dict):
-                    bridge.resolve(str(prompt_id), result)
+                kind = message.get("kind", "request")
+                if kind == "request":
+                    await self._handle_request(message, session, bridge, emit, websocket, loop)
+                elif kind == "response":
+                    # Client replying to a permission request
+                    prompt_id = message.get("id")
+                    result = message.get("result", {})
+                    if prompt_id and isinstance(result, dict):
+                        bridge.resolve(str(prompt_id), result)
+        finally:
+            await self._close_session(session, bridge)
 
     async def _handle_request(
         self,
@@ -405,8 +517,28 @@ class PepsiCodeServer:
 
         # turn/run is long-running: don't block the WebSocket loop.
         # Run it as a background task and send the response when done.
-        if method == "turn/run":
-            asyncio.create_task(self._run_turn_background(req_id, params, session, emit, websocket, loop))
+        if method in {"turn/run", "turn/regenerate"}:
+            if session._closing or session._background_tasks or session._turn_lock.locked():
+                await websocket.send(
+                    json.dumps(
+                        protocol.make_response(
+                            req_id,
+                            error=protocol.make_error(
+                                protocol.ERR_INTERNAL, "A turn is already running or the connection is closing"
+                            ),
+                        )
+                    )
+                )
+                return
+            session._cancellation_event.clear()
+            if method == "turn/regenerate":
+                params = {"regenerate_entry_id": params.get("entry_id")}
+            session.input_queue.start(
+                lambda update: asyncio.run_coroutine_threadsafe(emit("input/queue", update), loop)
+            )
+            task = asyncio.create_task(self._run_turn_background(req_id, params, session, emit, websocket, loop))
+            session._background_tasks.add(task)
+            task.add_done_callback(session._background_tasks.discard)
             return
 
         try:
@@ -432,8 +564,11 @@ class PepsiCodeServer:
             response = protocol.make_response(req_id, result=result)
         except Exception as error:  # noqa: BLE001
             logger.exception("Error in turn/run")
+            session.input_queue.close()
             await emit("turn/end", {"status": "error", "error": str(error)})
             response = protocol.make_response(req_id, error=protocol.make_error(protocol.ERR_INTERNAL, str(error)))
+        finally:
+            session.input_queue.close()
         try:
             await websocket.send(json.dumps(response, ensure_ascii=False, default=str))
         except Exception as error:  # noqa: BLE001
@@ -450,6 +585,19 @@ class PepsiCodeServer:
     ) -> Any:
         if method == "status":
             return {"status": "ok", "cwd": session.cwd}
+
+        if method == "session/tree":
+            if session.session_data is None:
+                raise ValueError("Create a session first")
+            if not session._worker_active.is_set():
+                record_messages(session.session_data, session.messages)
+            return tree_view(session.session_data)
+
+        if method in {"session/checkout", "session/fork", "session/clone"}:
+            if session._turn_lock.locked() or session._worker_active.is_set() or session._background_tasks:
+                raise ValueError("Wait for the current turn to finish before changing branches")
+            async with session._turn_lock:
+                return await self._change_branch(method, params, session, emit)
 
         if method == "session/create":
             if session._turn_lock.locked() or session._worker_active.is_set():
@@ -503,6 +651,7 @@ class PepsiCodeServer:
             session.set_permission_handler(bridge)
             session.session_data = loaded
             session.messages = list(loaded.messages)
+            restore_verification_state(session.tools, session.runtime, loaded.verification_state, loaded.messages)
             if loaded.model_settings and session.runtime and not isinstance(session.model, MockModelAdapter):
                 try:
                     session.update_model(loaded.model_settings)
@@ -512,11 +661,14 @@ class PepsiCodeServer:
                 session.permissions.set_access_mode(loaded.access_mode)
                 session.permissions.restore_plan_state(loaded.permission_mode, loaded.plan_file_path)
             session._rebuild_system_prompt()
+            record_messages(loaded, session.messages)
             return {
                 "session_id": loaded.session_id,
                 "messages": len(session.messages),
                 "message_count": len(session.messages),
-                "history": protocol.serialize_session_history(session.messages),
+                "history": protocol.serialize_session_history([node["message"] for node in branch_path(loaded)]),
+                "tree": tree_view(loaded),
+                "verification": (session.runtime or {}).get("_lastVerification"),
                 "workspace": session.cwd,
                 **session.model_settings(),
                 "permission_mode": session.permissions.mode.value if session.permissions else "default",
@@ -583,10 +735,12 @@ class PepsiCodeServer:
             session.runtime = runtime
             if isinstance(session.model, MockModelAdapter) or session.model is None:
                 old_tools = session.tools
+                verification = snapshot_verification_state(old_tools, session.runtime)
                 session.tools = create_default_tool_registry(
                     session.cwd, runtime=runtime, cost_tracker=session.cost_tracker, trace_manager=session.trace_manager
                 )
                 session.model = AnthropicModelAdapter(runtime, session.tools)
+                restore_verification_state(session.tools, runtime, verification)
                 if old_tools:
                     old_tools.dispose()
             session.messages[:] = [
@@ -612,10 +766,31 @@ class PepsiCodeServer:
             return await self._run_turn(params, session, emit, loop)
 
         if method == "turn/cancel":
-            if session._current_turn_task and not session._current_turn_task.done():
+            if session._background_tasks or (session._current_turn_task and not session._current_turn_task.done()):
                 session._cancellation_event.set()
+                handler = session._bridge or bridge
+                if handler is not None:
+                    handler.cancel_pending()
                 return {"cancelled": True}
             return {"cancelled": False}
+
+        if method == "turn/enqueue":
+            if session._closing or session._cancellation_event.is_set():
+                raise ValueError("The task is stopping; keep this input for the next task")
+            raw_input = params.get("input", "")
+            if not isinstance(raw_input, str):
+                raise ValueError("Input must contain text")
+            expanded = expand_prompt_command(raw_input.strip(), session.cwd)
+            item = session.input_queue.enqueue(
+                expanded["content"] if expanded else raw_input,
+                params.get("mode", "steer"),
+                display_content=raw_input if expanded else None,
+                command_path=expanded["commandPath"] if expanded else None,
+            )
+            return {"id": item.id, "mode": item.mode}
+
+        if method == "turn/dequeue":
+            return {"removed": session.input_queue.remove(params.get("id", ""))}
 
         if method == "tool/approve":
             prompt_id = params.get("prompt_id", "")
@@ -691,6 +866,21 @@ class PepsiCodeServer:
                 ]
             }
 
+        if method == "commands/list":
+            catalog = prompt_catalog(session.cwd, refresh=bool(params.get("refresh")))
+            return {
+                "commands": [
+                    {
+                        "name": command.name,
+                        "usage": command.usage,
+                        "description": command.description,
+                        "source": command.source,
+                    }
+                    for command in get_slash_commands(session.cwd)
+                ],
+                "diagnostics": list(catalog.diagnostics),
+            }
+
         if method == "config/validate":
             from pepsicode.config import validate_config
 
@@ -711,18 +901,71 @@ class PepsiCodeServer:
             raise RuntimeError("Session not initialized. Call session/create first.")
 
         async with session._turn_lock:
+            if session._closing:
+                raise ValueError("Connection is closing")
+            if session._cancellation_event.is_set():
+                await emit("turn/end", {"status": "cancelled"})
+                return {"status": "cancelled", "messages": len(session.messages)}
             if session._worker_active.is_set():
                 raise ValueError("The previous turn is still finishing")
             user_input = params.get("input", "").strip()
+            regeneration = "regenerate_entry_id" in params or user_input == "/retry"
+            regenerated_prompt = None
+            if regeneration:
+                session.snapshot()
+                regenerated_prompt = prepare_regeneration(session.session_data, params.get("regenerate_entry_id"))
+                session.messages = list(session.session_data.messages)
+                if session.context_manager:
+                    session.context_manager.select_branch(session.messages, session.cwd, session.permissions)
+                user_input = regenerated_prompt.get("displayContent", regenerated_prompt["content"])
             if not user_input:
                 raise ValueError("Missing 'input' parameter")
 
-            # Handle slash commands
-            if user_input.startswith("/"):
-                return await self._handle_local_command(user_input, session, emit)
+            if not regeneration and user_input.split()[0] in {"/tree", "/fork", "/clone"}:
+                parts = user_input.split()
+                if len(parts) > (1 if parts[0] == "/clone" else 2):
+                    raise ValueError("Usage: /tree [entry-id], /fork [user-entry-id], /clone")
+                if len(parts) == 1 and parts[0] != "/clone":
+                    session.snapshot()
+                    output = format_tree(session.session_data, users_only=parts[0] == "/fork")
+                    await emit("message/start", {})
+                    await emit("message/end", {"content": output})
+                    await emit("turn/end", {"status": "ok"})
+                    return {"output": output}
+                method = {"/tree": "session/checkout", "/fork": "session/fork", "/clone": "session/clone"}[parts[0]]
+                result = await self._change_branch(
+                    method, {"entry_id": parts[1] if len(parts) > 1 else None}, session, emit
+                )
+                await emit("turn/end", {"status": "ok"})
+                return result
 
-            session.messages.append({"role": "user", "content": user_input})
-            session._cancellation_event.clear()
+            prompt_message = regenerated_prompt or expand_prompt_command(user_input, session.cwd)
+            if user_input.startswith("/") and prompt_message is None:
+                result = await self._handle_local_command(user_input, session, emit)
+                content = result.get("output")
+                if result.get("status") == "unknown_command":
+                    content = f"Unknown command: {user_input.split()[0]}. Use /help or /commands."
+                if result.get("status") == "plan_mode":
+                    content = f"Plan mode active. Plan file: {result['plan_file']}"
+                if content:
+                    await emit("message/start", {})
+                    await emit(
+                        "message/end", {"content": content, "is_error": result.get("status") == "unknown_command"}
+                    )
+                await emit("turn/end", {"status": "ok"})
+                return result
+
+            session.messages.append(prompt_message or {"role": "user", "content": user_input})
+            if session.session_data:
+                record_messages(session.session_data, session.messages)
+            if regeneration:
+                if session.runtime is not None:
+                    session.runtime.pop("_lastVerification", None)
+                await emit("session/view", session.conversation_view())
+            if not session.input_queue.accepting:
+                session.input_queue.start(
+                    lambda update: asyncio.run_coroutine_threadsafe(emit("input/queue", update), loop)
+                )
             session.permissions.begin_turn()
             session._rebuild_system_prompt()
             if session.context_manager is not None:
@@ -792,30 +1035,32 @@ class PepsiCodeServer:
 
             def run_turn_sync() -> list[ChatMessage]:
                 try:
-                    return run_verified_turn(
-                        runtime=session.runtime,
-                        runner=run_agent_turn_stream,
-                        cancellation_event=session._cancellation_event,
-                        on_verification=lambda report: asyncio.run_coroutine_threadsafe(
-                            emit("verification/update", report), loop
-                        ),
-                        model=session.model,
-                        tools=session.tools,
-                        messages=list(session.messages),
-                        cwd=session.cwd,
-                        permissions=session.permissions,
-                        context_manager=session.context_manager,
-                        cost_tracker=session.cost_tracker,
-                        on_token=on_token,
-                        on_tool_start=on_tool_start,
-                        on_tool_result=on_tool_result,
-                        on_assistant_message=on_assistant_message,
-                        on_error_message=on_error_message,
-                        on_progress_message=on_progress_message,
-                        on_usage=on_usage,
-                        hook_engine=session.hook_engine,
-                        memory=session.memory_manager,
-                    )
+                    with recording_session(session.session_data):
+                        return run_verified_turn(
+                            runtime=session.runtime,
+                            runner=run_agent_turn_stream,
+                            input_queue=session.input_queue,
+                            cancellation_event=session._cancellation_event,
+                            on_verification=lambda report: asyncio.run_coroutine_threadsafe(
+                                emit("verification/update", report), loop
+                            ),
+                            model=session.model,
+                            tools=session.tools,
+                            messages=list(session.messages),
+                            cwd=session.cwd,
+                            permissions=session.permissions,
+                            context_manager=session.context_manager,
+                            cost_tracker=session.cost_tracker,
+                            on_token=on_token,
+                            on_tool_start=on_tool_start,
+                            on_tool_result=on_tool_result,
+                            on_assistant_message=on_assistant_message,
+                            on_error_message=on_error_message,
+                            on_progress_message=on_progress_message,
+                            on_usage=on_usage,
+                            hook_engine=session.hook_engine,
+                            memory=session.memory_manager,
+                        )
                 finally:
                     session._worker_active.clear()
 
@@ -842,6 +1087,7 @@ class PepsiCodeServer:
             # Persist session
             if session.session_data:
                 session.session_data.messages = list(session.messages)
+                session.session_data.verification_state = snapshot_verification_state(session.tools, session.runtime)
                 session.session_data.permission_mode = session.permissions.mode.value
                 session.session_data.access_mode = session.permissions.access_mode.value
                 session.session_data.plan_file_path = session.permissions.plan_file_path
@@ -852,6 +1098,9 @@ class PepsiCodeServer:
                     await emit("session/saved", {"session_id": session.session_data.session_id})
                 except Exception as error:  # noqa: BLE001
                     logger.warning("Failed to save session: %s", error)
+
+            if session.session_data:
+                await emit("session/view", session.conversation_view())
 
             await emit(
                 "turn/end",
@@ -868,6 +1117,28 @@ class PepsiCodeServer:
                 "messages": len(session.messages),
                 "last_message": last_assistant.get("content", "") if last_assistant else "",
             }
+
+    async def _change_branch(self, method, params, session, emit):
+        session.snapshot()
+        if method == "session/checkout":
+            draft = checkout_entry(session.session_data, params.get("entry_id"))
+        else:
+            session.session_data, draft = copy_session(
+                session.session_data, entry_id=params.get("entry_id"), clone=method == "session/clone"
+            )
+        session.messages = list(session.session_data.messages)
+        restore_verification_state(
+            session.tools, session.runtime, session.session_data.verification_state, session.messages
+        )
+        session._rebuild_system_prompt()
+        if session.context_manager:
+            session.context_manager.select_branch(session.messages, session.cwd, session.permissions)
+        record_messages(session.session_data, session.messages)
+        save_session(session.session_data)
+        view = session.conversation_view(draft)
+        await emit("session/view", view)
+        await emit("session/saved", {"session_id": session.session_data.session_id})
+        return view
 
     async def _handle_local_command(self, user_input: str, session: ClientSession, emit: Any) -> dict[str, Any]:
         """Handle slash commands like /plan, /hooks, /tools."""
@@ -901,6 +1172,7 @@ class PepsiCodeServer:
                 model_adapter=session.model,
                 messages=session.messages,
                 context_manager=session.context_manager,
+                cwd=session.cwd,
             )
             if result is not None:
                 if user_input.split()[0] == "/permissions":
@@ -911,16 +1183,10 @@ class PepsiCodeServer:
                     session.session_data.messages = session.messages
                     save_session(session.session_data)
                     await emit("permissions/settings", {"access_mode": session.permissions.access_mode.value})
-                    await emit("message/start", {})
-                    await emit("message/end", {"content": result})
-                    await emit("turn/end", {"status": "ok"})
                 if user_input.split()[0] in {"/model", "/effort", "/provider"}:
                     if session.session_data and session.runtime and not isinstance(session.model, MockModelAdapter):
                         session.session_data.model_settings = model_settings_snapshot(session.runtime)
                     await emit("model/settings", session.model_settings())
-                    await emit("message/start", {})
-                    await emit("message/end", {"content": result})
-                    await emit("turn/end", {"status": "ok"})
                 return {"output": result}
         except Exception as error:  # noqa: BLE001
             logger.warning("Local command failed: %s", error)
@@ -943,9 +1209,20 @@ class PepsiCodeServer:
                     logger.exception("Client handler error")
 
         logger.info("Starting pepsicode server on ws://%s:%d", self.host, self.port)
-        async with websockets.serve(handler, self.host, self.port, max_size=50 * 1024 * 1024):
-            print(f"pepsicode server listening on ws://{self.host}:{self.port}", flush=True)
-            await asyncio.Future()  # run forever
+        try:
+            async with websockets.serve(
+                handler, self.host, self.port, origins=[None, *self.allowed_origins], max_size=50 * 1024 * 1024
+            ):
+                print(f"pepsicode server listening on ws://{self.host}:{self.port}", flush=True)
+                await asyncio.Future()  # run forever
+        finally:
+            await asyncio.gather(
+                *(
+                    self._close_session(session, session._bridge)
+                    for session in list(self._sessions)
+                    if session._bridge is not None
+                )
+            )
 
 
 def main() -> None:
@@ -955,6 +1232,9 @@ def main() -> None:
     parser.add_argument("--log-level", default="INFO", choices=["DEBUG", "INFO", "WARNING", "ERROR"])
     args = parser.parse_args()
 
+    if not os.environ.get("PEPSI_CODE_SERVER_TOKEN"):
+        parser.error("Set PEPSI_CODE_SERVER_TOKEN before starting the standalone server")
+
     setup_logging(level=args.log_level)
     server = PepsiCodeServer(port=args.port, host=args.host)
     try:
@@ -962,13 +1242,6 @@ def main() -> None:
     except KeyboardInterrupt:
         logger.info("Server shutdown requested")
     finally:
-        # Dispose tools (closes MCP connections).  Without this the stdio MCP
-        # child processes outlive the server and leak on every restart.
-        try:
-            server.tools.dispose()
-            logger.info("Tools disposed successfully")
-        except Exception as e:  # noqa: BLE001 - shutdown must not raise
-            logger.warning("Error disposing tools: %s", e)
         logger.info("Server stopped")
 
 

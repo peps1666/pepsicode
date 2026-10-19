@@ -226,6 +226,7 @@ def test_desktop_probe_cancel_and_confirm_bootstrap_initial_mock_without_losing_
     draft, _, _ = setup_api
     session = ClientSession(str(tmp_path))
     session.model, session.tools = MockModelAdapter(), ToolRegistry([])
+    session.tools.mutation_count = 1
     session.messages = [{"role": "user", "content": "keep me"}]
     monkeypatch.setattr("pepsicode.server.app.create_default_tool_registry", lambda *args, **kwargs: ToolRegistry([]))
 
@@ -249,6 +250,7 @@ def test_desktop_probe_cancel_and_confirm_bootstrap_initial_mock_without_losing_
     assert result["provider"] == "custom" and not result["isMock"]
     assert session.messages == [{"role": "user", "content": "keep me"}]
     assert session._provider_setup is None and isinstance(session.model, AnthropicModelAdapter)
+    assert session.tools.mutation_count > session.tools.verified_mutation_count
     assert draft["apiKey"] not in json.dumps(result)
 
 

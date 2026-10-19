@@ -295,3 +295,23 @@ def test_same_position_insertions_keep_language_server_order(intelligence):
     }
     _apply_rename(edit, manager, context)
     assert (root / "source.py").read_text() == "zafoo = 1\n"
+
+
+@pytest.mark.parametrize("separator", ["\u2028", "\u2029", "\v", "\f", "\x85"])
+@pytest.mark.parametrize("newline", ["\n", "\r\n", "\r"])
+def test_rename_does_not_treat_unicode_inside_literals_as_document_line_breaks(intelligence, separator, newline):
+    root, manager, _, context = intelligence
+    text = f'note = "a{separator}foobar"{newline}foo = 1{newline}'
+    path = root / "source.py"
+    path.write_bytes(text.encode())
+    edit = {
+        "changes": {
+            path.as_uri(): [
+                {"range": {"start": {"line": 1, "character": 0}, "end": {"line": 1, "character": 3}}, "newText": "bar"}
+            ]
+        }
+    }
+    _apply_rename(edit, manager, context)
+    assert path.read_bytes().decode() == f'note = "a{separator}foobar"{newline}bar = 1{newline}'
+    assert offset(text, position(text, 2, 1)) == len(f'note = "a{separator}foobar"{newline}')
+    assert offset(text, position(text, 3, 1)) == len(text)

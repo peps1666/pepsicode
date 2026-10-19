@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import { sendRequest, onMessage, useConnectionStore } from "./connection";
+import type { SlashCommandInfo } from "../conversation/commandCompletion";
 
 export interface ChatMessage {
   id: string;
@@ -10,6 +11,22 @@ export interface ChatMessage {
   isError?: boolean;
   isStreaming?: boolean;
   timestamp: number;
+  entryId?: string;
+}
+
+export interface BranchNode {
+  id: string;
+  parent_id: string | null;
+  role: "user" | "assistant";
+  preview: string;
+  depth: number;
+  active: boolean;
+}
+
+export interface ConversationTree {
+  nodes: BranchNode[];
+  leaf_id: string | null;
+  parent_session_id: string | null;
 }
 
 export interface PermissionRequest {
@@ -30,7 +47,17 @@ export interface SessionMeta {
   workspace: string;
 }
 
+export type InputMode = "steer" | "follow_up";
+
+export interface QueuedInput {
+  id: string;
+  content: string;
+  mode: InputMode;
+  display_content?: string | null;
+}
+
 interface SessionHistoryItem {
+  entry_id?: string;
   role: "user" | "assistant" | "progress" | "tool_call" | "tool_result";
   content?: string;
   tool_name?: string;
@@ -39,6 +66,14 @@ interface SessionHistoryItem {
 }
 
 interface SessionState {
+  tree: ConversationTree | null;
+  branchUpdating: boolean;
+  branchError: string;
+  refreshTree: () => Promise<void>;
+  checkoutEntry: (id: string) => Promise<void>;
+  forkSession: (id: string) => Promise<void>;
+  cloneSession: () => Promise<void>;
+  regenerate: (id: string) => Promise<void>;
   verification: { status: string; reason: string; reason_code?: string; details?: string; ok: boolean } | null;
   cacheHitPercentage: number | null;
   accessMode: "read_only" | "auto" | "full_access";
@@ -46,6 +81,16 @@ interface SessionState {
   updatePermissions: (mode: SessionState["accessMode"]) => Promise<void>;
   messages: ChatMessage[];
   isRunning: boolean;
+  isStopping: boolean;
+  cancelTurn: () => Promise<void>;
+  pendingInputs: QueuedInput[];
+  commands: SlashCommandInfo[];
+  commandDiagnostics: string[];
+  commandError: string;
+  refreshCommands: (refresh?: boolean) => Promise<void>;
+  draft: string;
+  setDraft: (draft: string) => void;
+  removeQueuedInput: (id: string) => Promise<void>;
   sessionId: string | null;
   cwd: string;
   model: string;
@@ -68,7 +113,7 @@ interface SessionState {
   sessionsLoading: boolean;
   initialize: () => Promise<void>;
   createSession: () => Promise<void>;
-  runTurn: (input: string) => Promise<void>;
+  runTurn: (input: string, mode?: InputMode) => Promise<void>;
   approvePermission: (decision: string, feedback?: string) => Promise<void>;
   refreshSessions: () => Promise<void>;
   resumeSession: (sessionId: string) => Promise<void>;
@@ -159,18 +204,65 @@ function hydrateSessionHistory(value: unknown): ChatMessage[] {
       toolInput,
       isError: Boolean(item.is_error),
       timestamp: baseTime + index,
+      entryId: item.entry_id,
     } satisfies ChatMessage];
   });
 }
 
+async function changeBranch(
+  method: string, params: object,
+  set: (value: Partial<SessionState>) => void, get: () => SessionState,
+): Promise<void> {
+  if (get().isRunning || get().modelUpdating || get().branchUpdating) throw new Error("请等待当前操作结束");
+  set({ branchUpdating: true, branchError: "" });
+  try {
+    const { ws } = useConnectionStore.getState();
+    await sendRequest(ws, method, params);
+  } catch (error) {
+    set({ branchError: String(error) });
+    throw error;
+  } finally {
+    set({ branchUpdating: false });
+  }
+}
+
 export const useSessionStore = create<SessionState>((set, get) => ({
+  tree: null,
+  branchUpdating: false,
+  branchError: "",
+  refreshTree: async () => {
+    const { ws } = useConnectionStore.getState();
+    if (!ws || !get().sessionId) return;
+    const id = get().sessionId;
+    try {
+      const tree = await sendRequest(ws, "session/tree");
+      if (get().sessionId === id) set({ tree: tree.nodes ? tree : null });
+    } catch (error) {
+      if (get().sessionId === id) set({ branchError: String(error) });
+    }
+  },
+  checkoutEntry: async (id) => changeBranch("session/checkout", { entry_id: id }, set, get),
+  forkSession: async (id) => changeBranch("session/fork", { entry_id: id }, set, get),
+  cloneSession: async () => changeBranch("session/clone", {}, set, get),
+  regenerate: async (id) => {
+    if (get().isRunning || get().branchUpdating || get().modelUpdating) throw new Error("请等待当前操作结束");
+    set({ isRunning: true, branchError: "", verification: null, cacheHitPercentage: null });
+    const { ws } = useConnectionStore.getState();
+    void sendRequest(ws, "turn/regenerate", { entry_id: id }, { timeoutMs: null }).catch((error) => {
+      set((state) => ({
+        isRunning: false, isStopping: false, branchError: String(error),
+        draft: [...state.pendingInputs.map((item) => item.display_content || item.content), ...(state.draft ? [state.draft] : [])].join("\n\n"),
+        pendingInputs: [],
+      }));
+    });
+  },
   verification: null,
   cacheHitPercentage: null,
   accessMode: "auto",
   permissionUpdating: false,
   updatePermissions: async (mode) => {
     const { ws } = useConnectionStore.getState();
-    if (!ws || get().isRunning || get().permissionUpdating) return;
+    if (!ws || get().isRunning || get().branchUpdating || get().permissionUpdating) return;
     set({ permissionUpdating: true });
     try {
       const result = await sendRequest(ws, "permissions/set", { mode });
@@ -181,6 +273,46 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   },
   messages: [],
   isRunning: false,
+  isStopping: false,
+  cancelTurn: async () => {
+    if (!get().isRunning || get().isStopping) return;
+    set({ isStopping: true });
+    try {
+      const { ws } = useConnectionStore.getState();
+      const result = await sendRequest(ws, "turn/cancel");
+      if (!result.cancelled) set({ isStopping: false });
+    } catch (error) {
+      set({ isStopping: false });
+      throw error;
+    }
+  },
+  pendingInputs: [],
+  commands: [],
+  commandDiagnostics: [],
+  commandError: "",
+  refreshCommands: async (refresh = false) => {
+    const { ws } = useConnectionStore.getState();
+    if (!ws) return;
+    const sessionId = get().sessionId;
+    const cwd = get().cwd;
+    try {
+      const result = await sendRequest(ws, "commands/list", { refresh });
+      if (get().sessionId === sessionId && get().cwd === cwd) {
+        set({ commands: result.commands || [], commandDiagnostics: result.diagnostics || [], commandError: "" });
+      }
+    } catch (error) {
+      if (get().sessionId === sessionId && get().cwd === cwd) {
+        set({ commandError: error instanceof Error ? error.message : String(error) });
+      }
+    }
+  },
+  draft: "",
+  setDraft: (draft) => set({ draft }),
+  removeQueuedInput: async (id) => {
+    const { ws } = useConnectionStore.getState();
+    const result = await sendRequest(ws, "turn/dequeue", { id });
+    if (!result.removed) throw new Error("这条输入已经开始处理，无法取回");
+  },
   sessionId: null,
   cwd: "",
   model: "",
@@ -211,7 +343,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         ...modelSettings(result),
       });
       await get().refreshSessions();
-      await Promise.all([get().refreshCost(), get().refreshContext()]);
+      await Promise.all([get().refreshCost(), get().refreshContext(), get().refreshCommands()]);
     } catch (e) {
       console.error("Failed to initialize session:", e);
     }
@@ -222,6 +354,32 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       const { event, data } = message;
 
       switch (event) {
+        case "session/view": {
+          set((state) => ({
+            sessionId: data.session_id,
+            messages: hydrateSessionHistory(data.history),
+            tree: data.tree || null,
+            verification: data.verification || null,
+            cacheHitPercentage: null,
+            contextData: null,
+            draft: [data.draft, state.draft].filter(Boolean).join("\n\n"),
+          }));
+          void get().refreshSessions();
+          void get().refreshContext();
+          break;
+        }
+        case "input/queue": {
+          const delivered: QueuedInput[] = data.delivered || [];
+          const returned: QueuedInput[] = data.returned || [];
+          set((state) => ({
+            pendingInputs: data.pending || [],
+            draft: [...returned.map((item) => item.display_content || item.content), ...(state.draft ? [state.draft] : [])].join("\n\n"),
+            messages: [...state.messages, ...delivered.map((item) => ({
+              id: item.id, role: "user" as const, content: item.display_content || item.content, timestamp: Date.now(),
+            }))],
+          }));
+          break;
+        }
         case "verification/update": {
           set({ verification: data });
           break;
@@ -353,12 +511,16 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         case "turn/end": {
           set((state) => ({
             isRunning: false,
+            isStopping: false,
+            pendingPermission: null,
             messages: data.status === "error"
               ? appendError(state.messages, data.error)
               : state.messages,
           }));
           get().refreshCost();
           get().refreshContext();
+          void get().refreshCommands();
+          void get().refreshTree();
           break;
         }
         case "session/saved": {
@@ -371,7 +533,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
 
   createSession: async () => {
     const { ws } = useConnectionStore.getState();
-    if (!ws || get().isRunning || get().modelUpdating) return;
+    if (!ws || get().isRunning || get().modelUpdating || get().branchUpdating) return;
     const result = await sendRequest(ws, "session/create", { cwd: get().cwd || undefined });
     set({ verification: null });
     set({
@@ -380,6 +542,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       accessMode: result.access_mode || "auto",
       ...modelSettings(result),
       messages: [],
+      tree: null,
       isRunning: false,
       pendingPermission: null,
       costData: null,
@@ -389,12 +552,18 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       planFile: null,
     });
     await get().refreshSessions();
-    await Promise.all([get().refreshCost(), get().refreshContext()]);
+    await Promise.all([get().refreshCost(), get().refreshContext(), get().refreshCommands()]);
   },
 
-  runTurn: async (input: string) => {
+  runTurn: async (input: string, mode: InputMode = "steer") => {
     const { ws } = useConnectionStore.getState();
-    if (!ws || get().isRunning || get().modelUpdating) return;
+    if (!ws) throw new Error("Server disconnected");
+    if (get().modelUpdating || get().branchUpdating) throw new Error("请等待当前操作完成");
+    if (get().isStopping) throw new Error("任务正在停止，请稍后发送");
+    if (get().isRunning) {
+      await sendRequest(ws, "turn/enqueue", { input, mode });
+      return;
+    }
 
     // Add user message
     const userMsg: ChatMessage = {
@@ -408,10 +577,13 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     // Fire-and-forget: turn/run blocks until the agent turn completes.
     // Stream events (message/delta, tool/call, etc.) arrive in the meantime
     // via the onMessage subscription registered in initialize().
-    sendRequest(ws, "turn/run", { input }).catch((e) => {
+    sendRequest(ws, "turn/run", { input }, { timeoutMs: null }).catch((e) => {
       console.error("turn/run error:", e);
       set((state) => ({
         isRunning: false,
+        isStopping: false,
+        draft: [...state.pendingInputs.map((item) => item.display_content || item.content), ...(state.draft ? [state.draft] : [])].join("\n\n"),
+        pendingInputs: [],
         messages: appendError(state.messages, e instanceof Error ? e.message : e),
       }));
     });
@@ -455,7 +627,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   resumeSession: async (sessionId: string) => {
     set({ verification: null });
     const { ws } = useConnectionStore.getState();
-    if (!ws || get().isRunning || get().modelUpdating) return;
+    if (!ws || get().isRunning || get().modelUpdating || get().branchUpdating) return;
     set({ isRunning: true, pendingPermission: null });
     try {
       const result = await sendRequest(ws, "session/resume", {
@@ -468,6 +640,8 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         accessMode: result.access_mode || "auto",
         ...modelSettings(result),
         messages: hydrateSessionHistory(result.history),
+        tree: result.tree || null,
+        verification: result.verification || null,
         isRunning: false,
         pendingPermission: null,
         costData: null,
@@ -478,6 +652,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       });
       void get().refreshCost();
       void get().refreshContext();
+      void get().refreshCommands();
     } catch (e) {
       set((state) => ({
         isRunning: false,
@@ -529,7 +704,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   switchCwd: async (cwd: string) => {
     set({ verification: null });
     const { ws } = useConnectionStore.getState();
-    if (!ws || get().isRunning || get().modelUpdating) return;
+    if (!ws || get().isRunning || get().modelUpdating || get().branchUpdating) return;
     // Re-create the session on the server with the new cwd. The server's
     // session/create reinitializes tools/permissions/model for the new workspace.
     const result = await sendRequest(ws, "session/create", { cwd });
@@ -539,6 +714,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       accessMode: result.access_mode || "auto",
       ...modelSettings(result),
       messages: [],
+      tree: null,
       isRunning: false,
       pendingPermission: null,
       costData: null,
@@ -549,7 +725,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       sessions: [],
     });
     await get().refreshSessions();
-    await Promise.all([get().refreshCost(), get().refreshContext()]);
+    await Promise.all([get().refreshCost(), get().refreshContext(), get().refreshCommands()]);
   },
 
   refreshModels: async () => {
@@ -574,7 +750,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   saveProvider: async (token: string, model: string) => {
     const { ws } = useConnectionStore.getState();
     if (!ws) throw new Error("Server disconnected");
-    if (get().isRunning || get().modelUpdating) throw new Error("请等待当前请求结束");
+    if (get().isRunning || get().modelUpdating || get().branchUpdating) throw new Error("请等待当前请求结束");
     set({ modelUpdating: true });
     try {
       const result = await sendRequest(ws, "provider/save", { token, model });
@@ -598,7 +774,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   updateModel: async (model: string, reasoningEffort: string, persist: boolean, provider?: string) => {
     const { ws } = useConnectionStore.getState();
     if (!ws) throw new Error("Server disconnected");
-    if (get().isRunning || get().modelUpdating) throw new Error("Wait for the current request to finish");
+    if (get().isRunning || get().modelUpdating || get().branchUpdating) throw new Error("Wait for the current request to finish");
     set({ modelUpdating: true });
     try {
       const result = await sendRequest(ws, "model/update", { model, reasoningEffort, persist, ...(provider ? { provider } : {}) });

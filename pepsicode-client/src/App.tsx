@@ -4,7 +4,7 @@ import ChatView from "./conversation/ChatView";
 import SessionList from "./sidebar/SessionList";
 import DetailsPanel from "./panels/DetailsPanel";
 import { useConnectionStore } from "./stores/connection";
-import { useSessionStore } from "./stores/session";
+import { useSessionStore, type InputMode } from "./stores/session";
 import PermissionPrompt from "./conversation/PermissionPrompt";
 
 export default function App() {
@@ -14,8 +14,8 @@ export default function App() {
   useEffect(() => {
     async function init() {
       try {
-        const port = await window.pepsiAPI.getServerPort();
-        await connect(port);
+        const { port, token } = await window.pepsiAPI.getServerConnection();
+        await connect(port, token);
         await initialize();
       } catch (e) {
         console.error("Initialization failed:", e);
@@ -24,8 +24,8 @@ export default function App() {
     init();
   }, [connect, initialize]);
 
-  const handleSend = useCallback((input: string) => {
-    useSessionStore.getState().runTurn(input);
+  const handleSend = useCallback((input: string, mode?: InputMode) => {
+    return useSessionStore.getState().runTurn(input, mode);
   }, []);
 
   if (status === "error" || error) {

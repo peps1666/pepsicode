@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from functools import lru_cache
+from pathlib import Path
 
 from pepsicode.cli.model_commands import handle_model_command
+from pepsicode.cli.prompt_commands import PromptCommandCatalog
 from pepsicode.config import (
     CLAUDE_SETTINGS_PATH,
     PEPSI_CODE_MCP_PATH,
@@ -19,6 +22,12 @@ class SlashCommand:
     usage: str
     description: str
     category: str = "General"
+    source: str = "builtin"
+    is_prompt: bool = False
+
+    @property
+    def completion_text(self) -> str:
+        return self.name if self.is_prompt else self.usage
 
 
 SLASH_COMMANDS = [
@@ -27,7 +36,10 @@ SLASH_COMMANDS = [
     SlashCommand("/exit", "/exit", "Exit pepsi-code.", "Session"),
     SlashCommand("/clear", "/clear", "Clear the current transcript view.", "Session"),
     SlashCommand("/history", "/history", "Show recent prompt history.", "Session"),
-    SlashCommand("/retry", "/retry", "Retry the last natural-language prompt.", "Session"),
+    SlashCommand("/retry", "/retry", "在新分支重新生成上一条用户消息的回答，保留原路线。", "Session"),
+    SlashCommand("/tree", "/tree [entry-id]", "查看或切换当前会话的对话分支，文件保持当前状态。", "Session"),
+    SlashCommand("/fork", "/fork [user-entry-id]", "从某条用户消息创建独立会话。", "Session"),
+    SlashCommand("/clone", "/clone", "将当前对话路线复制为新会话。", "Session"),
     SlashCommand("/plan", "/plan [task]", "Enter read-only Plan mode.", "Session"),
     SlashCommand("/resume", "/resume [id]", "Resume a saved session.", "Session"),
     SlashCommand("/transcript-save", "/transcript-save <path>", "Save transcript to a text file.", "Session"),
@@ -35,6 +47,7 @@ SLASH_COMMANDS = [
     SlashCommand("/tools", "/tools", "List tools available to the coding agent.", "Tools"),
     SlashCommand("/hooks", "/hooks [list|errors|reload|trust|enable|disable]", "Inspect and manage Hooks v2.", "Tools"),
     SlashCommand("/skills", "/skills", "List discovered SKILL.md workflows.", "Tools"),
+    SlashCommand("/commands", "/commands [reload]", "List Markdown prompt commands and loading errors.", "Tools"),
     SlashCommand("/mcp", "/mcp", "Show MCP servers and connection state.", "Tools"),
     SlashCommand("/cmd", "/cmd [cwd::]<command> [args...]", "Run an allowed development command.", "Tools"),
     # Status
@@ -45,7 +58,7 @@ SLASH_COMMANDS = [
     ),
     SlashCommand("/model", "/model list", "List configured model candidates and reasoning levels.", "Status"),
     SlashCommand("/model", "/model refresh", "从当前 API 重新读取模型名称与能力。", "Status"),
-    SlashCommand("/provider", "/provider", "选择 DeepSeek（默认）、Kimi、GLM 或千问及其模型。", "Status"),
+    SlashCommand("/provider", "/provider", "选择模型服务商及其模型，支持添加自定义厂商。", "Status"),
     SlashCommand("/provider", "/provider add", "逐步配置自定义厂商：地址、Key、模型和保存。", "Status"),
     SlashCommand("/effort", "/effort", "选择思考强度，查看所有档位与当前值。", "Status"),
     SlashCommand("/cost", "/cost [--detailed]", "Show API cost and usage report.", "Status"),
@@ -77,70 +90,60 @@ SLASH_COMMANDS = [
 ]
 
 
-def format_slash_commands() -> str:
+@lru_cache(maxsize=32)
+def _prompt_catalog(cwd: str, home: str, reserved: tuple[str, ...]) -> PromptCommandCatalog:
+    return PromptCommandCatalog(cwd, home, set(reserved))
+
+
+def prompt_catalog(cwd: str | None = None, *, refresh: bool = False) -> PromptCommandCatalog:
+    reserved = tuple(sorted({command.name for command in SLASH_COMMANDS} | {"/queue"}))
+    return _prompt_catalog(str(Path(cwd or Path.cwd()).resolve()), str(Path.home().resolve()), reserved).refresh(
+        force=refresh
+    )
+
+
+def get_slash_commands(cwd: str | None = None) -> list[SlashCommand]:
+    custom = prompt_catalog(cwd).commands.values()
+    return [
+        *SLASH_COMMANDS,
+        *(SlashCommand(cmd.name, cmd.metadata.usage, cmd.description, "Custom", cmd.source, True) for cmd in custom),
+    ]
+
+
+def expand_prompt_command(user_input: str, cwd: str):
+    if not user_input.startswith("/"):
+        return None
+    return prompt_catalog(cwd).expand(user_input)
+
+
+def format_prompt_commands(cwd: str | None = None, *, refresh: bool = False) -> str:
+    catalog = prompt_catalog(cwd, refresh=refresh)
+    lines = ["Markdown prompt commands (.pepsi-code/commands/*.md):"]
+    lines.extend(
+        f"{cmd.metadata.usage} — {cmd.description} [{cmd.source}]\n  {cmd.path}" for cmd in catalog.commands.values()
+    )
+    if not catalog.commands:
+        lines.append("No custom commands discovered.")
+    if catalog.diagnostics:
+        lines.extend(["Loading errors:", *catalog.diagnostics])
+    return "\n".join(lines)
+
+
+def format_slash_commands(cwd: str | None = None) -> str:
     lines = [
         "═══════════════════════════════════════════════════════════════════════════",
         "║ \U0001f4ce Available Commands                                  ║",
         "╟───────────────────────────────────────────────────────────────────────────╢",
     ]
 
-    command_groups = {
-        "\U0001f4dd Core Commands": [
-            ("/help", "Show this help message"),
-            ("/exit", "Exit pepsi-code"),
-            ("/clear", "Clear the current transcript view"),
-            ("/history", "Show recent prompt history"),
-            ("/plan [task]", "Enter read-only planning mode"),
-        ],
-        "\U0001f6e0️ Tool Commands": [
-            ("/tools", "List all available tools"),
-            ("/hooks", "Inspect and manage Hooks v2"),
-            ("/skills", "List discovered SKILL.md workflows"),
-            ("/mcp", "Show MCP servers and connection state"),
-            ("/cmd", "Run development commands directly"),
-        ],
-        "\U0001f4ca Status & Info": [
-            ("/status", "Show application state summary"),
-            ("/model", "Show or change current model"),
-            ("/provider", "选择国内模型服务商（默认 DeepSeek）"),
-            ("/model list", "List model candidates and reasoning levels"),
-            ("/effort [level] [--save]", "Show or change reasoning effort"),
-            ("/cost", "Show API cost and usage report"),
-            ("/context", "Show context window usage"),
-            ("/tasks", "Show current task list"),
-            ("/memory", "Show memory system status"),
-        ],
-        "\U0001f4dd File Operations": [
-            ("/ls [path]", "List files in directory"),
-            ("/grep <pattern>", "Search text in files"),
-            ("/read <path>", "Read a file directly"),
-            ("/write <path>", "Write content to file"),
-            ("/edit <path>", "Edit file by exact replacement"),
-            ("/patch <path>", "Apply multiple replacements in one go"),
-            ("/modify <path>", "Replace file with reviewable diff"),
-        ],
-        "\U0001f33f Git Worktree": [
-            ("/worktree", "List active worktrees"),
-            ("/worktree status", "Show detailed session status"),
-            ("/worktree create <name>", "Create an isolated worktree"),
-            ("/worktree enter <name>", "Switch into a worktree"),
-            ("/worktree exit <name>", "Leave a worktree"),
-            ("/worktree cleanup", "Remove stale ephemeral worktrees"),
-        ],
-        "\U0001f4c5 Session Management": [
-            ("/resume [id]", "Resume a saved session"),
-            ("/transcript-save <path>", "Save transcript to text file"),
-            ("/retry", "Retry the last prompt"),
-            ("/permissions", "选择权限模式（√ 当前）"),
-            ("/config-paths", "Show settings file paths"),
-        ],
-    }
-
+    command_groups: dict[str, list[SlashCommand]] = {}
+    for command in SLASH_COMMANDS:
+        command_groups.setdefault(command.category, []).append(command)
     for group_name, commands in command_groups.items():
         lines.append(f"║ {group_name:<54}║")
-        for cmd, desc in commands:
-            cmd_display = f"    {cmd}"
-            lines.append(f"║ {cmd_display:<20} {desc:<33} ║")
+        for command in commands:
+            cmd_display = f"    {command.usage}"
+            lines.append(f"║ {cmd_display:<20} {command.description:<33} ║")
         lines.append("╟───────────────────────────────────────────────────────────────────────────╢")
 
     lines.extend(
@@ -153,16 +156,25 @@ def format_slash_commands() -> str:
         ]
     )
 
-    return "\n".join(lines)
+    return "\n".join(lines) + "\n\n" + format_prompt_commands(cwd)
 
 
-def find_matching_slash_commands(user_input: str) -> list[str]:
-    return [command.usage for command in SLASH_COMMANDS if command.usage.startswith(user_input)]
+def find_matching_slash_commands(user_input: str, cwd: str | None = None) -> list[str]:
+    return [
+        command.usage
+        for command in get_slash_commands(cwd)
+        if command.usage.startswith(user_input)
+        and not (command.is_prompt and any(char.isspace() for char in user_input))
+    ]
 
 
-def complete_slash_command(line: str) -> tuple[list[str], str]:
-    hits = [command.usage for command in SLASH_COMMANDS if command.usage.startswith(line)]
-    return (hits if hits else [command.usage for command in SLASH_COMMANDS], line)
+def complete_slash_command(line: str, cwd: str | None = None) -> tuple[list[str], str]:
+    commands = get_slash_commands(cwd)
+    hits = [command.completion_text for command in commands if command.usage.startswith(line)]
+    return (
+        hits if hits else [command.completion_text for command in commands],
+        line,
+    )
 
 
 def try_handle_local_command(
@@ -174,6 +186,7 @@ def try_handle_local_command(
     model_adapter=None,
     messages=None,
     context_manager=None,
+    cwd=None,
 ) -> str | None:
     if user_input.split() and user_input.split()[0] in {"/model", "/effort", "/provider"}:
         if permissions is not None:
@@ -185,7 +198,12 @@ def try_handle_local_command(
             user_input, runtime=runtime, model_adapter=model_adapter, messages=messages, context_manager=context_manager
         )
     if user_input in {"/", "/help"}:
-        return format_slash_commands()
+        return format_slash_commands(cwd)
+
+    if user_input.split() and user_input.split()[0] == "/commands":
+        if user_input.split() not in (["/commands"], ["/commands", "reload"]):
+            return "Usage: /commands [reload]"
+        return format_prompt_commands(cwd, refresh=True)
 
     if user_input == "/config-paths":
         return "\n".join(

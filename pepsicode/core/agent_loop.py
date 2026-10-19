@@ -9,6 +9,8 @@ from typing import Any, cast
 from pepsicode.cancellation import TurnCancelledError, cancellable_turn, raise_if_cancelled
 from pepsicode.context.context_artifacts import ContextArtifactStore, prepare_tool_result
 from pepsicode.context.context_manager import ContextManager
+from pepsicode.core.input_queue import QueuedInput, TurnInputQueue
+from pepsicode.core.session_tree import checkpoint_messages
 from pepsicode.hooks import HookContext, HookEngine, HookEvent
 from pepsicode.llm.anthropic_adapter import ContextOverflowError
 from pepsicode.llm.assistant_text import AssistantTextStream, parse_assistant_text
@@ -248,6 +250,9 @@ def _finish_hook_turn(
     status: str = "completed",
     error: str = "",
 ) -> list[ChatMessage]:
+    if status in {"error", "max_steps"} and messages and messages[-1].get("role") == "assistant":
+        messages[-1]["isError"] = True
+    checkpoint_messages(messages)
     assistant_output = next(
         (str(message.get("content", "")) for message in reversed(messages) if message.get("role") == "assistant"),
         "",
@@ -288,6 +293,26 @@ def _finish_cancelled_turn(messages, hooks, cwd, permissions, scope, notify):
     if notify:
         notify(message)
     return _finish_hook_turn(messages, hooks, cwd=cwd, permissions=permissions, agent_scope=scope, status="cancelled")
+
+
+def append_queued_inputs(
+    messages, pending: list[QueuedInput], *, cwd, permissions=None, hook_engine=None, agent_scope="main"
+) -> bool:
+    for item in pending:
+        messages.append(item.message())
+        _emit_hook(
+            hook_engine,
+            HookEvent.USER_INPUT,
+            cwd=cwd,
+            permissions=permissions,
+            agent_scope=agent_scope,
+            data={
+                "user_input": item.display_content or item.content,
+                "expanded_input": item.content,
+                "input_mode": item.mode,
+            },
+        )
+    return bool(pending)
 
 
 def _execute_calls_in_order(
@@ -377,8 +402,10 @@ def run_agent_turn(
     agent_scope: str = "main",
     memory: Any | None = None,
     cancellation_event: Any | None = None,
+    input_queue: TurnInputQueue | None = None,
 ) -> list[ChatMessage]:
     current_messages = list(messages)
+    checkpoint_messages(current_messages)
     saw_tool_result = False
     empty_response_retry_count = 0
     recoverable_thinking_retry_count = 0
@@ -422,8 +449,18 @@ def run_agent_turn(
 
     while max_steps is None or step < max_steps:
         step += 1
+        checkpoint_messages(current_messages)
         # Budget guard: stop before doing more work once the cap is hit.
         _check_budget(cost_tracker, cost_limit_usd)
+        if input_queue is not None and not (cancellation_event is not None and cancellation_event.is_set()):
+            append_queued_inputs(
+                current_messages,
+                input_queue.take_steering(),
+                cwd=cwd,
+                permissions=permissions,
+                hook_engine=hook_engine,
+                agent_scope=agent_scope,
+            )
         next_step: AgentStep
         # Layer 1 compression: trim oversized older tool outputs before the
         # model sees them.  Cheap and lossless for recent context.
@@ -574,6 +611,7 @@ def run_agent_turn(
                 current_messages.append(
                     {
                         "role": "user",
+                        "internal": True,
                         "content": (
                             NUDGE_AFTER_TOOL_RESULT
                             if saw_tool_result and getattr(next_step, "kind", None) != "progress"
@@ -611,6 +649,7 @@ def run_agent_turn(
                 current_messages.append(
                     {
                         "role": "user",
+                        "internal": True,
                         "content": (RESUME_AFTER_PAUSE if stop_reason == "pause_turn" else RESUME_AFTER_MAX_TOKENS),
                     }
                 )
@@ -621,6 +660,7 @@ def run_agent_turn(
                 current_messages.append(
                     {
                         "role": "user",
+                        "internal": True,
                         "content": (NUDGE_AFTER_EMPTY_RESPONSE if saw_tool_result else NUDGE_AFTER_EMPTY_NO_TOOLS),
                     }
                 )
@@ -664,6 +704,16 @@ def run_agent_turn(
             if on_assistant_message:
                 on_assistant_message(next_step.content)
             current_messages.append({"role": "assistant", "content": next_step.content})
+            if input_queue is not None and not (cancellation_event is not None and cancellation_event.is_set()):
+                if append_queued_inputs(
+                    current_messages,
+                    input_queue.take_steering(),
+                    cwd=cwd,
+                    permissions=permissions,
+                    hook_engine=hook_engine,
+                    agent_scope=agent_scope,
+                ):
+                    continue
             return _finish_hook_turn(
                 current_messages,
                 hook_engine,
@@ -687,6 +737,7 @@ def run_agent_turn(
                     current_messages.append(
                         {
                             "role": "user",
+                            "internal": True,
                             "content": NUDGE_CONTINUE,
                         }
                     )
@@ -696,6 +747,16 @@ def run_agent_turn(
                 current_messages.append({"role": role, "content": next_step.content})
 
         if not next_step.calls and next_step.content and next_step.contentKind != "progress":
+            if input_queue is not None and not (cancellation_event is not None and cancellation_event.is_set()):
+                if append_queued_inputs(
+                    current_messages,
+                    input_queue.take_steering(),
+                    cwd=cwd,
+                    permissions=permissions,
+                    hook_engine=hook_engine,
+                    agent_scope=agent_scope,
+                ):
+                    continue
             return _finish_hook_turn(
                 current_messages,
                 hook_engine,
@@ -908,6 +969,7 @@ def run_agent_turn_stream(
     agent_scope: str = "main",
     memory: Any | None = None,
     cancellation_event: Any | None = None,
+    input_queue: TurnInputQueue | None = None,
 ) -> list[ChatMessage]:
     """Run an agent turn with streaming token output.
 
@@ -920,6 +982,7 @@ def run_agent_turn_stream(
     identical to the non-streaming variant.
     """
     current_messages = list(messages)
+    checkpoint_messages(current_messages)
     saw_tool_result = False
     empty_response_retry_count = 0
     overflow_retry_count = 0
@@ -970,8 +1033,18 @@ def run_agent_turn_stream(
 
     while max_steps is None or step < max_steps:
         step += 1
+        checkpoint_messages(current_messages)
         # Budget guard: stop before doing more work once the cap is hit.
         _check_budget(cost_tracker, cost_limit_usd)
+        if input_queue is not None and not (cancellation_event is not None and cancellation_event.is_set()):
+            append_queued_inputs(
+                current_messages,
+                input_queue.take_steering(),
+                cwd=cwd,
+                permissions=permissions,
+                hook_engine=hook_engine,
+                agent_scope=agent_scope,
+            )
         current_messages = _snip_tool_outputs(current_messages)
 
         # ------ Stream the model response ------
@@ -1140,6 +1213,7 @@ def run_agent_turn_stream(
             current_messages.append(
                 {
                     "role": "user",
+                    "internal": True,
                     "content": (NUDGE_AFTER_EMPTY_RESPONSE if saw_tool_result else NUDGE_AFTER_EMPTY_NO_TOOLS),
                 }
             )
@@ -1253,13 +1327,23 @@ def run_agent_turn_stream(
             if on_progress_message:
                 on_progress_message(text_content)
             current_messages.append({"role": "assistant_progress", "content": text_content})
-            current_messages.append({"role": "user", "content": NUDGE_CONTINUE})
+            current_messages.append({"role": "user", "content": NUDGE_CONTINUE, "internal": True})
             continue
 
         # ------ Plain text final answer ------
         if on_assistant_message:
             on_assistant_message(text_content)
         current_messages.append({"role": "assistant", "content": text_content})
+        if input_queue is not None and not (cancellation_event is not None and cancellation_event.is_set()):
+            if append_queued_inputs(
+                current_messages,
+                input_queue.take_steering(),
+                cwd=cwd,
+                permissions=permissions,
+                hook_engine=hook_engine,
+                agent_scope=agent_scope,
+            ):
+                continue
         return _finish_hook_turn(
             current_messages,
             hook_engine,

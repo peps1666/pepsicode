@@ -1,6 +1,7 @@
-import { useState, useRef, useCallback, type KeyboardEvent } from "react";
+import { useState, useRef, useCallback, useEffect, type KeyboardEvent } from "react";
 import styles from "./Composer.module.css";
-import { useSessionStore } from "../stores/session";
+import { useSessionStore, type InputMode } from "../stores/session";
+import { commandDraft, matchingCommands, type SlashCommandInfo } from "./commandCompletion";
 
 const accessModes = {
   read_only: { label: "只读", description: "查看文件和搜索，禁止编辑及命令执行。" },
@@ -9,53 +10,130 @@ const accessModes = {
 };
 
 interface ComposerProps {
-  onSend: (input: string) => void;
+  onSend: (input: string, mode?: InputMode) => Promise<void>;
   disabled: boolean;
+  running: boolean;
 }
 
-export default function Composer({ onSend, disabled }: ComposerProps) {
-  const [input, setInput] = useState("");
+export default function Composer({ onSend, disabled, running }: ComposerProps) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
-  const { accessMode, permissionUpdating, updatePermissions, cacheHitPercentage, contextData } = useSessionStore();
+  const { accessMode, permissionUpdating, updatePermissions, cacheHitPercentage, contextData, pendingInputs, draft: input, setDraft: setInput, removeQueuedInput, cancelTurn, isStopping } = useSessionStore();
+  const [inputMode, setInputMode] = useState<InputMode>("steer");
+  const [submitting, setSubmitting] = useState(false);
+  const [sendError, setSendError] = useState("");
   const contextPercent = contextData?.max_tokens ? contextData.usage_percentage : null;
   const estimated = contextData?.is_estimate || contextData?.window_is_estimate;
   const [permissionError, setPermissionError] = useState("");
   const [permissionsOpen, setPermissionsOpen] = useState(false);
+  const { commands, refreshCommands, commandDiagnostics, commandError, cwd } = useSessionStore();
+  const [selectedCommand, setSelectedCommand] = useState(0);
+  const [commandMenuOpen, setCommandMenuOpen] = useState(true);
+  const isCommandDraft = /^\/[^\s]*$/.test(input);
+  const commandOptions = commandMenuOpen ? matchingCommands(commands, input) : [];
+  const activeCommand = Math.min(selectedCommand, Math.max(0, commandOptions.length - 1));
 
-  const handleSend = useCallback(() => {
+  useEffect(() => {
+    if (isCommandDraft) void refreshCommands();
+  }, [isCommandDraft, cwd, refreshCommands]);
+
+  const completeCommand = useCallback((command: SlashCommandInfo) => {
+    setInput(commandDraft(command));
+    setCommandMenuOpen(false);
+    textareaRef.current?.focus();
+  }, [setInput]);
+
+  const handleSend = useCallback(async (mode: InputMode = inputMode) => {
     const trimmed = input.trim();
-    if (!trimmed || disabled) return;
-    if (trimmed === "/permissions") {
+    if (!trimmed || disabled || submitting || isStopping) return;
+    if (trimmed === "/permissions" && !running) {
       setPermissionsOpen(true);
       setInput("");
       return;
     }
-    onSend(trimmed);
+    setSubmitting(true);
+    setSendError("");
     setInput("");
-    if (textareaRef.current) {
-      textareaRef.current.style.height = "auto";
+    try {
+      await onSend(trimmed, mode);
+      if (textareaRef.current) textareaRef.current.style.height = "auto";
+    } catch (error) {
+      const draft = useSessionStore.getState().draft;
+      setInput([input, ...(draft ? [draft] : [])].join("\n\n"));
+      setSendError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setSubmitting(false);
     }
-  }, [input, disabled, onSend]);
+  }, [input, disabled, submitting, isStopping, running, inputMode, setInput, onSend]);
 
   const handleKeyDown = useCallback(
     (e: KeyboardEvent<HTMLTextAreaElement>) => {
+      if (e.nativeEvent.isComposing || e.keyCode === 229) return;
+      if (e.key === "Escape" && commandMenuOpen) {
+        setCommandMenuOpen(false);
+        return;
+      }
+      if (commandOptions.length > 0) {
+        if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+          e.preventDefault();
+          setSelectedCommand((activeCommand + (e.key === "ArrowDown" ? 1 : -1) + commandOptions.length) % commandOptions.length);
+          return;
+        }
+        if (e.key === "Tab" || (e.key === "Enter" && !e.shiftKey && input !== commandOptions[activeCommand].name)) {
+          e.preventDefault();
+          completeCommand(commandOptions[activeCommand]);
+          return;
+        }
+      }
       if (e.key === "Enter" && !e.shiftKey) {
         e.preventDefault();
-        handleSend();
+        void handleSend(e.altKey ? "follow_up" : inputMode);
       }
     },
-    [handleSend]
+    [handleSend, inputMode, input, commandMenuOpen, commandOptions, activeCommand, completeCommand]
   );
 
   const handleInput = useCallback((e: React.ChangeEvent<HTMLTextAreaElement>) => {
     setInput(e.target.value);
+    setCommandMenuOpen(true);
+    setSelectedCommand(0);
     const el = e.target;
     el.style.height = "auto";
     el.style.height = Math.min(el.scrollHeight, 200) + "px";
-  }, []);
+  }, [setInput]);
 
   return (
     <div className={styles.container}>
+      {pendingInputs.length > 0 && (
+        <ul className={styles.queue} aria-label="待处理输入">
+          {pendingInputs.map((item) => (
+            <li key={item.id}>
+              <span title={item.display_content || item.content}><b>{item.mode === "steer" ? "补充指令" : "后续任务"}</b> {item.display_content || item.content}</span>
+              <button type="button" onClick={() => {
+                void removeQueuedInput(item.id).catch((error) => setSendError(String(error)));
+              }} aria-label={`取回：${item.display_content || item.content}`}>取回</button>
+            </li>
+          ))}
+        </ul>
+      )}
+      {isCommandDraft && commandMenuOpen && (
+        <div className={styles.commandMenu}>
+          <div className={styles.commandHeader}><span>命令</span>
+            <button type="button" onClick={() => { void refreshCommands(true); }}>刷新</button>
+          </div>
+          <ul role="listbox" id="prompt-commands" aria-label="命令补全">
+            {commandOptions.map((command, index) => (
+              <li key={command.name} role="option" id={`prompt-command-${index}`} aria-selected={index === activeCommand}>
+                <button type="button" onClick={() => completeCommand(command)}>
+                  <b>{command.usage}</b><small>{command.description} · {command.source === "project" ? "项目" : command.source === "user" ? "个人" : "内置"}</small>
+                </button>
+              </li>
+            ))}
+          </ul>
+          {!commandOptions.length && <small>未找到匹配命令。可添加 .pepsi-code/commands/*.md 后刷新。</small>}
+          {commandDiagnostics.length > 0 && <small role="status">{commandDiagnostics.length} 项加载错误，输入 /commands 查看。</small>}
+          {commandError && <small role="alert">{commandError}</small>}
+        </div>
+      )}
       <div className={styles.card}>
         <textarea
           ref={textareaRef}
@@ -63,7 +141,9 @@ export default function Composer({ onSend, disabled }: ComposerProps) {
           value={input}
           onChange={handleInput}
           onKeyDown={handleKeyDown}
-          placeholder={disabled ? "Running..." : "Ask anything, or type / for commands"}
+          aria-controls={commandOptions.length ? "prompt-commands" : undefined}
+          aria-activedescendant={commandOptions.length ? `prompt-command-${activeCommand}` : undefined}
+          placeholder={running ? "补充当前任务，或选择完成后执行…" : "Ask anything, or type / for commands"}
           disabled={disabled}
           rows={1}
           autoFocus
@@ -74,14 +154,14 @@ export default function Composer({ onSend, disabled }: ComposerProps) {
             onKeyDown={(event) => {
               if (event.key === "Escape") setPermissionsOpen(false);
             }}>
-            <summary aria-label="权限模式" aria-disabled={disabled || permissionUpdating}
-              onClick={(event) => { if (disabled || permissionUpdating) event.preventDefault(); }}>
+            <summary aria-label="权限模式" aria-disabled={disabled || running || permissionUpdating}
+              onClick={(event) => { if (disabled || running || permissionUpdating) event.preventDefault(); }}>
               权限：{accessModes[accessMode].label} ▾
             </summary>
             <div className={styles.permissionOptions} role="group" aria-label="选择权限模式">
               {Object.entries(accessModes).map(([value, mode]) => (
                 <button key={value} type="button" aria-pressed={value === accessMode}
-                  disabled={disabled || permissionUpdating}
+                  disabled={disabled || running || permissionUpdating}
                   onClick={() => {
                     setPermissionError("");
                     void updatePermissions(value as keyof typeof accessModes)
@@ -94,13 +174,27 @@ export default function Composer({ onSend, disabled }: ComposerProps) {
               ))}
             </div>
           </details>
-          <button className={styles.sendButton} onClick={handleSend} disabled={disabled || !input.trim()}>
+          {running && (
+            <select className={styles.inputMode} aria-label="输入执行时机" value={inputMode}
+              onChange={(event) => setInputMode(event.target.value as InputMode)}>
+              <option value="steer">补充当前任务</option>
+              <option value="follow_up">完成后执行</option>
+            </select>
+          )}
+          {running && <button type="button" className={styles.stopButton} disabled={isStopping}
+            aria-label={isStopping ? "正在停止" : "停止任务"}
+            onClick={() => { void cancelTurn().catch((error) => setSendError(String(error))); }}>
+            {isStopping ? "停止中" : "停止"}
+          </button>}
+          <button className={styles.sendButton} aria-label={running ? "加入输入队列" : "发送"}
+            onClick={() => void handleSend()} disabled={disabled || submitting || isStopping || !input.trim()}>
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <path d="M12 19V5M5 12l7-7 7 7" />
             </svg>
           </button>
         </div>
       </div>
+      {sendError && <div className={styles.modeHint} role="alert">{sendError}</div>}
       <div className={styles.usageStatus} aria-label="实时用量">
         <span title="最近一次模型请求：缓存读取 token / 总输入 token；未提供表示接口没有返回缓存数据。">
           缓存命中 {cacheHitPercentage === null ? "未提供" : `${cacheHitPercentage.toFixed(1)}%`}
@@ -115,7 +209,7 @@ export default function Composer({ onSend, disabled }: ComposerProps) {
       <div className={styles.modeHint} role={permissionError ? "alert" : undefined}>
         {permissionError || accessModes[accessMode].description}
       </div>
-      <div className={styles.hint}>Enter to send • Shift+Enter for new line</div>
+      <div className={styles.hint}>{running ? "补充指令将在当前响应及工具结束后生效 · Alt+Enter 排队 · 停止后未执行的输入退回编辑框" : "Enter to send • Shift+Enter for new line"}</div>
     </div>
   );
 }

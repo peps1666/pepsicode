@@ -20,6 +20,10 @@ class ChatMessage(TypedDict, total=False):
         "tool_result",
     ]
     content: str
+    displayContent: str
+    commandPath: str
+    entryId: str
+    internal: bool
     blocks: list[ProviderThinkingBlock]
     toolUseId: str
     toolName: str

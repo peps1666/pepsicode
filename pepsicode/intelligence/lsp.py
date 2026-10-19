@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import math
 import os
+import re
 import shutil
 import signal
 import subprocess
@@ -45,18 +46,23 @@ def document_key(uri: str) -> str:
     return uri.lower() if os.name == "nt" else uri
 
 
+def document_lines(text: str) -> list[str]:
+    # LSP line endings are CRLF, CR or LF. Unicode separators and form-feed
+    # inside literals are ordinary document characters, not extra lines.
+    parts = re.split(r"(\r\n|\r|\n)", text)
+    return [parts[index] + (parts[index + 1] if index + 1 < len(parts) else "") for index in range(0, len(parts), 2)]
+
+
 def position(text: str, line: int, column: int) -> dict:
     """Convert user-facing 1-based Unicode columns to LSP UTF-16 positions."""
-    lines = text.split("\n")
-    if not 1 <= line <= len(lines) or not 1 <= column <= len(lines[line - 1].rstrip("\r")) + 1:
+    lines = document_lines(text)
+    if not 1 <= line <= len(lines) or not 1 <= column <= len(lines[line - 1].rstrip("\r\n")) + 1:
         raise ValueError("line or column is outside the document")
     return {"line": line - 1, "character": len(lines[line - 1][: column - 1].encode("utf-16-le")) // 2}
 
 
 def offset(text: str, location: dict) -> int:
-    lines = text.splitlines(keepends=True)
-    if not lines or text.endswith("\n"):
-        lines.append("")
+    lines = document_lines(text)
     line, character = location.get("line"), location.get("character")
     if isinstance(line, bool) or not isinstance(line, int) or not 0 <= line < len(lines):
         raise ValueError("Invalid edit line")

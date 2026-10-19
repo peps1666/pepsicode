@@ -480,6 +480,22 @@ class ContextManager:
         if output_tokens > 0:
             self.actual_output_tokens = output_tokens
 
+    def select_branch(self, messages: list[dict[str, Any]], workspace: str, permissions: Any = None) -> None:
+        """Start tracking a different route without carrying over its old summary."""
+        self.messages = list(messages)
+        self.compaction_history.clear()
+        self.compact_boundaries.clear()
+        self.recovery_state = RecoveryState()
+        self.circuit_breaker = CompactCircuitBreaker(
+            max_attempts=self.circuit_breaker.max_attempts,
+            minimum_reduction_ratio=self.circuit_breaker.minimum_reduction_ratio,
+        )
+        self.last_compaction_changed = False
+        self.last_compaction_error = ""
+        self.actual_input_tokens = 0
+        self.actual_output_tokens = 0
+        self.update_runtime_state(workspace, permissions)
+
     def _summarize_dropped(self, dropped: list[dict[str, Any]]) -> str:
         """Summarize dropped messages, preserving high-value, long-lived info.
 

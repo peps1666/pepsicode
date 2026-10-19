@@ -1,0 +1,9 @@
+.panel { width: 100%; max-height: 45vh; overflow: auto; box-sizing: border-box; padding: 14px 20px; border-bottom: 1px solid var(--dsw-alias-border-l2-darkmode-thin); font-size: 12px; }
+.header, .actions { display: flex; align-items: center; gap: 8px; }
+.header { justify-content: space-between; }
+.panel p, .panel small { color: var(--dsw-alias-label-tertiary); display: block; margin: 8px 0; }
+.panel ul { list-style: none; margin: 8px 0 0; padding: 0; }
+.panel li { border-left: 2px solid var(--dsw-alias-border-l2-darkmode-thin); padding: 8px 10px; }
+.panel button { padding: 4px 8px; border-radius: 6px; background: var(--dsw-alias-bg-base); color: var(--dsw-alias-label-primary); }
+.panel button:disabled { opacity: .5; }
+.preview { white-space: pre-wrap; overflow-wrap: anywhere; margin: 4px 0 8px; }

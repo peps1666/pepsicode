@@ -24,8 +24,9 @@ from pathlib import Path
 from typing import Any
 
 from pepsicode.cli.cli_commands import (
-    SLASH_COMMANDS,
+    expand_prompt_command,
     find_matching_slash_commands,
+    get_slash_commands,
     try_handle_local_command,
 )
 from pepsicode.cli.local_tool_shortcuts import parse_local_tool_shortcut
@@ -35,6 +36,7 @@ from pepsicode.context.history import load_history_entries, save_history_entries
 from pepsicode.context.prompt import build_session_prompt
 from pepsicode.core.agent_loop import run_agent_turn_stream
 from pepsicode.core.background_tasks import list_background_tasks
+from pepsicode.core.input_queue import InputMode, TurnInputQueue
 from pepsicode.core.session import (
     AutosaveManager,
     SessionData,
@@ -49,8 +51,17 @@ from pepsicode.core.session import (
     same_workspace,
     save_session,
 )
+from pepsicode.core.session_tree import (
+    checkout_entry,
+    copy_session,
+    format_tree,
+    prepare_regeneration,
+    rebuild_transcript,
+    record_messages,
+    recording_session,
+)
 from pepsicode.core.state import AppState, Store, create_app_store
-from pepsicode.core.verification import run_verified_turn
+from pepsicode.core.verification import restore_verification_state, run_verified_turn, snapshot_verification_state
 from pepsicode.hooks import HookContext, HookEngine, HookEvent
 from pepsicode.llm.anthropic_adapter import AnthropicModelAdapter
 from pepsicode.llm.assistant_text import parse_assistant_text
@@ -323,6 +334,9 @@ class ScreenState:
     agent_result: dict | None = None
     agent_lock: Any = None
     cancellation_event: threading.Event = field(default_factory=threading.Event, repr=False)
+    input_queue: TurnInputQueue = field(default_factory=TurnInputQueue, repr=False)
+    pending_inputs: list[dict] = field(default_factory=list)
+    returned_inputs: list[str] = field(default_factory=list)
     # Tool execution timing tracker
     tool_start_time: float | None = None
     # Streaming state: the entry currently being streamed into (if any).
@@ -353,7 +367,11 @@ def _snapshot_session(args: TtyAppArgs, state: ScreenState) -> None:
     """Copy live state before every save, including an in-progress transcript."""
     if state.session is None:
         return
-    messages = [dict(message) for message in args.messages]
+    if not state.is_busy:
+        record_messages(state.session, args.messages)
+    with state.session._tree_lock:
+        live = state.session.messages if state.is_busy and state.session.tree else args.messages
+        messages = [dict(message) for message in live]
     transcript = [
         {
             "id": entry.id,
@@ -368,13 +386,16 @@ def _snapshot_session(args: TtyAppArgs, state: ScreenState) -> None:
         }
         for entry in list(state.transcript)
     ]
+    verification = snapshot_verification_state(args.tools, args.runtime)
     if state.autosave and (
         state.session.messages != messages
         or state.session.transcript_entries != transcript
         or state.session.history != state.history
+        or state.session.verification_state != verification
     ):
         state.autosave.mark_dirty()
     state.session.messages = messages
+    state.session.verification_state = verification
     state.session.transcript_entries = transcript
     state.session.history = list(state.history)
     state.session.permissions_summary = args.permissions.get_summary()
@@ -397,6 +418,10 @@ def _collect_agent_result(args: TtyAppArgs, state: ScreenState) -> bool:
         if result.get("messages") is not None:
             args.messages = result["messages"]
         result["done"] = False
+    if state.returned_inputs:
+        state.input = "\n\n".join([*state.returned_inputs, *([state.input] if state.input else [])])
+        state.returned_inputs = []
+        state.cursor_offset = len(state.input)
     _snapshot_session(args, state)
     if state.autosave:
         state.autosave.mark_dirty()
@@ -571,10 +596,12 @@ def _handle_provider_wizard_event(
                 # Bootstrap first-run mock fallback into a real adapter without dropping history.
                 if isinstance(args.model, MockModelAdapter):
                     old_tools = args.tools
+                    verification = snapshot_verification_state(old_tools, args.runtime)
                     args.tools = create_default_tool_registry(
                         args.cwd, runtime=runtime, cost_tracker=args.cost_tracker, trace_manager=args.trace_manager
                     )
                     args.model = AnthropicModelAdapter(runtime, args.tools)
+                    restore_verification_state(args.tools, runtime, verification)
                     old_tools.dispose()
                 args.messages[:] = [message for message in args.messages if message.get("role") != "assistant_thinking"]
                 if args.context_manager is None:
@@ -648,12 +675,11 @@ def _restore_session_into_state(
     if not same_workspace(args.cwd, session.workspace):
         raise ValueError(f"Session belongs to {session.workspace}. Change to that directory before resuming it.")
     args.messages = list(session.messages)
+    restore_verification_state(args.tools, args.runtime, session.verification_state, session.messages)
     state.latest_usage = None
     state.usage_stats_key = None
     if args.context_manager is not None:
-        args.context_manager.actual_input_tokens = 0
-        args.context_manager.actual_output_tokens = 0
-        args.context_manager.messages = list(args.messages)
+        args.context_manager.select_branch(args.messages, args.cwd, args.permissions)
     args.permissions.mode = args.permissions.access_mode
     args.permissions.plan_file_path = None
     args.permissions.set_access_mode(session.access_mode)
@@ -661,6 +687,8 @@ def _restore_session_into_state(
     _restore_model_settings(args, session)
     state.session = session
     state.autosave = AutosaveManager(session)
+    if not session.transcript_entries and session.messages:
+        rebuild_transcript(session)
     state.transcript = [TranscriptEntry(**entry) for entry in session.transcript_entries]
     state.next_entry_id = max((entry.id for entry in state.transcript), default=0) + 1
     state.expanded_activity_groups.clear()
@@ -936,7 +964,7 @@ def _get_stream_max_scroll_offset(args: TtyAppArgs, state: ScreenState) -> int:
     rows = max(10, rows)
     # Reserve space for input (2 lines), slash menu if visible, separator, footer
     input_height = 2
-    visible_commands = _get_visible_commands(state.input)
+    visible_commands = _get_visible_commands(state.input, args.cwd)
     if visible_commands and state.input:
         input_height += len(visible_commands) + 3
     reserved = input_height + 3
@@ -1036,13 +1064,13 @@ def _history_down(state: ScreenState) -> bool:
     return True
 
 
-def _get_visible_commands(input_text: str) -> list[Any]:
+def _get_visible_commands(input_text: str, cwd: str | None = None) -> list[Any]:
     if not input_text.startswith("/"):
         return []
     if input_text == "/":
-        return SLASH_COMMANDS
-    matches = find_matching_slash_commands(input_text)
-    return [cmd for cmd in SLASH_COMMANDS if getattr(cmd, "usage", str(cmd)) in matches]
+        return get_slash_commands(cwd)
+    matches = find_matching_slash_commands(input_text, cwd)
+    return [cmd for cmd in get_slash_commands(cwd) if getattr(cmd, "usage", str(cmd)) in matches]
 
 
 # ---------------------------------------------------------------------------
@@ -1110,8 +1138,8 @@ def _render_footer_cached(
     return result
 
 
-def _render_prompt_panel(state: ScreenState) -> str:
-    commands = _get_visible_commands(state.input)
+def _render_prompt_panel(state: ScreenState, cwd: str | None = None) -> str:
+    commands = _get_visible_commands(state.input, cwd)
     cols, _ = _get_terminal_size()
     prompt_body = render_input_prompt(state.input, state.cursor_offset, width=max(5, cols - 4))
     if commands:
@@ -1197,7 +1225,7 @@ def _render_home_screen(args: TtyAppArgs, state: ScreenState, cols: int, rows: i
     """Fill the viewport with welcome content above a bottom-anchored composer."""
     runtime = args.runtime or {}
     model = f"{model_display_name(runtime) if runtime else 'unknown'} · {runtime.get('reasoningEffort', 'default')}"
-    visible_commands = _get_visible_commands(state.input)
+    visible_commands = _get_visible_commands(state.input, args.cwd)
     block_width = max(4, cols - 4)
     margin = "  "
     content = _render_home_brand(cols, rows)
@@ -1322,6 +1350,8 @@ def _render_stream_input(state: ScreenState, model: str, cols: int, visible_comm
         frame = getattr(state, "_animation_frame", 0)
         dots = "." * ((frame % 3) + 1)
         lines.append(f"  {ACCENT}{ICON_DOT}{RESET} {YELLOW}Thinking{dots}{RESET}")
+        queued = len(getattr(state, "pending_inputs", []))
+        lines.append(f"  {SUBTLE}Enter: steer · Alt+Enter or /queue: follow-up · {queued} queued · Ctrl+C: stop{RESET}")
     else:
         lines.append(f"  {SUBTLE}{model}{RESET}")
 
@@ -1544,7 +1574,7 @@ def _render_stream_screen(args: TtyAppArgs, state: ScreenState) -> None:
             feedback_input=pending.feedback_input,
         ).splitlines()
     else:
-        visible_commands = _get_visible_commands(state.input)
+        visible_commands = _get_visible_commands(state.input, args.cwd)
         input_lines = _render_stream_input(state, model_name, cols, visible_commands)
 
         # Render slash menu if visible
@@ -1678,7 +1708,7 @@ def _render_screen(args: TtyAppArgs, state: ScreenState) -> None:
     buf.append("\n\n")
 
     # Prompt
-    buf.append(_render_prompt_panel(state))
+    buf.append(_render_prompt_panel(state, args.cwd))
     buf.append("\n\n")
 
     # Footer (cached)
@@ -1956,23 +1986,96 @@ def _execute_tool_shortcut(
 # ---------------------------------------------------------------------------
 
 
+def _enqueue_tty_input(args: TtyAppArgs, state: ScreenState, input_text: str, input_mode: InputMode) -> None:
+    input_text = input_text.strip()
+    if not input_text:
+        return
+    if input_text.startswith("/queue "):
+        input_text, input_mode = input_text[len("/queue ") :].strip(), "follow_up"
+    try:
+        if state.cancellation_event.is_set():
+            raise ValueError("The task is stopping; draft kept for the next task")
+        expanded = expand_prompt_command(input_text, args.cwd)
+        state.input_queue.enqueue(
+            expanded["content"] if expanded else input_text,
+            input_mode,
+            display_content=input_text if expanded else None,
+            command_path=expanded["commandPath"] if expanded else None,
+        )
+    except ValueError as error:
+        state.status = str(error)
+        return
+    state.input, state.cursor_offset = "", 0
+    if not state.history or state.history[-1] != input_text:
+        state.history.append(input_text)
+        save_history_entries(state.history)
+    state.history_index = len(state.history)
+    state.history_draft = ""
+    state.status = "Follow-up queued" if input_mode == "follow_up" else "Instruction queued for the next response"
+
+
 def _handle_input(
     args: TtyAppArgs,
     state: ScreenState,
     rerender: Callable[[], None],
     submitted_raw_input: str | None = None,
+    input_mode: InputMode = "steer",
 ) -> bool:
     """Returns True if /exit was typed."""
     _collect_agent_result(args, state)
+    input_text = (submitted_raw_input if submitted_raw_input is not None else state.input).strip()
     if state.is_busy:
-        state.status = f"Running {state.active_tool}..." if state.active_tool else "Current turn is still running..."
+        _enqueue_tty_input(args, state, input_text, input_mode)
         return False
 
-    input_text = (submitted_raw_input if submitted_raw_input is not None else state.input).strip()
     if not input_text:
         return False
     if input_text == "/exit":
         return True
+
+    regenerated_prompt = None
+    if input_text.split()[0] in {"/tree", "/fork", "/clone", "/retry"}:
+        if state.session is None:
+            state.session = create_new_session(args.cwd)
+        _snapshot_session(args, state)
+        save_session(state.session)
+        parts = input_text.split()
+        try:
+            if len(parts) > (1 if parts[0] in {"/clone", "/retry"} else 2):
+                raise ValueError("Usage: /tree [entry-id], /fork [user-entry-id], /clone, /retry")
+            if parts[0] in {"/tree", "/fork"} and len(parts) == 1:
+                _push_transcript_entry(
+                    state, kind="assistant", body=format_tree(state.session, users_only=parts[0] == "/fork")
+                )
+                return False
+            if parts[0] == "/retry":
+                regenerated_prompt = prepare_regeneration(state.session)
+                args.messages = list(state.session.messages)
+                if args.context_manager:
+                    args.context_manager.select_branch(args.messages, args.cwd, args.permissions)
+                rebuild_transcript(state.session)
+                state.transcript = [TranscriptEntry(**entry) for entry in state.session.transcript_entries]
+                state.next_entry_id = len(state.transcript) + 1
+                input_text = regenerated_prompt.get("displayContent", regenerated_prompt["content"])
+                if args.runtime is not None:
+                    args.runtime.pop("_lastVerification", None)
+            else:
+                if parts[0] == "/tree":
+                    draft = checkout_entry(state.session, parts[1])
+                    selected = state.session
+                else:
+                    selected, draft = copy_session(
+                        state.session, entry_id=parts[1] if len(parts) > 1 else None, clone=parts[0] == "/clone"
+                    )
+                save_session(selected)
+                _restore_session_into_state(args, state, selected)
+                state.input, state.cursor_offset = draft, len(draft)
+                state.status = "Conversation branch selected; working-directory files are unchanged."
+                rerender()
+                return False
+        except ValueError as error:
+            _push_transcript_entry(state, kind="assistant", body=str(error), status="error")
+            return False
 
     _emit_tty_hook(args, HookEvent.USER_INPUT, data={"user_input": input_text})
     _drain_tty_hook_notifications(args, state)
@@ -2005,6 +2108,12 @@ def _handle_input(
             rerender()
             return False
         input_text = task
+
+    try:
+        prompt_message = regenerated_prompt or expand_prompt_command(input_text, args.cwd)
+    except ValueError as error:
+        _push_transcript_entry(state, kind="assistant", body=str(error), status="error")
+        return False
 
     if input_text.startswith("/"):
         try:
@@ -2040,7 +2149,11 @@ def _handle_input(
         rerender()
         return False
 
-    if not input_text.startswith("/") and args.runtime and not isinstance(args.model, MockModelAdapter):
+    if (
+        (not input_text.startswith("/") or prompt_message is not None)
+        and args.runtime
+        and not isinstance(args.model, MockModelAdapter)
+    ):
         problem = model_selection_error(args.runtime)
         if problem:
             _open_settings_picker(args, state, "model", notice=problem, return_input=input_text)
@@ -2081,6 +2194,7 @@ def _handle_input(
         model_adapter=args.model,
         messages=args.messages,
         context_manager=args.context_manager,
+        cwd=args.cwd,
     )
     if local_result is not None:
         if input_text.split()[0] in {"/model", "/effort", "/provider"}:
@@ -2096,8 +2210,8 @@ def _handle_input(
         return False
 
     # Unknown slash commands
-    if input_text.startswith("/"):
-        matches = find_matching_slash_commands(input_text)
+    if input_text.startswith("/") and prompt_message is None:
+        matches = find_matching_slash_commands(input_text, args.cwd)
         _push_transcript_entry(
             state,
             kind="assistant",
@@ -2143,7 +2257,10 @@ def _handle_input(
             plan_file_path=args.permissions.plan_file_path,
         ),
     }
-    args.messages.append({"role": "user", "content": input_text})
+    args.messages.append(prompt_message or {"role": "user", "content": input_text})
+    if state.session is None:
+        state.session = create_new_session(args.cwd)
+    record_messages(state.session, args.messages)
     state.latest_usage = None
 
     def finish_thinking() -> None:
@@ -2378,6 +2495,15 @@ def _handle_input(
 
     args.permissions.begin_turn()
 
+    def on_input_queue(update: dict) -> None:
+        state.pending_inputs = update["pending"]
+        for item in update["delivered"]:
+            _push_transcript_entry(state, kind="user", body=item.get("display_content") or item["content"])
+        state.returned_inputs.extend(item.get("display_content") or item["content"] for item in update["returned"])
+        rerender()
+
+    state.input_queue.start(on_input_queue)
+
     def on_usage(usage: dict) -> None:
         state.latest_usage = usage
         rerender()
@@ -2390,27 +2516,29 @@ def _handle_input(
         nonlocal agent_result
         try:
             # Use streaming agent turn for real-time token output
-            next_messages = run_verified_turn(
-                runtime=args.runtime,
-                runner=run_agent_turn_stream,
-                model=args.model,
-                tools=args.tools,
-                messages=list(args.messages),  # Copy to avoid race condition
-                cwd=args.cwd,
-                permissions=args.permissions,
-                on_token=on_token,
-                on_tool_start=on_tool_start,
-                on_tool_result=on_tool_result,
-                on_assistant_message=on_assistant_message,
-                on_error_message=on_error_message,
-                on_progress_message=on_progress_message,
-                context_manager=args.context_manager,
-                cost_tracker=state.cost_tracker,
-                on_usage=on_usage,
-                hook_engine=args.hook_engine,
-                memory=args.memory,
-                cancellation_event=state.cancellation_event,
-            )
+            with recording_session(state.session):
+                next_messages = run_verified_turn(
+                    runtime=args.runtime,
+                    runner=run_agent_turn_stream,
+                    input_queue=state.input_queue,
+                    model=args.model,
+                    tools=args.tools,
+                    messages=list(args.messages),  # Copy to avoid race condition
+                    cwd=args.cwd,
+                    permissions=args.permissions,
+                    on_token=on_token,
+                    on_tool_start=on_tool_start,
+                    on_tool_result=on_tool_result,
+                    on_assistant_message=on_assistant_message,
+                    on_error_message=on_error_message,
+                    on_progress_message=on_progress_message,
+                    context_manager=args.context_manager,
+                    cost_tracker=state.cost_tracker,
+                    on_usage=on_usage,
+                    hook_engine=args.hook_engine,
+                    memory=args.memory,
+                    cancellation_event=state.cancellation_event,
+                )
             if args.context_manager:
                 args.context_manager.messages = [dict(message) for message in next_messages]
             with agent_thread_lock:
@@ -2420,6 +2548,7 @@ def _handle_input(
             _push_transcript_entry(state, kind="assistant", body=message, status="error")
             agent_result["messages"] = [*args.messages, {"role": "assistant", "content": message, "isError": True}]
         finally:
+            state.input_queue.close()
             args.permissions.end_turn()
             # Persist context state to disk so /context can read it
             if args.context_manager:
@@ -2554,6 +2683,7 @@ def run_tty_app(
 
     permissions.set_access_mode(session.access_mode)
     permissions.restore_plan_state(session.permission_mode, session.plan_file_path)
+    restore_verification_state(args.tools, args.runtime, session.verification_state, session.messages)
     _restore_model_settings(args, session)
 
     # Initialize AppState store (Zustand-style)
@@ -2586,6 +2716,8 @@ def run_tty_app(
 
     # Restore session state if resuming
     if session.messages:
+        if not session.transcript_entries:
+            rebuild_transcript(session)
         # Restore messages
         args.messages.clear()
         args.messages.extend(session.messages)
@@ -3133,7 +3265,7 @@ def _handle_normal_mode_event(
     if state.settings_picker is not None:
         _handle_settings_picker_event(args, state, event, rerender)
         return
-    visible_commands = _get_visible_commands(state.input)
+    visible_commands = _get_visible_commands(state.input, getattr(args, "cwd", None))
 
     if isinstance(event, KeyEvent):
         if _handle_normal_mode_key(args, state, event, visible_commands, rerender):
@@ -3160,7 +3292,18 @@ def _handle_normal_mode_key(
         )
     # Return -> submit input or select slash command
     if event.name == "return":
-        _handle_normal_mode_return(args, state, visible_commands, rerender)
+        _handle_normal_mode_return(
+            args, state, visible_commands, rerender, input_mode="follow_up" if event.meta else "steer"
+        )
+        return True
+
+    if event.name == "up" and event.meta and state.pending_inputs:
+        state.input_queue.remove(state.pending_inputs[-1]["id"])
+        if state.returned_inputs:
+            state.input = "\n\n".join([*state.returned_inputs, *([state.input] if state.input else [])])
+            state.returned_inputs = []
+            state.cursor_offset = len(state.input)
+        rerender()
         return True
 
     # Tab -> autocomplete slash command
@@ -3206,15 +3349,18 @@ def _handle_normal_mode_return(
     state: ScreenState,
     visible_commands: list,
     rerender: Callable[[], None],
+    input_mode: InputMode = "steer",
 ) -> None:
     """Handle Return key in normal mode."""
     if state.is_busy:
-        state.status = "Current turn is still running. Draft kept; Ctrl+C stops the turn."
+        # Admission can race with worker settlement. A closed queue keeps the
+        # draft; it must never accidentally start a second run here.
+        _enqueue_tty_input(args, state, state.input, input_mode)
         rerender()
         return
     if visible_commands and 0 <= state.selected_slash_index < len(visible_commands):
         selected = visible_commands[state.selected_slash_index]
-        usage = getattr(selected, "usage", str(selected))
+        usage = getattr(selected, "completion_text", getattr(selected, "usage", str(selected)))
         # If input already matches the command exactly, submit instead of completing
         if state.input.strip() == usage or usage in {"/model", "/effort", "/permissions"}:
             state.selected_slash_index = 0
@@ -3250,7 +3396,7 @@ def _handle_normal_mode_tab(
 ) -> None:
     """Handle Tab key for slash command autocompletion."""
     selected = visible_commands[min(state.selected_slash_index, len(visible_commands) - 1)]
-    usage = getattr(selected, "usage", str(selected))
+    usage = getattr(selected, "completion_text", getattr(selected, "usage", str(selected)))
     state.input = usage + " "
     state.cursor_offset = len(state.input)
     state.selected_slash_index = 0
@@ -3347,7 +3493,7 @@ def _handle_normal_mode_text(
         idx = int(event.text) - 1
         if 0 <= idx < len(visible_commands):
             selected = visible_commands[idx]
-            usage = getattr(selected, "usage", str(selected))
+            usage = getattr(selected, "completion_text", getattr(selected, "usage", str(selected)))
             state.input = usage
             state.cursor_offset = len(state.input)
             state.selected_slash_index = 0

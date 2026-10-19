@@ -9,12 +9,48 @@ import threading
 from dataclasses import asdict
 from tempfile import TemporaryDirectory
 
+from pepsicode.core.agent_loop import append_queued_inputs
+from pepsicode.core.input_queue import TurnInputQueue
 from pepsicode.core.loop_engine import VerificationResult, run_loop
 from pepsicode.core.verification_discovery import Check as Check
 from pepsicode.core.verification_discovery import command_timeout, discover_checks
 from pepsicode.tooling import ToolContext, ToolRegistry
 from pepsicode.tools.run_command import run_command_tool
 from pepsicode.workspace import resolve_tool_path
+
+
+def snapshot_verification_state(tools, runtime=None) -> dict:
+    return {
+        "version": 1,
+        "pending": getattr(tools, "mutation_count", 0) > getattr(tools, "verified_mutation_count", 0),
+        "last_report": (runtime or {}).get("_lastVerification"),
+    }
+
+
+def restore_verification_state(tools, runtime, state, messages=()) -> None:
+    if isinstance(state, dict) and isinstance(state.get("pending"), bool):
+        pending = state["pending"]
+    else:
+        # Legacy sessions have no verification checkpoint. Recheck previous
+        # potentially mutating tool calls once rather than claiming no edits.
+        def could_modify_workspace(message):
+            if message.get("role") != "assistant_tool_call":
+                return False
+            tool = tools.find(message.get("toolName", ""))
+            if tool is None:
+                return True
+            try:
+                return tool.modifies_workspace(tool.validator(message.get("input", {})))
+            except Exception:  # noqa: BLE001 - old inputs may no longer match the tool's schema
+                return True
+
+        pending = any(could_modify_workspace(message) for message in messages)
+    tools.mutation_count = int(pending)
+    tools.verified_mutation_count = 0
+    if runtime is not None:
+        runtime.pop("_lastVerification", None)
+        if isinstance(state, dict) and isinstance(state.get("last_report"), dict):
+            runtime["_lastVerification"] = state["last_report"]
 
 
 def execution_argv(argv: list[str], *, windows: bool) -> list[str]:
@@ -144,7 +180,43 @@ class ProjectVerifier:
         return VerificationResult(True, f"{len(checks)} verification check(s) passed", "\n".join(reports), "passed")
 
 
-def run_verified_turn(*, runtime: dict | None, runner, on_verification=None, **options):
+def run_verified_turn(
+    *, runtime: dict | None, runner, input_queue: TurnInputQueue | None = None, on_verification=None, **options
+):
+    """Finish verification before admitting the next queued task."""
+    runtime = runtime if runtime is not None else {}
+    if input_queue is None:
+        return _run_verified_turn_once(runtime=runtime, runner=runner, on_verification=on_verification, **options)
+    try:
+        while True:
+            messages = _run_verified_turn_once(
+                runtime=runtime, runner=runner, on_verification=on_verification, input_queue=input_queue, **options
+            )
+            event = options.get("cancellation_event")
+            report = runtime.get("_lastVerification") or {}
+            if (
+                (event is not None and event.is_set())
+                or (messages and (messages[-1].get("isError") or messages[-1].get("awaitingUser")))
+                or report.get("status") in {"failed", "blocked", "cancelled"}
+            ):
+                return messages
+            pending = input_queue.next_or_close()
+            if not pending:
+                return messages
+            append_queued_inputs(
+                messages,
+                pending,
+                cwd=options["cwd"],
+                permissions=options.get("permissions"),
+                hook_engine=options.get("hook_engine"),
+                agent_scope=options.get("agent_scope", "main"),
+            )
+            options["messages"] = messages
+    finally:
+        input_queue.close()
+
+
+def _run_verified_turn_once(*, runtime: dict | None, runner, on_verification=None, **options):
     """Run the existing agent with optional streaming and a bounded verifier."""
     runtime = runtime if runtime is not None else {}
     runtime.pop("_lastVerification", None)

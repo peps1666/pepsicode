@@ -6,18 +6,28 @@ import sys
 from pathlib import Path
 
 from pepsicode.agents.trace import TraceManager
-from pepsicode.cli.cli_commands import try_handle_local_command
+from pepsicode.cli.cli_commands import expand_prompt_command, try_handle_local_command
 from pepsicode.cli.local_tool_shortcuts import parse_local_tool_shortcut
 from pepsicode.cli.manage_cli import maybe_handle_management_command
 from pepsicode.config import load_runtime_config
 from pepsicode.context.history import load_history_entries, save_history_entries
 from pepsicode.context.prompt import build_session_prompt
 from pepsicode.core.agent_loop import run_agent_turn
+from pepsicode.core.session import create_new_session, save_session
+from pepsicode.core.session_tree import (
+    checkout_entry,
+    copy_session,
+    format_tree,
+    prepare_regeneration,
+    record_messages,
+    recording_session,
+)
 from pepsicode.core.verification import run_verified_turn
 from pepsicode.hooks import HookContext, HookEvent, create_hook_engine
 from pepsicode.llm.anthropic_adapter import AnthropicModelAdapter
 from pepsicode.llm.mock_model import MockModelAdapter
 from pepsicode.llm.model_discovery import refresh_model_catalog
+from pepsicode.llm.providers import model_settings_snapshot
 from pepsicode.permissions import PermissionManager
 from pepsicode.tooling import ToolContext
 from pepsicode.tools import create_default_tool_registry
@@ -39,6 +49,7 @@ def _handle_local_command(
     model_adapter=None,
     messages=None,
     context_manager=None,
+    cwd=None,
 ) -> str | None:
     if user_input == "/tools":
         return "\n".join(f"{tool.name}: {tool.description}" for tool in tools.list())
@@ -52,6 +63,7 @@ def _handle_local_command(
         model_adapter=model_adapter,
         messages=messages,
         context_manager=context_manager,
+        cwd=cwd or getattr(permissions, "cwd", None),
     )
     return local_result
 
@@ -355,12 +367,52 @@ def main() -> None:
 
     try:
         if not sys.stdin.isatty():
+            pipe_session = create_new_session(cwd)
             for raw_input in sys.stdin:
                 user_input = raw_input.strip()
                 if not user_input:
                     continue
                 if user_input == "/exit":
                     break
+                regenerated_prompt = None
+                if user_input.split()[0] in {"/tree", "/fork", "/clone", "/retry"}:
+                    from pepsicode.core.verification import snapshot_verification_state
+
+                    record_messages(pipe_session, messages)
+                    pipe_session.access_mode = permissions.access_mode.value
+                    pipe_session.permission_mode = permissions.mode.value
+                    pipe_session.plan_file_path = permissions.plan_file_path
+                    pipe_session.verification_state = snapshot_verification_state(tools, runtime)
+                    save_session(pipe_session)
+                    parts = user_input.split()
+                    try:
+                        if len(parts) > (1 if parts[0] in {"/clone", "/retry"} else 2):
+                            raise ValueError("Usage: /tree [id], /fork [user-id], /clone, /retry")
+                        if parts[0] in {"/tree", "/fork"} and len(parts) == 1:
+                            print(format_tree(pipe_session, users_only=parts[0] == "/fork"))
+                            continue
+                        if parts[0] == "/retry":
+                            regenerated_prompt = prepare_regeneration(pipe_session)
+                            user_input = regenerated_prompt.get("displayContent", regenerated_prompt["content"])
+                        elif parts[0] == "/tree":
+                            draft = checkout_entry(pipe_session, parts[1])
+                            print(f"Branch selected. Draft: {draft}" if draft else "Branch selected.")
+                        else:
+                            pipe_session, draft = copy_session(
+                                pipe_session, entry_id=parts[1] if len(parts) > 1 else None, clone=parts[0] == "/clone"
+                            )
+                            print(f"Session: {pipe_session.session_id}. Draft: {draft}")
+                        messages = list(pipe_session.messages)
+                        if context_mgr:
+                            context_mgr.select_branch(messages, cwd, permissions)
+                        if runtime:
+                            runtime.pop("_lastVerification", None)
+                        save_session(pipe_session)
+                        if not regenerated_prompt:
+                            continue
+                    except ValueError as error:
+                        print(str(error))
+                        continue
                 hook_engine.emit(
                     HookEvent.USER_INPUT,
                     HookContext(
@@ -400,6 +452,7 @@ def main() -> None:
                     model_adapter=model,
                     messages=messages,
                     context_manager=context_mgr,
+                    cwd=cwd,
                 )
                 if local_result is not None:
                     _append_transcript(transcript, kind="user", body=user_input)
@@ -425,8 +478,13 @@ def main() -> None:
                     print(result.output)
                     _print_hook_notifications(hook_engine)
                     continue
+                try:
+                    prompt_message = regenerated_prompt or expand_prompt_command(user_input, cwd)
+                except ValueError as error:
+                    print(str(error))
+                    continue
                 _append_transcript(transcript, kind="user", body=user_input)
-                messages.append({"role": "user", "content": user_input})
+                messages.append(prompt_message or {"role": "user", "content": user_input})
                 history.append(user_input)
                 save_history_entries(history)
                 messages[0] = {
@@ -444,20 +502,31 @@ def main() -> None:
                 }
                 permissions.begin_turn()
                 # 执行一个代理回合，传入当前消息、工具、权限和上下文管理器，获取新的消息列表
-                messages = run_verified_turn(
-                    runtime=runtime,
-                    runner=run_agent_turn,
-                    model=model,
-                    tools=tools,
-                    messages=messages,
-                    cwd=cwd,
-                    permissions=permissions,
-                    context_manager=context_mgr,
-                    cost_tracker=cost_tracker,
-                    hook_engine=hook_engine,
-                    memory=memory_mgr,
-                )
+                with recording_session(pipe_session):
+                    messages = run_verified_turn(
+                        runtime=runtime,
+                        runner=run_agent_turn,
+                        model=model,
+                        tools=tools,
+                        messages=messages,
+                        cwd=cwd,
+                        permissions=permissions,
+                        context_manager=context_mgr,
+                        cost_tracker=cost_tracker,
+                        hook_engine=hook_engine,
+                        memory=memory_mgr,
+                    )
                 permissions.end_turn()
+                record_messages(pipe_session, messages)
+                from pepsicode.core.verification import snapshot_verification_state
+
+                pipe_session.access_mode = permissions.access_mode.value
+                pipe_session.permission_mode = permissions.mode.value
+                pipe_session.plan_file_path = permissions.plan_file_path
+                pipe_session.verification_state = snapshot_verification_state(tools, runtime)
+                if runtime:
+                    pipe_session.model_settings = model_settings_snapshot(runtime)
+                save_session(pipe_session)
 
                 # Log context usage after turn
                 if context_mgr:

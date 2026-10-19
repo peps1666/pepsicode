@@ -2,6 +2,9 @@ import { app, BrowserWindow, ipcMain, dialog } from "electron";
 import { spawn, ChildProcess } from "child_process";
 import * as path from "path";
 import * as net from "net";
+import { randomBytes } from "node:crypto";
+import { pathToFileURL } from "node:url";
+import { pythonEnvironment, serverOrigins, trustedRenderer } from "./server-runtime";
 
 // On Windows, Electron helper processes briefly attach to a parent console
 // before the main loop takes over, which can show a brief black window.
@@ -22,6 +25,13 @@ if (process.platform === "win32") {
 let mainWindow: BrowserWindow | null = null;
 let serverProcess: ChildProcess | null = null;
 let serverPort = 8765;
+const serverToken = randomBytes(32).toString("hex");
+
+function rendererURL(): string {
+  return !app.isPackaged && process.env.PEPSI_DEV_SERVER === "1"
+    ? "http://localhost:5173"
+    : pathToFileURL(path.join(__dirname, "..", "dist", "index.html")).href;
+}
 
 function findFreePort(start: number): Promise<number> {
   return new Promise((resolve, reject) => {
@@ -54,10 +64,7 @@ function findFreePort(start: number): Promise<number> {
 
 async function startPythonServer(port: number): Promise<void> {
   const isDev = !app.isPackaged;
-  // Prefer the pepsicode conda env if present, fall back to PATH
-  const condaPython = "C:\\Users\\zwsoft\\.conda\\envs\\pepsicode\\python.exe";
-  const fs = await import("fs");
-  const pythonCmd = process.env.PEPSI_PYTHON || (fs.existsSync(condaPython) ? condaPython : "python");
+  const pythonCmd = process.env.PEPSI_PYTHON || "python";
 
   const args = ["-m", "pepsicode.server", "--port", String(port), "--log-level", "INFO"];
 
@@ -70,25 +77,9 @@ async function startPythonServer(port: number): Promise<void> {
 
   console.log(`[electron] Starting Python server: ${pythonCmd} ${args.join(" ")} (cwd: ${cwd})`);
 
-  // Build a clean environment for the Python child. Electron injects a number
-  // of its own variables into process.env (CHROME_*, CRASHPAD pipe names,
-  // ELECTRON_*, etc.) that have been observed to destabilise native code in
-  // grandchild processes spawned by the Python server (MCP stdio servers via
-  // cmd.exe/node), leading to 0xC0000005 access violations that kill the
-  // whole server. Pass through only what the Python process actually needs.
-  const cleanEnv: NodeJS.ProcessEnv = {};
-  const passthrough = [
-    "PATH", "PATHEXT", "SystemRoot", "SystemDrive", "TEMP", "TMP",
-    "USERPROFILE", "APPDATA", "LOCALAPPDATA", "HOME", "USERNAME",
-    "PYTHONPATH", "PYTHONHOME", "PYTHONIOENCODING", "PYTHONUTF8",
-    "PEPSI_PYTHON", "PEPSI_CODE_MODEL_MODE", "LANG", "LC_ALL",
-    "PROGRAMDATA", "PROGRAMFILES", "PROGRAMFILES(X86)",
-  ];
-  for (const key of passthrough) {
-    if (process.env[key] !== undefined) {
-      cleanEnv[key] = process.env[key];
-    }
-  }
+  const cleanEnv = pythonEnvironment(process.env);
+  cleanEnv["PEPSI_CODE_SERVER_TOKEN"] = serverToken;
+  cleanEnv["PEPSI_CODE_SERVER_ORIGINS"] = JSON.stringify(serverOrigins(rendererURL()));
 
   // Suppress Windows GUI assertion pop-ups for the Python child and its
   // grandchildren (MCP stdio servers, cmd.exe).  We do this via
@@ -180,13 +171,10 @@ function createWindow(): void {
   });
 
   const isDev = !app.isPackaged;
+  mainWindow.loadURL(rendererURL());
   if (isDev && process.env.PEPSI_DEV_SERVER === "1") {
     // Hot-reload dev mode: requires `npm run dev` running separately
-    mainWindow.loadURL("http://localhost:5173");
     mainWindow.webContents.openDevTools({ mode: "detach" });
-  } else {
-    // Default: load built static files (works for both dev and production)
-    mainWindow.loadFile(path.join(__dirname, "..", "dist", "index.html"));
   }
 
   mainWindow.on("closed", () => {
@@ -270,6 +258,14 @@ app.on("before-quit", () => {
 });
 
 ipcMain.handle("get-server-port", () => serverPort);
+ipcMain.handle("get-server-connection", (event) => {
+  if (!mainWindow || event.sender !== mainWindow.webContents ||
+      event.senderFrame !== mainWindow.webContents.mainFrame ||
+      !trustedRenderer(event.senderFrame.url, rendererURL())) {
+    throw new Error("Untrusted connection credential request");
+  }
+  return { port: serverPort, token: serverToken };
+});
 
 ipcMain.handle("select-folder", async () => {
   if (!mainWindow) return null;

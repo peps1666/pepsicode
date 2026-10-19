@@ -319,7 +319,7 @@ def run_loop(
         if last_verification.details:
             nudge += "\nVerification output:\n" + last_verification.details[:12000]
         if iteration < max_iterations:
-            messages.append({"role": "user", "content": nudge})
+            messages.append({"role": "user", "content": nudge, "internal": True})
 
     # Exhausted max_iterations without success.
     task.fail(f"max iterations ({max_iterations}) exceeded")

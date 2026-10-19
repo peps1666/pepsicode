@@ -58,9 +58,10 @@
 
 .row {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: flex-end;
-  gap: 12px;
+  gap: 8px;
   padding: 2px 8px 6px;
 }
 
@@ -184,4 +185,115 @@
   font-size: 11px;
   color: var(--dsw-alias-label-dimmed);
   margin-top: 6px;
+}
+
+.inputMode {
+  max-width: 140px;
+  padding: 6px;
+  border: 1px solid var(--dsw-alias-border-l2-darkmode-thin);
+  border-radius: 8px;
+  background: var(--dsw-specific-input-major);
+  color: var(--dsw-alias-label-primary);
+  font-size: 12px;
+}
+
+.stopButton {
+  flex-shrink: 0;
+  padding: 6px 10px;
+  border: 1px solid var(--dsw-alias-border-l2-darkmode-thin);
+  border-radius: 8px;
+  background: var(--dsw-specific-input-major);
+  color: var(--dsw-alias-label-primary);
+  font-size: 12px;
+}
+
+.queue {
+  box-sizing: border-box;
+  width: 100%;
+  max-width: var(--dsh-composer-card-max-width);
+  max-height: 140px;
+  overflow-y: auto;
+  padding: 8px 12px;
+  margin: 0 0 8px;
+  border: 1px solid var(--dsw-alias-border-l2-darkmode-thin);
+  border-radius: 12px;
+  list-style: none;
+  font-size: 12px;
+}
+
+.queue li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 0;
+}
+
+.queue span {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.queue button {
+  flex-shrink: 0;
+  padding: 4px 8px;
+  border-radius: 6px;
+  background: var(--dsw-alias-bg-base);
+  color: var(--dsw-alias-label-primary);
+}
+
+.commandMenu {
+  box-sizing: border-box;
+  width: 100%;
+  max-width: var(--dsh-composer-card-max-width);
+  max-height: 260px;
+  overflow-y: auto;
+  margin-bottom: 8px;
+  padding: 8px;
+  border: 1px solid var(--dsw-alias-border-l2-darkmode-thin);
+  border-radius: 12px;
+  background: var(--dsw-specific-input-major);
+  font-size: 12px;
+}
+
+.commandHeader {
+  display: flex;
+  justify-content: space-between;
+  padding: 4px 8px;
+}
+
+.commandMenu ul {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+.commandMenu button {
+  padding: 6px 8px;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--dsw-alias-label-primary);
+  text-align: left;
+}
+
+.commandMenu li button {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  width: 100%;
+}
+
+.commandMenu li[aria-selected="true"],
+.commandMenu li:hover {
+  background: var(--dsw-alias-bg-base);
+  border-radius: 8px;
+}
+
+.commandMenu small {
+  display: block;
+  color: var(--dsw-alias-label-tertiary);
+  white-space: normal;
+  overflow-wrap: anywhere;
 }

@@ -16,6 +16,7 @@ export default function SessionList() {
     sessions,
     sessionsLoading,
     isRunning,
+    branchUpdating,
     createSession,
     resumeSession,
     switchCwd,
@@ -51,7 +52,7 @@ export default function SessionList() {
     <div className={styles.container}>
       <div className={styles.header}>
         <span className={styles.title}>Sessions</span>
-        <button className={styles.newBtn} onClick={handleNew} disabled={isRunning} title="New session">
+        <button className={styles.newBtn} onClick={handleNew} disabled={isRunning || branchUpdating} title="New session">
           +
         </button>
       </div>
@@ -60,7 +61,7 @@ export default function SessionList() {
         <button
           className={styles.folderBtn}
           onClick={handleSelectFolder}
-          disabled={switching || isRunning}
+          disabled={switching || isRunning || branchUpdating}
           title={cwd || "选择项目文件夹"}
         >
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">

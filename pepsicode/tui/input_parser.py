@@ -198,6 +198,11 @@ def parse_escape_sequence(chunk: str) -> tuple[ParsedInputEvent | None, int]:
         name_map: dict[str, str] = {"A": "up", "B": "down", "C": "right", "D": "left", "H": "home", "F": "end"}
         return KeyEvent(name=name_map[key_char], ctrl=False, meta=False), ss3_match.end()
 
+    # Terminals commonly encode Alt+Enter as ESC followed by CR or LF.
+    # Decode it before Alt+char so it cannot become text in the draft.
+    if chunk.startswith(("\x1b\r", "\x1b\n")):
+        return KeyEvent(name="return", ctrl=False, meta=True), 3 if chunk.startswith("\x1b\r\n") else 2
+
     # ESC+Tab
     if chunk.startswith("\x1b\t"):
         return KeyEvent(name="tab", ctrl=False, meta=True), 2

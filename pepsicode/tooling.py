@@ -158,6 +158,11 @@ class ToolDefinition:
     def is_read_only(self) -> bool:
         return ToolCapability.READ_ONLY in self.capabilities
 
+    def modifies_workspace(self, arguments: Any) -> bool:
+        """Evaluate workspace impact with the same parsed input as execution."""
+        impact = self.affects_workspace(arguments) if callable(self.affects_workspace) else self.affects_workspace
+        return not self.is_read_only if impact is None else bool(impact)
+
 
 class ToolRegistry:
     def __init__(
@@ -394,10 +399,7 @@ class ToolRegistry:
                 permissions.ensure_tool_allowed(tool, parsed)
             if context.cancellation_event is not None and context.cancellation_event.is_set():
                 return ToolResult(ok=False, output="Task stopped by user; tool was not executed.", status="cancelled")
-            impact = tool.affects_workspace
-            affects_workspace = impact(parsed) if callable(impact) else impact
-            if affects_workspace is None:
-                affects_workspace = not tool.is_read_only
+            affects_workspace = tool.modifies_workspace(parsed)
             # Count before execution: an integration can write and then raise.
             if affects_workspace:
                 with self._lock:
