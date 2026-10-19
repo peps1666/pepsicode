@@ -36,4 +36,5 @@ exit_plan_mode_tool = ToolDefinition(
     input_schema={"type": "object", "properties": {}},
     validator=_validate,
     run=_run,
+    affects_workspace=False,
 )

@@ -13,6 +13,7 @@ from pepsicode.config import load_runtime_config
 from pepsicode.context.history import load_history_entries, save_history_entries
 from pepsicode.context.prompt import build_session_prompt
 from pepsicode.core.agent_loop import run_agent_turn
+from pepsicode.core.verification import run_verified_turn
 from pepsicode.hooks import HookContext, HookEvent, create_hook_engine
 from pepsicode.llm.anthropic_adapter import AnthropicModelAdapter
 from pepsicode.llm.mock_model import MockModelAdapter
@@ -443,13 +444,16 @@ def main() -> None:
                 }
                 permissions.begin_turn()
                 # 执行一个代理回合，传入当前消息、工具、权限和上下文管理器，获取新的消息列表
-                messages = run_agent_turn(
+                messages = run_verified_turn(
+                    runtime=runtime,
+                    runner=run_agent_turn,
                     model=model,
                     tools=tools,
                     messages=messages,
                     cwd=cwd,
                     permissions=permissions,
                     context_manager=context_mgr,
+                    cost_tracker=cost_tracker,
                     hook_engine=hook_engine,
                     memory=memory_mgr,
                 )
@@ -468,6 +472,9 @@ def main() -> None:
                     content = last_assistant.get("content", "")
                     _append_transcript(transcript, kind="assistant", body=content)
                     print(content)
+                verification = (runtime or {}).get("_lastVerification")
+                if verification and verification.get("reason_code") not in {"no_changes", "awaiting_user"}:
+                    print(f"Verification [{verification['status']}]: {verification['reason']}")
                 _print_hook_notifications(hook_engine)
             return
         # If we're in a TTY, run the full interactive app with the agent loop and rich UI

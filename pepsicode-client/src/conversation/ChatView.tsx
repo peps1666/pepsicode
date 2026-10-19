@@ -33,7 +33,7 @@ function buildTimeline(messages: ChatMessage[]): TimelineBlock[] {
 }
 
 export default function ChatView({ onSend }: { onSend: (input: string) => void }) {
-  const { messages, isRunning, cwd, model, models, reasoningEffort, isMock, modelUpdating, permissionUpdating, sessionId, planMode } = useSessionStore();
+  const { messages, isRunning, cwd, model, models, reasoningEffort, isMock, modelUpdating, permissionUpdating, sessionId, planMode, verification } = useSessionStore();
   const modelName = models.find((item) => item.id === model)?.name || model;
   const [settingsOpen, setSettingsOpen] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -99,6 +99,12 @@ export default function ChatView({ onSend }: { onSend: (input: string) => void }
           </div>
         )}
       </div>
+      {verification && !["no_changes", "awaiting_user"].includes(verification.reason_code || "") && (
+        <details className={styles.verification} role="status">
+          <summary>{({ passed: "验证通过", failed: "验证失败", not_run: "尚未验证", blocked: "验证受阻", cancelled: "验证已停止" } as Record<string, string>)[verification.status] || verification.status} · {verification.reason}</summary>
+          {verification.details && <pre>{verification.details}</pre>}
+        </details>
+      )}
       <Composer onSend={onSend} disabled={isRunning || modelUpdating || permissionUpdating} />
       {settingsOpen && <ModelSettings onClose={() => setSettingsOpen(false)} />}
     </div>

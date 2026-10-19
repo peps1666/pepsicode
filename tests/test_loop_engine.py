@@ -222,7 +222,7 @@ def test_run_loop_budget_exceeded_raises() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_test_runner_verifier_no_tests_passes(tmp_path) -> None:
+def test_test_runner_verifier_no_tests_is_unverified(tmp_path) -> None:
     registry = ToolRegistry([test_runner_tool])
     verifier = TestRunnerVerifier(path=".")
 
@@ -233,7 +233,8 @@ def test_test_runner_verifier_no_tests_passes(tmp_path) -> None:
         permissions=None,
     )
 
-    assert result.ok is True
+    assert result.ok is False
+    assert result.status == "not_run"
     assert "no tests" in result.reason
 
 

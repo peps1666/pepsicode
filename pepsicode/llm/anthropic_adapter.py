@@ -396,13 +396,15 @@ class AnthropicModelAdapter:
                     "description": tool.description,
                     "input_schema": tool.input_schema,
                 }
-                for tool in self.tools.list()
+                for tool in self.tools.model_tools(converted_messages)
             ],
         }
         request_body["max_tokens"] = self.runtime.get("maxOutputTokens") or min(
             4096, model_capabilities(self.runtime, model).get("maxOutputTokens", 4096)
         )
         request_body.update(reasoning_request_fields(self.runtime, model))
+        if self.runtime.get("promptCaching") is True:
+            request_body["cache_control"] = {"type": "ephemeral"}
 
         return urllib.request.Request(
             url=messages_url(self.runtime),
@@ -435,13 +437,15 @@ class AnthropicModelAdapter:
                     "description": tool.description,
                     "input_schema": tool.input_schema,
                 }
-                for tool in self.tools.list()
+                for tool in self.tools.model_tools(converted_messages)
             ],
         }
         request_body["max_tokens"] = self.runtime.get("maxOutputTokens") or min(
             4096, model_capabilities(self.runtime, model).get("maxOutputTokens", 4096)
         )
         request_body.update(reasoning_request_fields(self.runtime, model))
+        if self.runtime.get("promptCaching") is True:
+            request_body["cache_control"] = {"type": "ephemeral"}
 
         return urllib.request.Request(
             url=messages_url(self.runtime),

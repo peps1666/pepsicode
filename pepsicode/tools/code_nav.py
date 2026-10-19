@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import ast
-import os
 from pathlib import Path
 from typing import Any
 
+from pepsicode.intelligence.fallback import references, source_files
+from pepsicode.intelligence.fallback import symbols as syntax_symbols
 from pepsicode.tooling import ToolDefinition, ToolResult
+from pepsicode.workspace import resolve_tool_path
 
 # ---------------------------------------------------------------------------
 # AST Analysis Helpers
@@ -98,39 +100,14 @@ def _extract_symbols_from_file(file_path: Path) -> list[dict[str, Any]]:
 
 
 def _find_symbol_references(file_path: Path, symbol_name: str) -> list[dict[str, Any]]:
-    """Find all references to a symbol in a file (simple text search)."""
+    """Find exact identifier tokens, excluding comments and string literals."""
     if not file_path.exists():
         return []
 
     try:
-        content = file_path.read_text(encoding="utf-8")
-        lines = content.split("\n")
+        return references(file_path, symbol_name)
     except (OSError, UnicodeDecodeError):
         return []
-
-    references = []
-    for i, line in enumerate(lines, 1):
-        # Skip comments and strings (simple check)
-        stripped = line.strip()
-        if stripped.startswith("#"):
-            continue
-
-        if symbol_name in line:
-            # Get context (surrounding lines)
-            start = max(0, i - 3)
-            end = min(len(lines), i + 2)
-            context = "\n".join(lines[start:end])
-
-            references.append(
-                {
-                    "file": str(file_path),
-                    "line": i,
-                    "code": line.strip()[:100],
-                    "context": context,
-                }
-            )
-
-    return references
 
 
 # ---------------------------------------------------------------------------
@@ -147,30 +124,21 @@ def _validate_find_symbols(input_data: dict) -> dict:
 
 
 def _run_find_symbols(input_data: dict, context) -> ToolResult:
-    """Find all symbols in Python files."""
-    search_path = Path(context.cwd) / input_data["path"]
+    """Find Python AST and multi-language declaration candidates."""
+    search_path = resolve_tool_path(context, input_data["path"], "read")
     symbol_type = input_data["symbol_type"]
 
     if not search_path.exists():
         return ToolResult(ok=False, output=f"Path not found: {search_path}")
 
-    # Find all Python files
-    py_files = []
-    if search_path.is_file():
-        py_files = [search_path]
-    else:
-        for root, dirs, files in os.walk(search_path):
-            # Skip common non-source dirs
-            dirs[:] = [d for d in dirs if d not in (".git", "__pycache__", "venv", "env", ".tox", "node_modules")]
-            for f in files:
-                if f.endswith(".py"):
-                    py_files.append(Path(root) / f)
+    py_files = source_files(search_path)
 
     all_symbols = []
     for py_file in py_files:
-        symbols = _extract_symbols_from_file(py_file)
+        resolve_tool_path(context, str(py_file), "read")
+        symbols = syntax_symbols(py_file)
         for sym in symbols:
-            sym["file"] = str(py_file.relative_to(context.cwd))
+            sym["file"] = str(py_file)
             all_symbols.append(sym)
 
     # Filter by type
@@ -184,7 +152,10 @@ def _run_find_symbols(input_data: dict, context) -> ToolResult:
         )
 
     # Format output
-    lines = [f"Found {len(all_symbols)} symbol(s) in {input_data['path']}:", ""]
+    lines = [
+        f"Found {len(all_symbols)} symbol(s) in {input_data['path']} (Python AST / lexical declarations; use code_intelligence for LSP):",
+        "",
+    ]
 
     by_file: dict[str, list] = {}
     for sym in all_symbols:
@@ -221,24 +192,16 @@ def _validate_find_references(input_data: dict) -> dict:
 def _run_find_references(input_data: dict, context) -> ToolResult:
     """Find all references to a symbol."""
     symbol_name = input_data["symbol_name"]
-    search_path = Path(context.cwd) / input_data["path"]
+    search_path = resolve_tool_path(context, input_data["path"], "read")
 
     if not search_path.exists():
         return ToolResult(ok=False, output=f"Path not found: {search_path}")
 
-    # Find all Python files
-    py_files = []
-    if search_path.is_file():
-        py_files = [search_path]
-    else:
-        for root, dirs, files in os.walk(search_path):
-            dirs[:] = [d for d in dirs if d not in (".git", "__pycache__", "venv", "env", ".tox", "node_modules")]
-            for f in files:
-                if f.endswith(".py"):
-                    py_files.append(Path(root) / f)
+    py_files = source_files(search_path)
 
     all_refs = []
     for py_file in py_files:
+        resolve_tool_path(context, str(py_file), "read")
         refs = _find_symbol_references(py_file, symbol_name)
         all_refs.extend(refs)
 
@@ -249,11 +212,14 @@ def _run_find_references(input_data: dict, context) -> ToolResult:
         )
 
     # Format output
-    lines = [f"Found {len(all_refs)} reference(s) for '{symbol_name}':", ""]
+    lines = [
+        f"Found {len(all_refs)} lexical reference candidate(s) for '{symbol_name}' (not scope-resolved; use code_intelligence for LSP):",
+        "",
+    ]
 
     by_file: dict[str, list] = {}
     for ref in all_refs:
-        rel_path = Path(ref["file"]).relative_to(context.cwd)
+        rel_path = Path(ref["file"])
         by_file.setdefault(str(rel_path), []).append(ref)
 
     for file, refs in by_file.items():
@@ -276,7 +242,7 @@ def _validate_get_ast_info(input_data: dict) -> dict:
 
 def _run_get_ast_info(input_data: dict, context) -> ToolResult:
     """Get AST information for a Python file."""
-    target = Path(context.cwd) / input_data["file_path"]
+    target = resolve_tool_path(context, input_data["file_path"], "read")
 
     if not target.exists():
         return ToolResult(ok=False, output=f"File not found: {target}")
@@ -333,7 +299,7 @@ def _run_get_ast_info(input_data: dict, context) -> ToolResult:
 
 find_symbols_tool = ToolDefinition(
     name="find_symbols",
-    description="Find all Python symbols (classes, functions, variables) in files or directories. Use this to understand code structure before making changes.",
+    description="Find Python AST symbols and multi-language lexical declarations in source files. Use code_intelligence for language-server-backed navigation.",
     input_schema={
         "type": "object",
         "properties": {
@@ -352,7 +318,7 @@ find_symbols_tool = ToolDefinition(
 
 find_references_tool = ToolDefinition(
     name="find_references",
-    description="Find all references to a Python symbol (class, function, variable) across files. Use this before renaming to see impact.",
+    description="Find exact identifier tokens across source files, excluding comments and strings. Results are lexical candidates; use code_intelligence for scope-resolved references and rename_symbol for renaming.",
     input_schema={
         "type": "object",
         "properties": {

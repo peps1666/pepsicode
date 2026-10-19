@@ -232,6 +232,9 @@ def create_task_tool(
 
     return ToolDefinition(
         name="task",
+        affects_workspace=lambda value: not getattr(
+            _load_agent_definition(value["agent_type"], cwd), "is_read_only", False
+        ),
         description=(
             "Delegate a scoped task to an isolated sub-agent that runs in its own "
             "context window and returns only a summary. agent_type: 'explore' "

@@ -764,7 +764,7 @@ def run_agent_turn(
         if await_user_result is not None:
             if on_assistant_message:
                 on_assistant_message(await_user_result.output)
-            current_messages.append({"role": "assistant", "content": await_user_result.output})
+            current_messages.append({"role": "assistant", "content": await_user_result.output, "awaitingUser": True})
             return _finish_hook_turn(
                 current_messages,
                 hook_engine,
@@ -1231,7 +1231,9 @@ def run_agent_turn_stream(
             if await_user_result is not None:
                 if on_assistant_message:
                     on_assistant_message(await_user_result.output)
-                current_messages.append({"role": "assistant", "content": await_user_result.output})
+                current_messages.append(
+                    {"role": "assistant", "content": await_user_result.output, "awaitingUser": True}
+                )
                 return _finish_hook_turn(
                     current_messages,
                     hook_engine,

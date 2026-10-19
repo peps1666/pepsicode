@@ -25,6 +25,7 @@ class ChatMessage(TypedDict, total=False):
     toolName: str
     input: Any
     isError: bool
+    awaitingUser: bool
 
 
 class ToolCall(TypedDict):

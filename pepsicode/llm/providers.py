@@ -38,6 +38,7 @@ CONNECTION_KEYS = {
     "_discoveredModels",
     "catalogUrl",
     "catalogError",
+    "promptCaching",
 }
 
 
@@ -77,6 +78,7 @@ def configure_providers(runtime: dict, settings: dict, env: dict) -> None:
             "reasoningEffort": entry.get("reasoningEffort", "default"),
             "maxOutputTokens": entry.get("maxOutputTokens"),
             "fallbackModel": entry.get("fallbackModel"),
+            "promptCaching": entry.get("promptCaching", False),
             "modelSource": f"settings.json providers.{identifier}",
         }
         if not isinstance(profile["model"], str) or not isinstance(profile["models"], list):

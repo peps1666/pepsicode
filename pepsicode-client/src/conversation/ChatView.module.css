@@ -109,3 +109,16 @@
 .emptyState p {
   font-size: 14px;
 }
+
+.verification {
+  flex-shrink: 0;
+  margin: 0 20px 8px;
+  padding: 8px 12px;
+  border: 1px solid var(--dsw-alias-border-l1);
+  border-radius: 8px;
+  color: var(--dsw-alias-label-secondary);
+  font-size: 12px;
+}
+
+.verification summary { cursor: pointer; }
+.verification pre { max-height: 160px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }

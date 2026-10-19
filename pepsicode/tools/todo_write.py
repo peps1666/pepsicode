@@ -88,6 +88,7 @@ def _run(input_data: dict, context) -> ToolResult:
 
 todo_write_tool = ToolDefinition(
     name="todo_write",
+    affects_workspace=False,
     description="Create or update a list of tasks. Use this to track progress on multi-step tasks. Each task has content (required) and status (pending/in_progress/completed). Pass the complete list each time to update.",
     input_schema={
         "type": "object",

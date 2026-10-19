@@ -152,6 +152,7 @@ def _run_search(input_data: dict, context) -> ToolResult:
 
 save_memory_tool = ToolDefinition(
     name="save_memory",
+    affects_workspace=False,
     description=(
         "Persist a durable memory entry (decision, convention, pattern, fact) "
         "that should survive across sessions. Stored under the chosen scope: "
@@ -194,6 +195,7 @@ save_memory_tool = ToolDefinition(
 
 forget_memory_tool = ToolDefinition(
     name="forget_memory",
+    affects_workspace=False,
     description=(
         "Delete one memory entry by scope and id. Use this when a remembered "
         "fact should not be kept. Do not leave a contradictory entry beside it."

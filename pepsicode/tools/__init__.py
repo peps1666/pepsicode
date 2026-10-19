@@ -2,10 +2,12 @@ from dataclasses import asdict
 from typing import Any
 
 from pepsicode.context.skills import discover_skills
+from pepsicode.intelligence.lsp import LanguageServers
 from pepsicode.mcp import create_mcp_backed_tools
 from pepsicode.tooling import ToolCapability, ToolRegistry
 from pepsicode.tools.api_tester import api_tester_tool
 from pepsicode.tools.ask_user import ask_user_tool
+from pepsicode.tools.code_intelligence import create_code_intelligence_tools
 from pepsicode.tools.code_nav import find_references_tool, find_symbols_tool, get_ast_info_tool
 from pepsicode.tools.code_review import code_review_tool
 from pepsicode.tools.db_explorer import db_explorer_tool
@@ -64,6 +66,14 @@ def create_default_tool_registry(
 ) -> ToolRegistry:
     skills = [asdict(skill) for skill in discover_skills(cwd)]
     mcp = create_mcp_backed_tools(cwd=cwd, mcp_servers=dict(runtime.get("mcpServers", {})) if runtime else {})
+    languages = LanguageServers(cwd, (runtime or {}).get("languageServers"))
+
+    def dispose():
+        try:
+            languages.close()
+        finally:
+            mcp["dispose"]()
+
     return ToolRegistry(
         [
             # User interaction
@@ -101,6 +111,7 @@ def create_default_tool_registry(
             find_symbols_tool,
             find_references_tool,
             get_ast_info_tool,
+            *create_code_intelligence_tools(languages),
             multi_edit_tool,
             code_review_tool,
             # Visualization
@@ -130,5 +141,8 @@ def create_default_tool_registry(
         ],
         skills=skills,
         mcp_servers=mcp["servers"],
-        disposer=mcp["dispose"],
+        disposer=dispose,
+        deferred=(runtime or {}).get("toolDiscoveryEnabled", True) is not False,
+        core_tools=(runtime or {}).get("toolCoreTools"),
+        search_aliases=(runtime or {}).get("toolSearchAliases"),
     )

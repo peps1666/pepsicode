@@ -50,6 +50,7 @@ from pepsicode.core.session import (
     save_session,
 )
 from pepsicode.core.state import AppState, Store, create_app_store
+from pepsicode.core.verification import run_verified_turn
 from pepsicode.hooks import HookContext, HookEngine, HookEvent
 from pepsicode.llm.anthropic_adapter import AnthropicModelAdapter
 from pepsicode.llm.assistant_text import parse_assistant_text
@@ -2389,7 +2390,9 @@ def _handle_input(
         nonlocal agent_result
         try:
             # Use streaming agent turn for real-time token output
-            next_messages = run_agent_turn_stream(
+            next_messages = run_verified_turn(
+                runtime=args.runtime,
+                runner=run_agent_turn_stream,
                 model=args.model,
                 tools=args.tools,
                 messages=list(args.messages),  # Copy to avoid race condition

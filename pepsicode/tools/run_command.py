@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 import shlex
 import signal
 import subprocess
@@ -105,10 +106,12 @@ def _strip_trailing_background_operator(command: str) -> str:
     return command.strip().removesuffix("&").strip()
 
 
-def _normalize_command_input(input_data: dict) -> tuple[str, list[str]]:
-    command = str(input_data.get("command", "")).strip()
+def _normalize_command_input(input_data: dict, *, preserve_argv: bool = False) -> tuple[str, list[str]]:
+    command = str(input_data.get("command", ""))
+    if not preserve_argv:
+        command = command.strip()
     raw_args = input_data.get("args") or []
-    if raw_args:
+    if raw_args or preserve_argv:
         return command, [str(arg) for arg in raw_args]
     parsed = split_command_line(command) if command else []
     return (parsed[0], parsed[1:]) if parsed else ("", [])
@@ -180,15 +183,27 @@ def _validate(input_data: dict) -> dict:
 
 
 def _run(input_data: dict, context) -> ToolResult:
+    environment = {**os.environ, **(getattr(context, "environment", None) or {})}
     effective_cwd = str(resolve_tool_path(context, input_data["cwd"], "list")) if input_data.get("cwd") else context.cwd
     timeout = int(input_data.get("timeout", COMMAND_TIMEOUT))
-    normalized_command, normalized_args = _normalize_command_input(input_data)
+    preserve_argv = getattr(context, "command_is_argv", False)
+    normalized_command, normalized_args = _normalize_command_input(input_data, preserve_argv=preserve_argv)
     if not normalized_command:
         return ToolResult(ok=False, output="Command not allowed: empty command")
 
     raw_args = input_data.get("args") or []
-    use_shell = _looks_like_shell_snippet(input_data["command"], raw_args)
-    background_shell = _is_background_shell_snippet(input_data["command"], raw_args)
+    use_shell = not preserve_argv and _looks_like_shell_snippet(input_data["command"], raw_args)
+    background_shell = not preserve_argv and _is_background_shell_snippet(input_data["command"], raw_args)
+    if (
+        preserve_argv
+        and _is_windows_shell_builtin(normalized_command)
+        and any(re.search(r'["&|<>^%!\r\n]', arg) for arg in normalized_args)
+    ):
+        return ToolResult(
+            False,
+            "Shell control characters cannot be represented as literal argv for Windows builtins; use a direct executable or wrapper",
+            status="blocked",
+        )
     known_command = _is_allowed_command(normalized_command)
 
     command, args = _build_execution_command(
@@ -215,7 +230,7 @@ def _run(input_data: dict, context) -> ToolResult:
             outcome = None
         if outcome is not None and (outcome.is_denied or outcome.is_unavailable):
             signature = f"{command} {' '.join(args)}".strip()
-            return ToolResult(ok=False, output=outcome.denial_message(scope=signature))
+            return ToolResult(ok=False, output=outcome.denial_message(scope=signature), status="blocked")
 
     if use_shell and background_shell:
         from pepsicode.subprocess_utils import hide_window_kwargs
@@ -234,7 +249,7 @@ def _run(input_data: dict, context) -> ToolResult:
         child = subprocess.Popen(  # noqa: S603
             [command, *args],
             cwd=effective_cwd,
-            env=os.environ.copy(),
+            env=environment,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             stdin=subprocess.DEVNULL,
@@ -266,6 +281,7 @@ def _run(input_data: dict, context) -> ToolResult:
             cwd=effective_cwd,
             timeout=timeout,
             cancellation_event=cancellation_event,
+            environment=environment,
             display_command=f"{normalized_command} {' '.join(normalized_args)}".strip(),
         )
 
@@ -275,7 +291,7 @@ def _run(input_data: dict, context) -> ToolResult:
         completed = subprocess.run(  # noqa: S603
             [command, *args],
             cwd=effective_cwd,
-            env=os.environ.copy(),
+            env=environment,
             capture_output=True,
             text=True,
             encoding="utf-8",  # explicitly specify UTF-8
@@ -285,11 +301,12 @@ def _run(input_data: dict, context) -> ToolResult:
             **hide_window_kwargs(),
         )
         output = "\n".join(part for part in [completed.stdout.strip(), completed.stderr.strip()] if part).strip()
-        return ToolResult(ok=completed.returncode == 0, output=output)
+        return ToolResult(ok=completed.returncode == 0, output=output, exit_code=completed.returncode)
     except subprocess.TimeoutExpired:
         return ToolResult(
             ok=False,
             output=f"Command timed out after {timeout} seconds. Command: {normalized_command} {' '.join(normalized_args)}",
+            status="timed_out",
         )
 
 
@@ -301,13 +318,14 @@ def _run_cancellable_command(
     timeout: int,
     cancellation_event,
     display_command: str,
+    environment: dict[str, str] | None = None,
 ) -> ToolResult:
     from pepsicode.subprocess_utils import hide_window_kwargs
 
     process = subprocess.Popen(  # noqa: S603
         [command, *args],
         cwd=cwd,
-        env=os.environ.copy(),
+        env=environment if environment is not None else os.environ.copy(),
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         stdin=subprocess.DEVNULL,
@@ -335,17 +353,19 @@ def _run_cancellable_command(
         while True:
             if cancellation_event.is_set():
                 _stop_process(process, job)
-                return ToolResult(ok=False, output=f"Command cancelled: {display_command}")
+                return ToolResult(ok=False, output=f"Command cancelled: {display_command}", status="cancelled")
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 _stop_process(process, job)
                 return ToolResult(
-                    ok=False, output=f"Command timed out after {timeout} seconds. Command: {display_command}"
+                    ok=False,
+                    output=f"Command timed out after {timeout} seconds. Command: {display_command}",
+                    status="timed_out",
                 )
             try:
                 stdout, stderr = process.communicate(timeout=min(0.1, remaining))
                 output = "\n".join(part for part in [stdout.strip(), stderr.strip()] if part).strip()
-                return ToolResult(ok=process.returncode == 0, output=output)
+                return ToolResult(ok=process.returncode == 0, output=output, exit_code=process.returncode)
             except subprocess.TimeoutExpired:
                 continue
     finally:

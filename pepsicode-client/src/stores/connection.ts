@@ -15,7 +15,7 @@ interface ConnectionState {
 
 let messageHandlers: ((message: any) => void)[] = [];
 let nextRequestId = 1;
-const pendingRequests = new Map<number, { resolve: (v: any) => void; reject: (e: any) => void }>();
+const pendingRequests = new Map<number, { resolve: (v: any) => void; reject: (e: any) => void; ws: WebSocket; timer: ReturnType<typeof setTimeout> | null }>();
 
 export function onMessage(handler: (message: any) => void): () => void {
   messageHandlers.push(handler);
@@ -31,15 +31,22 @@ export function sendRequest(ws: WebSocket | null, method: string, params: object
   const id = nextRequestId++;
   const message = { kind: "request", id, method, params };
   return new Promise((resolve, reject) => {
-    pendingRequests.set(id, { resolve, reject });
-    ws.send(JSON.stringify(message));
-    // Timeout after 60s
-    setTimeout(() => {
+    // An agent turn can include several verification/build passes. Its
+    // lifecycle ends with the response or a closed socket, not a 60s timer.
+    const timer = method === "turn/run" ? null : setTimeout(() => {
       if (pendingRequests.has(id)) {
         pendingRequests.delete(id);
         reject(new Error(`Request ${method} timed out`));
       }
     }, 60000);
+    pendingRequests.set(id, { resolve, reject, ws, timer });
+    try {
+      ws.send(JSON.stringify(message));
+    } catch (error) {
+      pendingRequests.delete(id);
+      if (timer !== null) clearTimeout(timer);
+      reject(error);
+    }
   });
 }
 
@@ -71,7 +78,16 @@ export const useConnectionStore = create<ConnectionState>((set, get) => ({
       };
 
       ws.onclose = () => {
-        set({ status: "disconnected", ws: null });
+        clearTimeout(timeout);
+        for (const [id, pending] of pendingRequests) {
+          if (pending.ws === ws) {
+            if (pending.timer !== null) clearTimeout(pending.timer);
+            pendingRequests.delete(id);
+            pending.reject(new Error("WebSocket connection closed"));
+          }
+        }
+        if (get().ws === ws) set({ status: "disconnected", ws: null });
+        reject(new Error("WebSocket connection closed"));
       };
 
       ws.onmessage = (event) => {
@@ -81,6 +97,7 @@ export const useConnectionStore = create<ConnectionState>((set, get) => ({
           if (message.kind === "response" && pendingRequests.has(message.id)) {
             const pending = pendingRequests.get(message.id)!;
             pendingRequests.delete(message.id);
+            if (pending.timer !== null) clearTimeout(pending.timer);
             if (message.error) {
               pending.reject(new Error(message.error.message || "Unknown error"));
             } else {

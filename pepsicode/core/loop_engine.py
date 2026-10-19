@@ -20,6 +20,7 @@ unless the caller asks for it.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any, Protocol
@@ -55,6 +56,14 @@ class VerificationResult:
     ok: bool
     reason: str
     details: str = ""
+    status: str = ""  # passed | failed | not_run | blocked | cancelled
+    reason_code: str = ""
+
+    @property
+    def fingerprint(self) -> str:
+        # Durations change between otherwise identical failures.
+        details = re.sub(r"\b\d+(?:\.\d+)?s\b", "<duration>", self.details)
+        return self.reason + "\n" + details
 
 
 class Verifier(Protocol):
@@ -78,10 +87,9 @@ class Verifier(Protocol):
 class TestRunnerVerifier:
     """Default verifier: run the project's tests via the ``test_runner`` tool.
 
-    Per the opt-in design, a directory with no tests is treated as a pass
-    (``reason="no tests found"``) rather than a failure, so non-test-driven
-    tasks are not blocked. A genuine test failure yields ``ok=False`` with the
-    tool's formatted output as ``details``.
+    A directory with no tests returns ``status="not_run"`` so callers can
+    distinguish unverified work from passing tests. A genuine test failure
+    yields ``ok=False`` with the tool's output as ``details``.
     """
 
     # Tell pytest this is not a test class despite the ``Test`` prefix.
@@ -102,13 +110,13 @@ class TestRunnerVerifier:
     ) -> VerificationResult:
         if tools.find("test_runner") is None:
             # No test_runner registered -> nothing to verify against.
-            return VerificationResult(ok=True, reason="no test_runner tool available")
+            return VerificationResult(ok=False, reason="no test_runner tool available", status="not_run")
 
         context = ToolContext(cwd=cwd, permissions=permissions)
         result = tools.execute("test_runner", {"path": self.path}, context)
 
         if self._NO_TESTS_MARKER in (result.output or ""):
-            return VerificationResult(ok=True, reason="no tests found, skipping")
+            return VerificationResult(ok=False, reason="no tests found, skipping", status="not_run")
         if result.ok:
             return VerificationResult(ok=True, reason="tests passed", details=result.output)
         return VerificationResult(ok=False, reason="tests failed", details=result.output)
@@ -171,12 +179,16 @@ def run_loop(
     cost_tracker: CostTracker | None = None,
     cost_limit_usd: float | None = None,
     max_iterations: int = 3,
+    no_progress_limit: int = 2,
     verifier: Verifier | None = None,
     permissions: PermissionManager | None = None,
     context_manager=None,
     memory: Any | None = None,
     on_iteration: Callable[[int, VerificationResult], None] | None = None,
     on_verify: Callable[[VerificationResult], None] | None = None,
+    runner: Callable | None = None,
+    turn_options: dict | None = None,
+    cancellation_event: Any | None = None,
 ) -> LoopResult:
     """Drive an agent toward a verifiable goal with bounded retries.
 
@@ -186,11 +198,15 @@ def run_loop(
     when the goal is verified, when the same failure repeats (no progress),
     when ``max_iterations`` is exhausted, or when the budget cap is crossed.
     """
+    for name, value in (("max_iterations", max_iterations), ("no_progress_limit", no_progress_limit)):
+        if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+            raise ValueError(f"{name} must be a positive integer")
     messages = list(messages)
     task = task if task is not None else Task(id="1", description="loop task")
     task.start()
 
     last_reason: str | None = None
+    repeated_failures = 0
     last_verification: VerificationResult | None = None
 
     for iteration in range(1, max_iterations + 1):
@@ -204,7 +220,10 @@ def run_loop(
                     spent=cost_tracker.total_cost_usd,
                 )
 
-        messages = run_agent_turn(
+        if cancellation_event is not None and cancellation_event.is_set():
+            task.cancel()
+            return LoopResult(False, iteration - 1, messages, stop_reason="cancelled")
+        messages = (runner or run_agent_turn)(
             model=model,
             tools=tools,
             messages=messages,
@@ -214,7 +233,26 @@ def run_loop(
             cost_tracker=cost_tracker,
             cost_limit_usd=cost_limit_usd,
             memory=memory,
+            **({"cancellation_event": cancellation_event} if cancellation_event is not None else {}),
+            **(turn_options or {}),
         )
+
+        if cancellation_event is not None and cancellation_event.is_set():
+            task.cancel()
+            return LoopResult(False, iteration, messages, stop_reason="cancelled")
+        if messages and messages[-1].get("isError"):
+            task.fail(messages[-1].get("content", "Agent turn failed"))
+            return LoopResult(False, iteration, messages, stop_reason="agent_error")
+
+        if messages and messages[-1].get("awaitingUser"):
+            # Clarification is a deliberate pause, even if earlier tool calls
+            # changed files. Verification must not invent the user's answer.
+            paused = VerificationResult(
+                False, "Waiting for user clarification", status="not_run", reason_code="awaiting_user"
+            )
+            if on_verify is not None:
+                on_verify(paused)
+            return LoopResult(False, iteration, messages, paused, task, "awaiting_user")
 
         # No verifier configured -> an agent turn is "done" by definition.
         if verifier is None:
@@ -237,6 +275,15 @@ def run_loop(
         if on_verify is not None:
             on_verify(last_verification)
 
+        if last_verification.status in {"not_run", "blocked", "cancelled"}:
+            if last_verification.status == "cancelled":
+                task.cancel()
+            elif last_verification.status == "blocked":
+                task.fail(last_verification.reason)
+            else:
+                task.complete()
+            return LoopResult(False, iteration, messages, last_verification, task, last_verification.status)
+
         if last_verification.ok:
             task.complete()
             return LoopResult(
@@ -249,7 +296,8 @@ def run_loop(
             )
 
         # Convergence: same failure as last iteration -> stop spinning.
-        if last_reason is not None and last_verification.reason == last_reason:
+        repeated_failures = repeated_failures + 1 if last_verification.fingerprint == last_reason else 1
+        if repeated_failures >= no_progress_limit:
             task.fail(f"no progress: {last_verification.reason}")
             return LoopResult(
                 ok=False,
@@ -259,7 +307,7 @@ def run_loop(
                 task=task,
                 stop_reason="no_progress",
             )
-        last_reason = last_verification.reason
+        last_reason = last_verification.fingerprint
 
         if on_iteration is not None:
             on_iteration(iteration, last_verification)
@@ -268,7 +316,10 @@ def run_loop(
 
         # Feed the failure back to the agent as a user nudge for the next turn.
         nudge = IterationStrategy.nudge(task.retry_count, last_verification.reason)
-        messages.append({"role": "user", "content": nudge})
+        if last_verification.details:
+            nudge += "\nVerification output:\n" + last_verification.details[:12000]
+        if iteration < max_iterations:
+            messages.append({"role": "user", "content": nudge})
 
     # Exhausted max_iterations without success.
     task.fail(f"max iterations ({max_iterations}) exceeded")

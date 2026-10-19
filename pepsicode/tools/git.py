@@ -199,6 +199,7 @@ def _run_review(cwd: str, max_lines: int) -> ToolResult:
 
 git_tool = ToolDefinition(
     name="git",
+    affects_workspace=lambda value: value["action"] == "commit",
     description="Git workflow tool. Actions: status (show working tree status), diff (show unstaged changes), log (show recent commits), commit (create a git commit with message), review (review recent changes and working tree).",
     input_schema={
         "type": "object",

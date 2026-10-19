@@ -39,6 +39,7 @@ interface SessionHistoryItem {
 }
 
 interface SessionState {
+  verification: { status: string; reason: string; reason_code?: string; details?: string; ok: boolean } | null;
   cacheHitPercentage: number | null;
   accessMode: "read_only" | "auto" | "full_access";
   permissionUpdating: boolean;
@@ -163,6 +164,7 @@ function hydrateSessionHistory(value: unknown): ChatMessage[] {
 }
 
 export const useSessionStore = create<SessionState>((set, get) => ({
+  verification: null,
   cacheHitPercentage: null,
   accessMode: "auto",
   permissionUpdating: false,
@@ -220,6 +222,10 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       const { event, data } = message;
 
       switch (event) {
+        case "verification/update": {
+          set({ verification: data });
+          break;
+        }
         case "permissions/settings": {
           set({ accessMode: data.access_mode });
           break;
@@ -367,6 +373,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     const { ws } = useConnectionStore.getState();
     if (!ws || get().isRunning || get().modelUpdating) return;
     const result = await sendRequest(ws, "session/create", { cwd: get().cwd || undefined });
+    set({ verification: null });
     set({
       sessionId: result.session_id,
       cwd: result.cwd,
@@ -396,7 +403,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       content: input,
       timestamp: Date.now(),
     };
-    set((state) => ({ messages: [...state.messages, userMsg], isRunning: true, cacheHitPercentage: null }));
+    set((state) => ({ messages: [...state.messages, userMsg], isRunning: true, cacheHitPercentage: null, verification: null }));
 
     // Fire-and-forget: turn/run blocks until the agent turn completes.
     // Stream events (message/delta, tool/call, etc.) arrive in the meantime
@@ -446,6 +453,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   },
 
   resumeSession: async (sessionId: string) => {
+    set({ verification: null });
     const { ws } = useConnectionStore.getState();
     if (!ws || get().isRunning || get().modelUpdating) return;
     set({ isRunning: true, pendingPermission: null });
@@ -519,6 +527,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   },
 
   switchCwd: async (cwd: string) => {
+    set({ verification: null });
     const { ws } = useConnectionStore.getState();
     if (!ws || get().isRunning || get().modelUpdating) return;
     // Re-create the session on the server with the new cwd. The server's

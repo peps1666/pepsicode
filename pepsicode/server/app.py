@@ -41,6 +41,7 @@ from pepsicode.core.session import (
     same_workspace,
     save_session,
 )
+from pepsicode.core.verification import run_verified_turn
 from pepsicode.hooks import HookContext, HookEvent, create_hook_engine
 from pepsicode.llm.anthropic_adapter import AnthropicModelAdapter
 from pepsicode.llm.cost_tracker import CostTracker
@@ -166,6 +167,7 @@ class ClientSession:
         self._turn_lock = asyncio.Lock()
         self._current_turn_task: asyncio.Task | None = None
         self._worker_active = threading.Event()
+        self._cancellation_event = threading.Event()
         self._provider_setup: dict | None = None
 
     def initialize(self, *, force: bool = False) -> None:
@@ -259,10 +261,7 @@ class ClientSession:
 
     def cost_snapshot(self) -> dict[str, Any]:
         tracker = self.cost_tracker
-        entries = [
-            {"model": model, **vars(usage)}
-            for model, usage in (tracker.model_usage.items() if tracker else [])
-        ]
+        entries = [{"model": model, **vars(usage)} for model, usage in (tracker.model_usage.items() if tracker else [])]
         total_input = sum(entry["input_tokens"] for entry in entries)
         total_read = sum(entry["cache_read_tokens"] for entry in entries)
         total_write = sum(entry["cache_write_tokens"] for entry in entries)
@@ -614,7 +613,7 @@ class PepsiCodeServer:
 
         if method == "turn/cancel":
             if session._current_turn_task and not session._current_turn_task.done():
-                session._current_turn_task.cancel()
+                session._cancellation_event.set()
                 return {"cancelled": True}
             return {"cancelled": False}
 
@@ -723,6 +722,7 @@ class PepsiCodeServer:
                 return await self._handle_local_command(user_input, session, emit)
 
             session.messages.append({"role": "user", "content": user_input})
+            session._cancellation_event.clear()
             session.permissions.begin_turn()
             session._rebuild_system_prompt()
             if session.context_manager is not None:
@@ -792,7 +792,13 @@ class PepsiCodeServer:
 
             def run_turn_sync() -> list[ChatMessage]:
                 try:
-                    return run_agent_turn_stream(
+                    return run_verified_turn(
+                        runtime=session.runtime,
+                        runner=run_agent_turn_stream,
+                        cancellation_event=session._cancellation_event,
+                        on_verification=lambda report: asyncio.run_coroutine_threadsafe(
+                            emit("verification/update", report), loop
+                        ),
                         model=session.model,
                         tools=session.tools,
                         messages=list(session.messages),
@@ -847,11 +853,18 @@ class PepsiCodeServer:
                 except Exception as error:  # noqa: BLE001
                     logger.warning("Failed to save session: %s", error)
 
-            await emit("turn/end", {"status": "completed", "messages": len(session.messages)})
+            await emit(
+                "turn/end",
+                {
+                    "status": "cancelled" if session._cancellation_event.is_set() else "completed",
+                    "messages": len(session.messages),
+                    "verification": (session.runtime or {}).get("_lastVerification"),
+                },
+            )
 
             last_assistant = next((m for m in reversed(session.messages) if m.get("role") == "assistant"), None)
             return {
-                "status": "completed",
+                "status": "cancelled" if session._cancellation_event.is_set() else "completed",
                 "messages": len(session.messages),
                 "last_message": last_assistant.get("content", "") if last_assistant else "",
             }

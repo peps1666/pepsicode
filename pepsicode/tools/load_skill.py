@@ -35,4 +35,5 @@ def create_load_skill_tool(cwd: str) -> ToolDefinition:
         input_schema={"type": "object", "properties": {"name": {"type": "string"}}, "required": ["name"]},
         validator=_validate,
         run=_run,
+        affects_workspace=False,
     )

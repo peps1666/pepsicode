@@ -148,8 +148,7 @@ def load_runtime_config(cwd: str | Path | None = None) -> dict[str, Any]:
         or None
     )
 
-    # Loop-engineering knobs (opt-in). Parsed here so future wiring can read
-    # them from the runtime config; not yet consumed by the run path.
+    # Execution/verification settings are shared by CLI and desktop sessions.
     raw_budget_limit = os.environ.get("PEPSI_CODE_BUDGET_LIMIT") or effective.get("budgetLimitUsd")
     budget_limit_usd: float | None = None
     if raw_budget_limit is not None:
@@ -203,6 +202,18 @@ def load_runtime_config(cwd: str | Path | None = None) -> dict[str, Any]:
         "budgetLimitUsd": budget_limit_usd,
         "maxIterations": max_iterations,
         "verifierEnabled": verifier_enabled,
+        "verificationMode": effective.get(
+            "verificationMode", "always" if verifier_enabled else "off" if "verifierEnabled" in effective else "auto"
+        ),
+        "verificationCommands": effective.get("verificationCommands"),
+        "verificationDiscovery": effective.get("verificationDiscovery"),
+        "verificationNoProgressLimit": effective.get("verificationNoProgressLimit", 2),
+        "verificationTimeout": effective.get("verificationTimeout", 120),
+        "toolDiscoveryEnabled": effective.get("toolDiscoveryEnabled", True),
+        "toolCoreTools": effective.get("toolCoreTools"),
+        "toolSearchAliases": effective.get("toolSearchAliases"),
+        "promptCaching": effective.get("promptCaching", False),
+        "languageServers": effective.get("languageServers", {}),
         "sourceSummary": f"config: {PEPSI_CODE_SETTINGS_PATH} > {CLAUDE_SETTINGS_PATH} > process.env",
     }
     configure_providers(runtime, effective, env)
