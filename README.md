@@ -67,17 +67,12 @@ pepsicode 是一个面向本地开发工作流的 Python 编程代理。它有�
 
 一轮任务的基本形状：
 
-```mermaid
-flowchart TD
-    U["你的需求"] --> P{"进入 Plan 模式？"}
-    P -->|是| PL["只读调研 · 写出计划"]
-    P -->|否| EX["工具调用（38 个内置）"]
-    PL --> APR["等待用户批准"]
-    APR --> EX
-    EX --> CHK["自动验证：tests / lint / build"]
-    CHK -->|失败：输出回到模型上下文| EX
-    CHK -->|通过| OUT["交付 · 保存会话 · 写入记忆"]
-```
+| 阶段 | 做什么 | 把关点 |
+| --- | --- | --- |
+| **① 规划**（可选） | 进入 Plan 模式只读调研，写出计划等你批准 | 只读边界 · 计划审批 |
+| **② 执行** | 按计划调工具改文件、跑命令 | 权限模式 · Hooks v2 |
+| **③ 验证** | 按项目约定跑 tests / lint / build | 无测试、被拒绝都不算通过 |
+| **④ 交付或继续修** | 通过则汇总交付；失败把输出送回模型继续修，超过阈值就停 | 无进展断路保护 |
 
 ## 功能一览
 
@@ -140,18 +135,7 @@ flowchart TD
 | 会话持久化 | 自动保存最新消息与终端记录（含未完成输出），`/resume` 按项目列出并恢复 |
 | 持久记忆 | `save_memory` / `search_memory` / `forget_memory`，分 `user` / `project` / `local` 三种作用域 |
 
-### 第二版亮点
-
-- Hooks v2：支持工具前后、代理、会话、输入输出、压缩和应用生命周期事件。
-- 安全动作：`deny`、`notify`、`context`、`command`，其中命令 Hook 复用现有权限审批。
-- 项目信任：项目 Hook 默认禁用，用户确认后按文件内容指纹信任；文件变化后自动失效。
-- Plan 模式隔离：命令 Hook 在 Plan 模式中强制禁用，不能绕过只读边界。
-- 同步优先执行：关键的工具前置 Hook 可确定性阻断；后台动作由受管线程池执行并在退出时收敛。
-- 临时上下文注入：Hook 生成的上下文只进入下一次模型请求，不写入持久会话历史。
-- 完整生命周期：主代理与子代理共用 Hook 引擎，同时保留各自的 scope。
-- 统一版本：包、TUI 和 MCP 客户端标识均为 `2.0.0`。
-- Electron 桌面客户端：基于 React + Vite 的白色主题界面，通过 WebSocket 连接后端，支持项目文件夹选择、会话管理、流式输出和权限审批。
-- 代码理解与执行闭环：按需 LSP 语义导航及跨文件重命名、修改后的自动验证与修复、工具搜索和 schema 按需加载，见[使用与配置说明](docs/agent-capabilities.md)。
+> 语义导航、自动验证与工具按需加载的完整配置项见[代码理解与执行闭环](docs/agent-capabilities.md)。
 
 ## 快速开始
 
@@ -211,25 +195,11 @@ pepsicode 提供一个独立的 Electron 桌面应用，采用白色主题界面
 
 ### 架构
 
-```mermaid
-flowchart LR
-    subgraph Client["Electron 桌面客户端 · React + Vite"]
-        C1["白色主题 UI"]
-        C2["项目文件夹选择"]
-        C3["会话列表与流式消息"]
-        C4["权限审批弹窗"]
-    end
-
-    subgraph Server["Python 服务端 · pepsicode.server"]
-        S1["Agent Loop"]
-        S2["工具 / Skills / MCP"]
-        S3["权限模式与 Hooks v2"]
-        S4["上下文管理"]
-    end
-
-    Client -->|WebSocket 请求 · JSON-RPC 信封| Server
-    Server -->|流式事件 · 权限请求| Client
-```
+| 位置 | 组件 | 职责 |
+| --- | --- | --- |
+| 前端 | **Electron 桌面客户端**（React + Vite） | 白色主题 UI、项目文件夹选择、会话列表、流式消息、权限审批弹窗 |
+| 通道 | **WebSocket · JSON-RPC**（`ws://127.0.0.1:<port>`） | 客户端发请求，服务端回流式事件与权限请求；建会话前必须令牌认证 |
+| 后端 | **Python 服务端**（`pepsicode.server`） | Agent Loop、工具 / Skills / MCP、权限模式与 Hooks v2、上下文管理 |
 
 Electron 主进程在启动时自动拉起 Python WebSocket 服务端，前端通过 `ws://127.0.0.1:<port>` 连接后端，使用 JSON-RPC 信封通信，支持流式事件（`message/delta`、`tool/call`、`tool/result` 等）和权限请求。
 
