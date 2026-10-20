@@ -21,7 +21,7 @@ export default function CostPanel() {
   return (
     <div className={styles.panel}>
       <section className={styles.section}>
-        <h3 className={styles.sectionTitle}>Context Window</h3>
+        <h3 className={styles.sectionTitle}>上下文窗口</h3>
         <div className={styles.progressWrap}>
           <div className={styles.progressTrack}>
             <div
@@ -30,41 +30,41 @@ export default function CostPanel() {
             />
           </div>
           <div className={styles.progressLabel}>
-            {ctxTokens.toLocaleString()} / {ctxMax.toLocaleString()} tokens ({ctxPct.toFixed(1)}%)
+            {ctxTokens.toLocaleString()} / {ctxMax.toLocaleString()} tokens（{ctxPct.toFixed(1)}%）
           </div>
         </div>
         <div className={styles.statRow}>
-          <span className={styles.statLabel}>Messages</span>
+          <span className={styles.statLabel}>消息数</span>
           <span className={styles.statValue}>{ctxMsgs}</span>
         </div>
       </section>
 
       <section className={styles.section}>
-        <h3 className={styles.sectionTitle}>Token Usage</h3>
+        <h3 className={styles.sectionTitle}>Token 用量</h3>
         <div className={styles.statRow}>
           <span className={styles.statLabel}>缓存命中率（最近请求）</span>
-          <span className={styles.statValue}>{cacheHitPercentage === null ? "未提供" : `${cacheHitPercentage.toFixed(1)}%`}</span>
+          <span className={styles.statValue}>{cacheHitPercentage === null ? "—" : `${cacheHitPercentage.toFixed(1)}%`}</span>
         </div>
         <div className={styles.statRow}>
           <span className={styles.statLabel}>缓存读取 tokens</span>
           <span className={styles.statValue}>{(costData?.total_cache_read_tokens ?? 0).toLocaleString()}</span>
         </div>
         <div className={styles.statRow}>
-          <span className={styles.statLabel}>Input</span>
+          <span className={styles.statLabel}>输入</span>
           <span className={styles.statValue}>{inputTokens.toLocaleString()}</span>
         </div>
         <div className={styles.statRow}>
-          <span className={styles.statLabel}>Output</span>
+          <span className={styles.statLabel}>输出</span>
           <span className={styles.statValue}>{outputTokens.toLocaleString()}</span>
         </div>
         <div className={styles.statRow}>
-          <span className={styles.statLabel}>Total</span>
+          <span className={styles.statLabel}>合计</span>
           <span className={styles.statValue}>{(inputTokens + outputTokens).toLocaleString()}</span>
         </div>
       </section>
 
       <section className={styles.section}>
-        <h3 className={styles.sectionTitle}>Cost</h3>
+        <h3 className={styles.sectionTitle}>费用</h3>
         <div className={styles.bigCost}>${totalCost.toFixed(4)}</div>
         {costData?.entries?.length > 0 && (
           <div className={styles.entries}>

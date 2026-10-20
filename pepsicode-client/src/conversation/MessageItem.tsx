@@ -8,7 +8,7 @@ export default function MessageItem({ message }: { message: ChatMessage }) {
   if (message.isError) {
     return (
       <div className={styles.errorMessage} role="alert">
-        <div className={styles.errorHeader}>Request failed</div>
+        <div className={styles.errorHeader}>请求失败</div>
         <div className={styles.errorContent}>{message.content}</div>
       </div>
     );
@@ -21,12 +21,12 @@ export default function MessageItem({ message }: { message: ChatMessage }) {
       <div className={styles.userRow}>
         <div className={styles.bubble}>
           <p className={styles.userText}>{message.content}</p>
-          {message.entryId && <div className={styles.branchActions}>
-            <button disabled={isRunning || branchUpdating} onClick={() => { void forkSession(message.entryId!).catch(() => {}); }}>从此分叉</button>
-            <button disabled={isRunning || branchUpdating} title="再次调用模型，可能重新执行工具；文件不会回滚"
-              onClick={() => { void regenerate(message.entryId!).catch(() => {}); }}>重新生成</button>
-          </div>}
         </div>
+        {message.entryId && <div className={styles.branchActions}>
+          <button disabled={isRunning || branchUpdating} onClick={() => { void forkSession(message.entryId!).catch(() => {}); }}>从此分叉</button>
+          <button disabled={isRunning || branchUpdating} title="再次调用模型，可能重新执行工具；文件不会回滚"
+            onClick={() => { void regenerate(message.entryId!).catch(() => {}); }}>重新生成</button>
+        </div>}
       </div>
     );
   }

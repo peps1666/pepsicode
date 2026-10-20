@@ -33,7 +33,8 @@
   color: inherit;
   cursor: pointer;
 }
-.actions button[type="submit"] { background: #2760d8; color: white; border-color: #2760d8; }
+.actions button[type="submit"] { background: var(--dsw-alias-button-primary-fill); color: var(--dsw-alias-label-primary-foreground); border-color: var(--dsw-alias-button-primary-fill); }
+.actions button[type="submit"]:hover:not(:disabled) { background: var(--dsw-alias-button-primary-hover); border-color: var(--dsw-alias-button-primary-hover); }
 .actions button:disabled, .field input:disabled, .field select:disabled { opacity: .5; cursor: not-allowed; }
 .dialog .error { color: var(--dsw-alias-state-error-primary); }
 .field span { font-size: 12px; line-height: 1.6; color: var(--dsw-alias-label-secondary); }

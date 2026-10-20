@@ -217,19 +217,22 @@ export default function Composer({ onSend, disabled, running, onOpenSettings }: 
         </div>
       </div>
       {sendError && <div className={styles.modeHint} role="alert">{sendError}</div>}
-      <div className={styles.usageStatus} aria-label="实时用量">
-        <span title="最近一次模型请求：缓存读取 token / 总输入 token；未提供表示接口没有返回缓存数据。">
-          缓存命中 {cacheHitPercentage === null ? "未提供" : `${cacheHitPercentage.toFixed(1)}%`}
-        </span>
-        <span title={contextPercent === null ? "上下文窗口数据未提供" : `${contextData.total_tokens.toLocaleString()} / ${contextData.max_tokens.toLocaleString()} tokens${estimated ? "（估算）" : ""}`}>
-          上下文 {contextPercent === null ? "未提供" : `${estimated ? "约 " : ""}${contextPercent.toFixed(1)}%`}
-        </span>
-        {contextPercent !== null && (
-          <progress aria-label="上下文窗口占比" max={100} value={Math.max(0, Math.min(100, contextPercent))} />
-        )}
+      <div className={styles.statusBar}>
+        <div className={styles.usageStatus} aria-label="实时用量">
+          <span title="最近一次模型请求：缓存读取 token / 总输入 token；— 表示接口没有返回缓存数据。">
+            缓存命中<strong>{cacheHitPercentage === null ? "—" : `${cacheHitPercentage.toFixed(1)}%`}</strong>
+          </span>
+          <span className={styles.usageDot} aria-hidden="true" />
+          <span title={contextPercent === null ? "上下文窗口数据未提供" : `${contextData.total_tokens.toLocaleString()} / ${contextData.max_tokens.toLocaleString()} tokens${estimated ? "（估算）" : ""}`}>
+            上下文<strong>{contextPercent === null ? "—" : `${estimated ? "约 " : ""}${contextPercent.toFixed(1)}%`}</strong>
+          </span>
+          {contextPercent !== null && (
+            <progress aria-label="上下文窗口占比" max={100} value={Math.max(0, Math.min(100, contextPercent))} />
+          )}
+        </div>
+        <div className={styles.hint}>{running ? "响应及工具结束后处理补充指令 · Alt+Enter 排队 · 停止后取回未执行输入" : "Enter 发送 · Shift+Enter 换行"}</div>
       </div>
       {permissionError && <div className={styles.modeHint} role="alert">{permissionError}</div>}
-      <div className={styles.hint}>{running ? "响应及工具结束后处理补充指令 · Alt+Enter 排队 · 停止后取回未执行输入" : "Enter 发送 · Shift+Enter 换行"}</div>
     </div>
   );
 }

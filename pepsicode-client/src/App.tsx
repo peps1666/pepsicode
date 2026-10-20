@@ -30,16 +30,17 @@ export default function App() {
 
   if (status === "error" || error) {
     return (
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100%", color: "var(--dsw-alias-state-error-primary)" }}>
-        Connection error: {error || "Unknown error"}
+      <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 8, height: "100%" }}>
+        <strong style={{ color: "var(--dsw-alias-state-error-primary)", fontSize: 14 }}>无法连接本地服务</strong>
+        <span style={{ color: "var(--dsw-alias-label-secondary)", fontSize: 12 }}>{error || "未知错误"}</span>
       </div>
     );
   }
 
   if (status !== "connected") {
     return (
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100%", color: "var(--dsw-alias-label-secondary)" }}>
-        Connecting to pepsicode server...
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100%", color: "var(--dsw-alias-label-secondary)", fontSize: 13 }}>
+        正在连接本地服务…
       </div>
     );
   }

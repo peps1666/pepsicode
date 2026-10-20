@@ -24,10 +24,10 @@ export default function ToolActivityItem({ activity, active }: { activity: ToolA
   const result = activity.result || (message.role === "tool_result" ? message : undefined);
   const failed = Boolean(result?.isError);
   const running = !result && active;
-  const status = failed ? "Failed" : result ? "Done" : running ? "Running" : "Stopped";
+  const status = failed ? "失败" : result ? "完成" : running ? "运行中" : "已停止";
   const { label, target } = describeTool(message);
   const input = message.toolInput ? JSON.stringify(message.toolInput, null, 2) : "";
-  const output = result ? result.content || "No output returned." : running ? "Waiting for result…" : "No result was received.";
+  const output = result ? result.content || "没有返回输出。" : running ? "等待结果…" : "没有收到结果。";
 
   return (
     <details className={`${styles.activity} ${failed ? styles.failed : ""}`} open={failed || undefined}>
@@ -43,8 +43,8 @@ export default function ToolActivityItem({ activity, active }: { activity: ToolA
       </summary>
       <div className={styles.detailsBlock} id={detailsId}>
         <div className={styles.detailsHeading}>{message.toolName || "tool"}</div>
-        {input && <><div className={styles.detailsLabel}>Input</div><pre className={styles.detailsContent}>{input}</pre></>}
-        <div className={styles.detailsLabel}>{failed ? "Error" : "Output"}</div>
+        {input && <><div className={styles.detailsLabel}>参数</div><pre className={styles.detailsContent}>{input}</pre></>}
+        <div className={styles.detailsLabel}>{failed ? "错误输出" : "输出"}</div>
         <pre className={`${styles.detailsContent} ${failed ? styles.errorOutput : ""}`}>{output}</pre>
       </div>
     </details>

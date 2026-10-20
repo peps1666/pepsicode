@@ -48,16 +48,16 @@ export default function PermissionPrompt() {
             <div className={styles.feedbackSection}>
               <textarea
                 className={styles.feedbackInput}
-                placeholder="Provide feedback to the model..."
+                placeholder="告诉模型哪里不对，它会据此调整"
                 value={feedback}
                 onChange={(e) => setFeedback(e.target.value)}
                 autoFocus
                 rows={3}
               />
               <div className={styles.feedbackActions}>
-                <button className={styles.cancelBtn} onClick={() => setShowFeedback(false)}>Cancel</button>
+                <button className={styles.cancelBtn} onClick={() => setShowFeedback(false)}>取消</button>
                 <button className={styles.submitBtn} onClick={handleSubmitFeedback} disabled={!feedback.trim()}>
-                  Send feedback
+                  发送意见
                 </button>
               </div>
             </div>

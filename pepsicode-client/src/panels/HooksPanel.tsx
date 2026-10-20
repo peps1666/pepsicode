@@ -46,15 +46,15 @@ export default function HooksPanel() {
       <section className={styles.section}>
         <div className={styles.sectionHeader}>
           <h3 className={styles.sectionTitle}>Hooks</h3>
-          <button className={styles.reloadBtn} onClick={handleReload}>Reload</button>
+          <button className={styles.reloadBtn} onClick={handleReload}>重新加载</button>
         </div>
         {loading ? (
-          <div className={styles.loading}>Loading...</div>
+          <div className={styles.loading}>加载中…</div>
         ) : hooks.length === 0 ? (
           <div className={styles.empty}>
-            <p>No hooks configured.</p>
+            <p>还没有配置 Hook。</p>
             <p className={styles.hint}>
-              Add hooks in <code>~/.pepsi-code/hooks/</code> or project <code>.pepsi-code/hooks/</code>.
+              在 <code>~/.pepsi-code/hooks.json</code> 或项目 <code>.pepsi-code/hooks.json</code> 中添加。
             </p>
           </div>
         ) : (

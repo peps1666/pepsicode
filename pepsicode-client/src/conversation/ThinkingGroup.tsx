@@ -31,8 +31,8 @@ export default function ThinkingGroup({ messages, autoExpanded }: ThinkingGroupP
 
   const toolCalls = messages.filter((message) => message.role === "tool_call").length;
   const summary = [
-    toolCalls > 0 ? `${toolCalls} ${toolCalls === 1 ? "tool" : "tools"}` : null,
-    failures > 0 ? `${failures} failed` : null,
+    toolCalls > 0 ? `${toolCalls} 个工具` : null,
+    failures > 0 ? `${failures} 个失败` : null,
   ].filter(Boolean).join(" · ");
 
   return (
@@ -45,7 +45,7 @@ export default function ThinkingGroup({ messages, autoExpanded }: ThinkingGroupP
         aria-controls={contentId}
       >
         <span className={`${styles.indicator} ${autoExpanded ? styles.indicatorActive : ""}`} />
-        <span className={styles.title}>{autoExpanded ? "Working…" : "Activity"}</span>
+        <span className={styles.title}>{autoExpanded ? "执行中…" : "工具活动"}</span>
         {summary && <span className={`${styles.summary} ${failures ? styles.hasFailures : ""}`}>{summary}</span>}
         <svg className={`${styles.chevron} ${expanded ? styles.chevronOpen : ""}`} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true"><path d="m6 4 4 4-4 4" /></svg>
       </button>

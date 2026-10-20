@@ -67,6 +67,7 @@
 
 .taskName {
   min-width: 0;
+  max-width: 46ch;
   font-size: 12px;
   font-weight: 550;
   white-space: nowrap;

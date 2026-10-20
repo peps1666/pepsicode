@@ -177,19 +177,41 @@
   color: var(--dsw-alias-label-tertiary);
 }
 
-.usageStatus {
+.statusBar {
   display: flex;
-  flex-wrap: wrap;
   align-items: center;
-  gap: 6px 14px;
+  justify-content: space-between;
+  gap: 16px;
   width: 100%;
   max-width: var(--dsh-composer-card-max-width);
-  padding: 0 8px;
-  box-sizing: border-box;
   margin-top: 8px;
-  font-size: 10px;
-  font-variant-numeric: tabular-nums;
+  padding: 0 10px;
+  box-sizing: border-box;
+  font-size: 11px;
   color: var(--dsw-alias-label-tertiary);
+}
+
+.usageStatus {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.usageStatus strong {
+  margin-left: 5px;
+  font-weight: 500;
+  color: var(--dsw-alias-label-secondary);
+}
+
+.usageDot {
+  width: 3px;
+  height: 3px;
+  border-radius: 50%;
+  background: var(--dsw-alias-label-dimmed);
+  flex-shrink: 0;
 }
 
 .usageStatus progress {
@@ -218,18 +240,16 @@
 }
 
 .sendButton:disabled {
-  background: #eeede9;
-  color: #a2a198;
+  background: var(--dsw-alias-interactive-bg-hover);
+  color: var(--dsw-alias-label-dimmed);
   cursor: default;
 }
 
 .hint {
-  width: 100%;
-  max-width: var(--dsh-composer-card-max-width);
-  text-align: center;
-  font-size: 10px;
+  flex-shrink: 0;
+  font-size: 11px;
   color: var(--dsw-alias-label-dimmed);
-  margin-top: 6px;
+  white-space: nowrap;
 }
 
 @media (max-width: 700px) {

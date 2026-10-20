@@ -188,9 +188,9 @@ python -m pepsicode.main --validate-config
 pepsicode 提供一个独立的 Electron 桌面应用，采用白色主题界面，体验类似 Codex / Claude Desktop，可以在图形界面里选择项目文件夹并与代理对话。
 
 <p align="center">
-  <img src="assets/desktop-client.jpg" alt="pepsicode 桌面客户端" width="820">
+  <img src="assets/desktop-client.jpg" alt="pepsicode 桌面客户端" width="900">
   <br>
-  <sub>桌面客户端：左侧会话列表，中间对话分支（同一需求的两种方案并存），底部权限模式选择</sub>
+  <sub>桌面客户端：左侧项目与历史会话，中间一轮带工具调用的对话，底部是模型、权限与实时用量</sub>
 </p>
 
 ### 架构

@@ -81,7 +81,7 @@ export default function ChatView({ onSend, frameControls }: { onSend: (input: st
         <div className={styles.headerLeft}>
           <button className={styles.iconButton} type="button" onClick={frameControls.toggleSidebar} title={frameControls.sidebarCollapsed ? "展开侧栏" : "收起侧栏"} aria-label={frameControls.sidebarCollapsed ? "展开侧栏" : "收起侧栏"} aria-expanded={!frameControls.sidebarCollapsed} aria-controls="session-sidebar"><Icon name="sidebar" /></button>
           <span className={styles.projectName} title={cwd}>{projectName}</span><span className={styles.separator}>/</span><span className={styles.taskName} title={taskName}>{taskName}</span>
-          {planMode && <span className={styles.planBadge}>PLAN MODE</span>}
+          {planMode && <span className={styles.planBadge}>计划模式</span>}
         </div>
         <div className={styles.headerRight}>
           <button className={styles.branchButton} type="button" onClick={() => setTreeOpen(!treeOpen)} disabled={branchUpdating || !sessionId} aria-expanded={treeOpen}><Icon name="branch" size={15} /><span>对话分支</span></button>
@@ -118,7 +118,11 @@ export default function ChatView({ onSend, frameControls }: { onSend: (input: st
       </div>
       {verification && !["no_changes", "awaiting_user"].includes(verification.reason_code || "") && (
         <details className={styles.verification} role="status">
-          <summary>{({ passed: "验证通过", failed: "验证失败", not_run: "尚未验证", blocked: "验证受阻", cancelled: "验证已停止" } as Record<string, string>)[verification.status] || verification.status} · {verification.reason}</summary>
+          <summary>
+            {({ passed: "验证通过", failed: "验证失败", not_run: "尚未验证", blocked: "验证受阻", cancelled: "验证已停止" } as Record<string, string>)[verification.status] || verification.status}
+            {" · "}
+            {({ disabled: "项目未开启自动验证", no_tests: "没有找到可运行的检查" } as Record<string, string>)[verification.reason_code || ""] || verification.reason}
+          </summary>
           {verification.details && <pre>{verification.details}</pre>}
         </details>
       )}
