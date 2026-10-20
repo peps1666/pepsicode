@@ -48,7 +48,7 @@ export default function App() {
     <>
       <AppFrame
         sidebar={<SessionList />}
-        center={<ChatView onSend={handleSend} />}
+        center={(controls) => <ChatView onSend={handleSend} frameControls={controls} />}
         details={<DetailsPanel />}
       />
       {pendingPermission && <PermissionPrompt />}

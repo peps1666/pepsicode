@@ -2,6 +2,8 @@ import { useState, useRef, useCallback, useEffect, type KeyboardEvent } from "re
 import styles from "./Composer.module.css";
 import { useSessionStore, type InputMode } from "../stores/session";
 import { commandDraft, matchingCommands, type SlashCommandInfo } from "./commandCompletion";
+import Icon from "../components/Icon";
+import { effortLabels } from "./ModelSettings";
 
 const accessModes = {
   read_only: { label: "只读", description: "查看文件和搜索，禁止编辑及命令执行。" },
@@ -13,10 +15,12 @@ interface ComposerProps {
   onSend: (input: string, mode?: InputMode) => Promise<void>;
   disabled: boolean;
   running: boolean;
+  onOpenSettings: () => void;
 }
 
-export default function Composer({ onSend, disabled, running }: ComposerProps) {
+export default function Composer({ onSend, disabled, running, onOpenSettings }: ComposerProps) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const permissionsRef = useRef<HTMLDetailsElement>(null);
   const { accessMode, permissionUpdating, updatePermissions, cacheHitPercentage, contextData, pendingInputs, draft: input, setDraft: setInput, removeQueuedInput, cancelTurn, isStopping } = useSessionStore();
   const [inputMode, setInputMode] = useState<InputMode>("steer");
   const [submitting, setSubmitting] = useState(false);
@@ -26,11 +30,22 @@ export default function Composer({ onSend, disabled, running }: ComposerProps) {
   const [permissionError, setPermissionError] = useState("");
   const [permissionsOpen, setPermissionsOpen] = useState(false);
   const { commands, refreshCommands, commandDiagnostics, commandError, cwd } = useSessionStore();
+  const { model, models, reasoningEffort, isMock } = useSessionStore();
+  const modelName = models.find((item) => item.id === model)?.name || model;
   const [selectedCommand, setSelectedCommand] = useState(0);
   const [commandMenuOpen, setCommandMenuOpen] = useState(true);
   const isCommandDraft = /^\/[^\s]*$/.test(input);
   const commandOptions = commandMenuOpen ? matchingCommands(commands, input) : [];
   const activeCommand = Math.min(selectedCommand, Math.max(0, commandOptions.length - 1));
+
+  useEffect(() => {
+    if (!permissionsOpen) return;
+    const closeOnOutsideClick = (event: PointerEvent) => {
+      if (!permissionsRef.current?.contains(event.target as Node)) setPermissionsOpen(false);
+    };
+    document.addEventListener("pointerdown", closeOnOutsideClick);
+    return () => document.removeEventListener("pointerdown", closeOnOutsideClick);
+  }, [permissionsOpen]);
 
   useEffect(() => {
     if (isCommandDraft) void refreshCommands();
@@ -136,6 +151,8 @@ export default function Composer({ onSend, disabled, running }: ComposerProps) {
       )}
       <div className={styles.card}>
         <textarea
+          id="task-composer"
+          aria-label="任务指令"
           ref={textareaRef}
           className={styles.textarea}
           value={input}
@@ -143,20 +160,27 @@ export default function Composer({ onSend, disabled, running }: ComposerProps) {
           onKeyDown={handleKeyDown}
           aria-controls={commandOptions.length ? "prompt-commands" : undefined}
           aria-activedescendant={commandOptions.length ? `prompt-command-${activeCommand}` : undefined}
-          placeholder={running ? "补充当前任务，或选择完成后执行…" : "Ask anything, or type / for commands"}
+          placeholder={running ? "补充当前任务，或选择完成后执行…" : "描述你的任务，输入 / 查看命令"}
           disabled={disabled}
           rows={1}
           autoFocus
         />
         <div className={styles.row}>
-          <details className={styles.accessMode} open={permissionsOpen}
-            onToggle={(event) => setPermissionsOpen(event.currentTarget.open)}
+          <button className={styles.modelButton} type="button" onClick={onOpenSettings} disabled={disabled || running} title={isMock ? "添加厂商并配置 API" : "选择模型与思考深度"} aria-haspopup="dialog"><Icon name="spark" size={15} /><span>{isMock ? "配置模型" : modelName}</span>{!isMock && <small>{effortLabels[reasoningEffort] || reasoningEffort}</small>}<Icon name="chevron" size={12} /></button>
+          <details ref={permissionsRef} className={styles.accessMode} open={permissionsOpen}
             onKeyDown={(event) => {
-              if (event.key === "Escape") setPermissionsOpen(false);
+              if (event.key === "Escape") {
+                event.preventDefault();
+                setPermissionsOpen(false);
+              }
             }}>
             <summary aria-label="权限模式" aria-disabled={disabled || running || permissionUpdating}
-              onClick={(event) => { if (disabled || running || permissionUpdating) event.preventDefault(); }}>
-              权限：{accessModes[accessMode].label} ▾
+              title={accessModes[accessMode].description}
+              onClick={(event) => {
+                event.preventDefault();
+                if (!disabled && !running && !permissionUpdating) setPermissionsOpen((value) => !value);
+              }}>
+              <Icon name="shield" size={14} />{accessModes[accessMode].label}<Icon name="chevron" size={12} />
             </summary>
             <div className={styles.permissionOptions} role="group" aria-label="选择权限模式">
               {Object.entries(accessModes).map(([value, mode]) => (
@@ -188,9 +212,7 @@ export default function Composer({ onSend, disabled, running }: ComposerProps) {
           </button>}
           <button className={styles.sendButton} aria-label={running ? "加入输入队列" : "发送"}
             onClick={() => void handleSend()} disabled={disabled || submitting || isStopping || !input.trim()}>
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M12 19V5M5 12l7-7 7 7" />
-            </svg>
+            <Icon name="arrow" size={18} />
           </button>
         </div>
       </div>
@@ -206,10 +228,8 @@ export default function Composer({ onSend, disabled, running }: ComposerProps) {
           <progress aria-label="上下文窗口占比" max={100} value={Math.max(0, Math.min(100, contextPercent))} />
         )}
       </div>
-      <div className={styles.modeHint} role={permissionError ? "alert" : undefined}>
-        {permissionError || accessModes[accessMode].description}
-      </div>
-      <div className={styles.hint}>{running ? "补充指令将在当前响应及工具结束后生效 · Alt+Enter 排队 · 停止后未执行的输入退回编辑框" : "Enter to send • Shift+Enter for new line"}</div>
+      {permissionError && <div className={styles.modeHint} role="alert">{permissionError}</div>}
+      <div className={styles.hint}>{running ? "响应及工具结束后处理补充指令 · Alt+Enter 排队 · 停止后取回未执行输入" : "Enter 发送 · Shift+Enter 换行"}</div>
     </div>
   );
 }

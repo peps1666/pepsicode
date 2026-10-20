@@ -23,6 +23,12 @@ async function session() {
       ], diagnostics: ["invalid command file"] };
       if (["turn/run", "turn/regenerate"].includes(method)) return new Promise((_resolve, reject) => { failTurn = reject; });
       if (method.startsWith("session/") && branchError) throw branchError;
+      if (method === "session/resume") return {
+        session_id: params.session_id, workspace: params.workspace, history: [],
+      };
+      if (method === "session/list" && params.workspace === "/another-project") return {
+        sessions: [{ session_id: "other-chat", workspace: params.workspace }],
+      };
       if (method === "turn/enqueue" && enqueueError) throw enqueueError;
       if (method === "turn/cancel") return { cancelled: true };
       if (method === "turn/dequeue") return { removed: true };
@@ -48,6 +54,25 @@ async function session() {
     rejectBranch: () => { branchError = new Error("invalid branch"); },
   };
 }
+
+test("resuming a conversation in another project sends its workspace and refreshes that project's list", async () => {
+  const api = await session();
+  await api.store.getState().resumeSession("other-chat", "/another-project");
+  assert.deepEqual(api.calls.find((call) => call.method === "session/resume"), {
+    method: "session/resume", params: { session_id: "other-chat", workspace: "/another-project" },
+  });
+  assert.equal(api.store.getState().cwd, "/another-project");
+  assert.equal(api.store.getState().sessionId, "other-chat");
+  assert.equal(api.store.getState().sessions[0].workspace, "/another-project");
+});
+
+test("a running turn blocks project switching", async () => {
+  const api = await session();
+  await api.store.getState().runTurn("working");
+  await api.store.getState().resumeSession("other-chat", "/another-project");
+  assert.equal(api.calls.some((call) => call.method === "session/resume"), false);
+  assert.equal(api.store.getState().cwd, "/project");
+});
 
 test("busy sends use the input queue and enter the transcript only when delivered", async () => {
   const api = await session();

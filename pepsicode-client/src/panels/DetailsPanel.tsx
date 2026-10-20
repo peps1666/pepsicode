@@ -7,8 +7,8 @@ import CostPanel from "./CostPanel";
 type Tab = "cost" | "plan" | "hooks";
 
 const TABS: Array<{ id: Tab; label: string }> = [
-  { id: "cost", label: "Cost" },
-  { id: "plan", label: "Plan" },
+  { id: "cost", label: "用量" },
+  { id: "plan", label: "计划" },
   { id: "hooks", label: "Hooks" },
 ];
 

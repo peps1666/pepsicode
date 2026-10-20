@@ -3,10 +3,10 @@ from __future__ import annotations
 import os
 import re
 import subprocess
-import sys
 from pathlib import Path
 from typing import Any
 
+from pepsicode.python_runtime import project_python
 from pepsicode.tooling import ToolDefinition, ToolResult
 
 # ---------------------------------------------------------------------------
@@ -201,7 +201,7 @@ def _run(input_data: dict, context) -> ToolResult:
             from pepsicode.subprocess_utils import hide_window_kwargs
 
             subprocess.run(
-                [sys.executable, "-m", "pytest", "--version"],
+                [project_python(context.cwd), "-m", "pytest", "--version"],
                 capture_output=True,
                 timeout=5,
                 **hide_window_kwargs(),
@@ -212,7 +212,7 @@ def _run(input_data: dict, context) -> ToolResult:
 
     # Build command
     if framework == "pytest":
-        cmd = [sys.executable, "-m", "pytest"]
+        cmd = [project_python(context.cwd), "-m", "pytest"]
 
         # Add test files
         cmd.extend([str(f) for f in test_files[:10]])  # Limit to 10 files
@@ -228,7 +228,7 @@ def _run(input_data: dict, context) -> ToolResult:
             cmd.extend(["-k", pattern])
 
     else:  # unittest
-        cmd = [sys.executable, "-m", "unittest", "discover"]
+        cmd = [project_python(context.cwd), "-m", "unittest", "discover"]
         cmd.extend(["-s", str(target)])
 
         if pattern:

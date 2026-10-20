@@ -116,7 +116,7 @@ interface SessionState {
   runTurn: (input: string, mode?: InputMode) => Promise<void>;
   approvePermission: (decision: string, feedback?: string) => Promise<void>;
   refreshSessions: () => Promise<void>;
-  resumeSession: (sessionId: string) => Promise<void>;
+  resumeSession: (sessionId: string, workspace?: string) => Promise<void>;
   enterPlanMode: () => Promise<void>;
   exitPlanMode: () => Promise<void>;
   refreshCost: () => Promise<void>;
@@ -624,15 +624,14 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     }
   },
 
-  resumeSession: async (sessionId: string) => {
-    set({ verification: null });
+  resumeSession: async (sessionId: string, workspace?: string) => {
     const { ws } = useConnectionStore.getState();
-    if (!ws || get().isRunning || get().modelUpdating || get().branchUpdating) return;
+    if (!ws || get().isRunning || get().modelUpdating || get().permissionUpdating || get().branchUpdating) return;
     set({ isRunning: true, pendingPermission: null });
     try {
       const result = await sendRequest(ws, "session/resume", {
         session_id: sessionId,
-        workspace: get().cwd,
+        workspace: workspace || get().cwd,
       });
       set({
         sessionId: result.session_id,
@@ -649,7 +648,9 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         contextData: null,
         planMode: result.permission_mode === "plan",
         planFile: result.plan_file || null,
+        sessions: [],
       });
+      await get().refreshSessions();
       void get().refreshCost();
       void get().refreshContext();
       void get().refreshCommands();

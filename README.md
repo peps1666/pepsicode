@@ -241,26 +241,40 @@ npm start
 
 ### 选择项目文件夹
 
-侧边栏顶部有一个文件夹按钮，点击后弹出系统文件夹选择框。选择后，代理会在新选的项目目录里工作（工具执行、文件读写、命令运行的 cwd 都切换到新目录）。
+侧边栏按「项目 → 对话」组织。点击「项目」右侧的 `+` 选择文件夹，添加的项目及展开状态会在本机保留；同一目录不会重复添加。每个项目旁的新建按钮用于在该目录中开启独立对话，顶部「新建对话」则使用当前项目。
 
-切换项目会重新创建会话，清空当前对话历史。
+点击项目可展开或折叠它的对话列表，点击对话会恢复历史，并把工具执行、文件读写、命令运行的 cwd 切换到所属项目。已有对话继续按项目保存，任务运行期间不能切换项目或对话。
 
 ### 模型配置
 
 桌面客户端共用同一套配置文件（`~/.pepsi-code/settings.json`），模型和 API Key 的读取优先级与 CLI 一致（见下方[模型配置](#模型配置)章节）。
 
-界面顶部左侧显示当前模型与思考深度。点击可从当前 API 返回的模型列表中选择，显示名称与请求 ID 分别读取；思考档位来自接口的能力元数据。可点击「刷新模型列表」重新读取。点击「应用」后从下一轮生效，保留聊天记录与费用统计；当前轮执行期间禁止切换。
+输入框底部左侧显示当前模型与思考深度。点击可从当前 API 返回的模型列表中选择，显示名称与请求 ID 分别读取；思考档位来自接口的能力元数据。可点击「刷新模型列表」重新读取。点击「应用」后从下一轮生效，保留聊天记录与费用统计；当前轮执行期间禁止切换。
 
 默认只修改当前会话，设置随下一轮对话一同自动保存，恢复会话时会恢复服务商、模型与思考深度。勾选「同时保存为新会话默认设置」会写入 `~/.pepsi-code/settings.json`；环境变量依然具有更高优先级。在 `providers` 中配置四家的独立凭据后，可在同一对话中切换服务商。Mock 模式下该入口禁用。
 
-### 打包为独立 exe
+### 打包为 Windows ZIP 便携版
 
 ```bash
 cd pepsicode-client
-npm run electron:build    # 输出到 release/ 目录
+npm ci
+npm run release:zip
+# 兼容入口：npm run electron:build
 ```
 
-打包后的应用内嵌 Python 解释器，可直接分发给未安装 Python 环境的用户（需配合 PyInstaller 打包 `pepsicode` 包，具体见打包脚本）。
+构建需要 Windows 10/11 x64、Python 3.12 和 Node.js 22+。脚本会在 `build/desktop-venv` 创建隔离构建环境，将 Python 后端、依赖和内置 agent 资源一起打包，使用 Windows 自带的 .NET Framework 编译小型启动器，然后输出 `pepsicode-client/release/Pepsicode-2.0.0-win-x64.zip` 与 `.sha256` 校验文件。ZIP 发布前会检查内部文件 CRC。
+
+使用者完整解压 ZIP 后双击 `Pepsicode.exe` 即可，无需安装 Python、Node；首次打开在界面配置自己的模型服务商和 API Key。项目自身需要的 Git、测试运行时、语言服务器等仍使用该项目的开发环境。配置与会话保存在用户目录，免安装不表示所有数据都保存在解压目录中。初版 ZIP 未签名。
+
+成品验收命令（在仓库根目录运行）：
+
+```powershell
+.\build\desktop-venv\Scripts\python.exe scripts/smoke_desktop_zip.py pepsicode-client/release/Pepsicode-2.0.0-win-x64.zip
+cd pepsicode-client
+npm run release:smoke
+```
+
+这两项验收分别检查真实后端协议、真实桌面窗口及退出清理，均在中文和空格目录中解压运行，隔离用户数据，并从 PATH 移除 Python / Node。[TDD 实施与验收记录](docs/windows-zip-tdd.md)列出了每一步的任务、注意事项和验证边界。GitHub Actions 的 `Windows ZIP` 工作流可手动生成并上传构建 artifact；不会自动发布 GitHub Release。
 
 ## 内置工具
 

@@ -1,14 +1,19 @@
 {
   "name": "pepsicode-client",
-  "version": "1.0.0",
-  "description": "Desktop client for pepsicode, inspired by DeepSeek Harness UI",
+  "version": "2.0.0",
+  "description": "Pepsicode local coding agent desktop client",
+  "author": "pepsicode contributors",
+  "license": "MIT",
   "main": "dist-electron/main.js",
   "scripts": {
     "test": "node --test tests/*.test.cjs",
     "dev": "vite",
     "build": "tsc -b && vite build",
     "electron:dev": "concurrently \"vite\" \"wait-on http://localhost:5173 && electron .\"",
-    "electron:build": "vite build && electron-builder",
+    "backend:build": "python ../scripts/build_desktop_backend.py",
+    "release:zip": "npm test && npm run backend:build && npm run build && electron-builder --win --x64 --dir --publish never && python ../scripts/archive_desktop.py && node scripts/release-checksum.cjs",
+    "electron:build": "npm run release:zip",
+    "release:smoke": "node scripts/smoke-desktop-ui.cjs",
     "start": "electron .",
     "typecheck": "tsc --noEmit"
   },
@@ -37,6 +42,19 @@
   "build": {
     "appId": "com.pepsicode.client",
     "productName": "Pepsicode",
+    "artifactName": "Pepsicode-${version}-${os}-${arch}.${ext}",
+    "electronDist": "node_modules/electron/dist",
+    "beforePack": "scripts/check-backend.cjs",
+    "afterPack": "scripts/windows-launcher.cjs",
+    "win": {
+      "target": [{ "target": "zip", "arch": ["x64"] }],
+      "signAndEditExecutable": false
+    },
+    "extraResources": [{ "from": "../build/desktop-backend/pepsicode-server", "to": "backend" }],
+    "extraFiles": [
+      { "from": "../docs/portable-readme.txt", "to": "使用说明.txt" },
+      { "from": "../LICENSE", "to": "LICENSE-pepsicode.txt" }
+    ],
     "directories": {
       "output": "release"
     },

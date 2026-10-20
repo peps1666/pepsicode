@@ -1,0 +1,44 @@
+name: Windows ZIP
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: pepsicode-client/package-lock.json
+      - name: Install desktop dependencies
+        working-directory: pepsicode-client
+        run: npm ci
+      - name: Build ZIP
+        working-directory: pepsicode-client
+        run: npm run release:zip
+      - name: Verify extracted backend without development runtimes on PATH
+        shell: pwsh
+        run: |
+          $archive = Get-ChildItem -LiteralPath pepsicode-client/release -Filter '*.zip' | Select-Object -First 1
+          & .\build\desktop-venv\Scripts\python.exe scripts/smoke_desktop_zip.py $archive.FullName
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Verify actual desktop and backend lifecycle
+        working-directory: pepsicode-client
+        run: npm run release:smoke
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Pepsicode-Windows-x64
+          path: |
+            pepsicode-client/release/*.zip
+            pepsicode-client/release/*.sha256
+          if-no-files-found: error

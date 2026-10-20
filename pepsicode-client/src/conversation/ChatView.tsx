@@ -3,9 +3,17 @@ import { useSessionStore, type ChatMessage, type InputMode } from "../stores/ses
 import MessageItem from "./MessageItem";
 import Composer from "./Composer";
 import ThinkingGroup, { isThinkingMessage } from "./ThinkingGroup";
-import ModelSettings, { effortLabels } from "./ModelSettings";
+import ModelSettings from "./ModelSettings";
 import SessionTree from "./SessionTree";
 import styles from "./ChatView.module.css";
+import Icon, { type IconName } from "../components/Icon";
+import type { FrameControls } from "../layout/AppFrame";
+
+const suggestions: { icon: IconName; title: string; detail: string; prompt: string }[] = [
+  { icon: "search", title: "了解这个项目", detail: "梳理结构与核心逻辑", prompt: "帮我梳理这个项目的目录结构、技术栈和核心执行流程。" },
+  { icon: "code", title: "一起写点代码", detail: "把想法变成可用的功能", prompt: "我想给这个项目添加一个功能，请先了解现有架构，再和我讨论实现方案。" },
+  { icon: "branch", title: "检查代码问题", detail: "发现缺陷与改进空间", prompt: "检查这个项目最近的代码改动，重点关注潜在缺陷和遗漏的边界情况。" },
+];
 
 type TimelineBlock =
   | { kind: "message"; message: ChatMessage }
@@ -33,10 +41,11 @@ function buildTimeline(messages: ChatMessage[]): TimelineBlock[] {
   return blocks;
 }
 
-export default function ChatView({ onSend }: { onSend: (input: string, mode?: InputMode) => Promise<void> }) {
-  const { messages, isRunning, cwd, model, models, reasoningEffort, isMock, modelUpdating, permissionUpdating, sessionId, planMode, verification, branchUpdating, branchError } = useSessionStore();
+export default function ChatView({ onSend, frameControls }: { onSend: (input: string, mode?: InputMode) => Promise<void>; frameControls: FrameControls }) {
+  const { messages, isRunning, cwd, modelUpdating, permissionUpdating, sessionId, planMode, verification, branchUpdating, branchError, setDraft } = useSessionStore();
   const [treeOpen, setTreeOpen] = useState(false);
-  const modelName = models.find((item) => item.id === model)?.name || model;
+  const projectName = cwd.replace(/\\/g, "/").split("/").filter(Boolean).pop() || "本地项目";
+  const taskName = messages.find((message) => message.role === "user")?.content || "新任务";
   const [settingsOpen, setSettingsOpen] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
   const [autoScroll, setAutoScroll] = useState(true);
@@ -69,26 +78,28 @@ export default function ChatView({ onSend }: { onSend: (input: string, mode?: In
     <div className={styles.container}>
       <header className={styles.header}>
         <div className={styles.headerLeft}>
-          <button className={styles.modelName} type="button" onClick={() => setSettingsOpen(true)}
-            disabled={isRunning || modelUpdating || branchUpdating || !sessionId}
-            title={isMock ? "添加厂商并配置 API" : "选择模型与思考深度"}
-            aria-haspopup="dialog">
-            {isMock ? "配置模型与服务商" : `${modelName} · ${effortLabels[reasoningEffort] || reasoningEffort}`} ▾
-          </button>
+          <button className={styles.iconButton} type="button" onClick={frameControls.toggleSidebar} title={frameControls.sidebarCollapsed ? "展开侧栏" : "收起侧栏"} aria-label={frameControls.sidebarCollapsed ? "展开侧栏" : "收起侧栏"} aria-expanded={!frameControls.sidebarCollapsed} aria-controls="session-sidebar"><Icon name="sidebar" /></button>
+          <span className={styles.projectName} title={cwd}>{projectName}</span><span className={styles.separator}>/</span><span className={styles.taskName} title={taskName}>{taskName}</span>
           {planMode && <span className={styles.planBadge}>PLAN MODE</span>}
         </div>
         <div className={styles.headerRight}>
-          <button type="button" onClick={() => setTreeOpen(!treeOpen)} disabled={branchUpdating || !sessionId}>对话分支</button>
-          <span className={styles.cwd} title={cwd}>{cwd}</span>
+          <button className={styles.branchButton} type="button" onClick={() => setTreeOpen(!treeOpen)} disabled={branchUpdating || !sessionId} aria-expanded={treeOpen}><Icon name="branch" size={15} /><span>对话分支</span></button>
+          <button className={styles.iconButton} type="button" onClick={frameControls.toggleDetails} title={frameControls.detailsCollapsed ? "展开会话详情" : "收起会话详情"} aria-label={frameControls.detailsCollapsed ? "展开会话详情" : "收起会话详情"} aria-expanded={!frameControls.detailsCollapsed} aria-controls="session-details"><Icon name="panel" /></button>
         </div>
       </header>
       {treeOpen && <SessionTree onClose={() => setTreeOpen(false)} />}
-      {branchError && !treeOpen && <p role="alert">{branchError}</p>}
+      {branchError && !treeOpen && <p className={styles.branchError} role="alert">{branchError}</p>}
       <div className={styles.messageList} ref={scrollRef} onScroll={handleScroll}>
         {messages.length === 0 ? (
           <div className={styles.emptyState}>
-            <h2>Pepsicode</h2>
-            <p>Ask anything, or type / for commands</p>
+            <div className={styles.welcomeMark}><Icon name="terminal" size={33} /></div>
+            <span className={styles.eyebrow}>你的本地编程搭档</span>
+            <h1>想构建些什么？</h1>
+            <p>从一个问题、一次修复，或一个新想法开始。</p>
+            <span className={styles.projectPill} title={cwd}><Icon name="folder" size={14} />{projectName}</span>
+            <div className={styles.suggestions}>{suggestions.map((item) => <button type="button" key={item.title} onClick={() => { setDraft(item.prompt); document.getElementById("task-composer")?.focus(); }} disabled={!sessionId || modelUpdating || branchUpdating}>
+              <Icon name={item.icon} size={19} /><strong>{item.title}</strong><small>{item.detail}</small>
+            </button>)}</div>
           </div>
         ) : (
           <div className={styles.column}>
@@ -110,7 +121,7 @@ export default function ChatView({ onSend }: { onSend: (input: string, mode?: In
           {verification.details && <pre>{verification.details}</pre>}
         </details>
       )}
-      <Composer onSend={onSend} disabled={modelUpdating || permissionUpdating || branchUpdating} running={isRunning} />
+      <Composer onSend={onSend} onOpenSettings={() => setSettingsOpen(true)} disabled={!sessionId || modelUpdating || permissionUpdating || branchUpdating} running={isRunning} />
       {settingsOpen && <ModelSettings onClose={() => setSettingsOpen(false)} />}
     </div>
   );

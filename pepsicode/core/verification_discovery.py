@@ -4,11 +4,11 @@ from __future__ import annotations
 
 import json
 import os
-import sys
 import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from pepsicode.python_runtime import project_python
 from pepsicode.tools.run_command import COMMAND_TIMEOUT
 
 DEFAULT_EXCLUDES = {
@@ -196,7 +196,7 @@ def discover_checks(cwd: str, configured=None, discovery=None) -> list[Check]:
     checks = [
         Check(
             "Python tests" if package == root else f"{package.relative_to(root).as_posix()}: Python tests",
-            [sys.executable, "-m", "pytest", "-q"],
+            [project_python(str(package)), "-m", "pytest", "-q"],
             str(package),
             no_tests_exit_codes=(5,),
         )

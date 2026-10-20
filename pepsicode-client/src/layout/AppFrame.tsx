@@ -3,23 +3,31 @@ import styles from "./AppFrame.module.css";
 
 interface AppFrameProps {
   sidebar: ReactNode;
-  center: ReactNode;
+  center: (controls: FrameControls) => ReactNode;
   details: ReactNode;
+}
+
+export interface FrameControls {
+  sidebarCollapsed: boolean;
+  detailsCollapsed: boolean;
+  toggleSidebar: () => void;
+  toggleDetails: () => void;
 }
 
 const MIN_SIDEBAR = 180;
 const MAX_SIDEBAR = 400;
 const MIN_DETAILS = 240;
 const MAX_DETAILS = 520;
-const DEFAULT_SIDEBAR = 260;
+const DEFAULT_SIDEBAR = 248;
 const DEFAULT_DETAILS = 340;
 const COLLAPSE_THRESHOLD = 900;
 
 export default function AppFrame({ sidebar, center, details }: AppFrameProps) {
   const [sidebarWidth, setSidebarWidth] = useState(DEFAULT_SIDEBAR);
   const [detailsWidth, setDetailsWidth] = useState(DEFAULT_DETAILS);
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
-  const [detailsCollapsed, setDetailsCollapsed] = useState(false);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => window.innerWidth < COLLAPSE_THRESHOLD);
+  const [detailsCollapsed, setDetailsCollapsed] = useState(true);
+  const [narrow, setNarrow] = useState(() => window.innerWidth < COLLAPSE_THRESHOLD);
   const draggingRef = useRef<"sidebar" | "details" | null>(null);
 
   const handleMouseDown = useCallback((which: "sidebar" | "details") => (e: React.MouseEvent) => {
@@ -36,10 +44,11 @@ export default function AppFrame({ sidebar, center, details }: AppFrameProps) {
       setSidebarWidth(newWidth);
     } else if (draggingRef.current === "details") {
       const fromRight = window.innerWidth - e.clientX;
-      const newWidth = Math.min(MAX_DETAILS, Math.max(MIN_DETAILS, fromRight));
+      const available = window.innerWidth - (sidebarCollapsed ? 0 : sidebarWidth) - 400;
+      const newWidth = Math.min(MAX_DETAILS, Math.max(MIN_DETAILS, Math.min(available, fromRight)));
       setDetailsWidth(newWidth);
     }
-  }, []);
+  }, [sidebarCollapsed, sidebarWidth]);
 
   const handleMouseUp = useCallback(() => {
     draggingRef.current = null;
@@ -49,13 +58,20 @@ export default function AppFrame({ sidebar, center, details }: AppFrameProps) {
 
   // Auto-collapse on narrow windows
   useEffect(() => {
+    const media = window.matchMedia(`(max-width: ${COLLAPSE_THRESHOLD - 1}px)`);
+    const detailsMedia = window.matchMedia("(max-width: 1149px)");
+    const handleDetailsResize = () => { if (detailsMedia.matches) setDetailsCollapsed(true); };
     const handler = () => {
-      setSidebarCollapsed(window.innerWidth < COLLAPSE_THRESHOLD);
-      setDetailsCollapsed(window.innerWidth < COLLAPSE_THRESHOLD + 200);
+      setNarrow(media.matches);
+      setSidebarCollapsed(media.matches);
+      if (media.matches) setDetailsCollapsed(true);
     };
-    handler();
-    window.addEventListener("resize", handler);
-    return () => window.removeEventListener("resize", handler);
+    media.addEventListener("change", handler);
+    detailsMedia.addEventListener("change", handleDetailsResize);
+    return () => {
+      media.removeEventListener("change", handler);
+      detailsMedia.removeEventListener("change", handleDetailsResize);
+    };
   }, []);
 
   useEffect(() => {
@@ -77,19 +93,23 @@ export default function AppFrame({ sidebar, center, details }: AppFrameProps) {
 
   return (
     <div className={styles.frame}>
-      <div className={styles.sidebar} style={sidebarStyle}>
+      {narrow && (!sidebarCollapsed || !detailsCollapsed) && <button className={styles.backdrop} aria-label="关闭侧面板" onClick={() => { setSidebarCollapsed(true); setDetailsCollapsed(true); }} />}
+      <aside id="session-sidebar" aria-label="项目与会话" aria-hidden={sidebarCollapsed} {...(sidebarCollapsed ? { inert: "" } : {})} className={`${styles.sidebar} ${narrow ? styles.overlaySidebar : ""}`} style={sidebarStyle}>
         {sidebar}
-      </div>
-      {!sidebarCollapsed && (
+      </aside>
+      {!sidebarCollapsed && !narrow && (
         <div className={styles.dragHandle} onMouseDown={handleMouseDown("sidebar")} />
       )}
-      <div className={styles.center}>{center}</div>
-      {!detailsCollapsed && (
+      <main className={styles.center}>{center({ sidebarCollapsed, detailsCollapsed,
+        toggleSidebar: () => { setSidebarCollapsed((value) => !value); if (window.innerWidth < 1150) setDetailsCollapsed(true); },
+        toggleDetails: () => { setDetailsCollapsed((value) => !value); if (window.innerWidth < 1150) setSidebarCollapsed(true); },
+      })}</main>
+      {!detailsCollapsed && !narrow && (
         <div className={styles.dragHandle} onMouseDown={handleMouseDown("details")} />
       )}
-      <div className={styles.details} style={detailsStyle}>
+      <aside id="session-details" aria-label="会话详情" aria-hidden={detailsCollapsed} {...(detailsCollapsed ? { inert: "" } : {})} className={`${styles.details} ${narrow ? styles.overlayDetails : ""}`} style={detailsStyle}>
         {details}
-      </div>
+      </aside>
     </div>
   );
 }

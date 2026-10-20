@@ -1,4 +1,5 @@
 .frame {
+  position: relative;
   display: flex;
   height: 100%;
   width: 100%;
@@ -36,13 +37,43 @@
 }
 
 .dragHandle {
-  width: 5px;
+  width: 1px;
   flex-shrink: 0;
   cursor: col-resize;
   background-color: transparent;
   position: relative;
   z-index: 10;
   transition: background-color var(--ds-transition-duration-fast) ease;
+}
+
+.dragHandle::after {
+  content: "";
+  position: absolute;
+  inset: 0 -3px;
+}
+
+.backdrop {
+  position: absolute;
+  inset: 0;
+  z-index: 29;
+  background: rgb(32 31 27 / 16%);
+}
+
+.overlaySidebar, .overlayDetails {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  z-index: 30;
+  box-shadow: 0 8px 40px rgb(0 0 0 / 8%);
+  max-width: 85vw;
+}
+
+.overlaySidebar {
+  left: 0;
+}
+
+.overlayDetails {
+  right: 0;
 }
 
 .dragHandle:hover {

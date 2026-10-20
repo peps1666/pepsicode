@@ -6,15 +6,18 @@
 }
 
 .tabBar {
+  height: 62px;
+  align-items: center;
   display: flex;
   border-bottom: 1px solid var(--dsw-alias-border-l1);
-  padding: 0 8px;
+  padding: 0 12px;
   flex-shrink: 0;
 }
 
 .tab {
-  padding: 10px 16px;
-  font-size: 13px;
+  padding: 6px 14px;
+  border-radius: 6px;
+  font-size: 12px;
   font-weight: 500;
   color: var(--dsw-alias-label-tertiary);
   border-bottom: 2px solid transparent;
@@ -27,7 +30,7 @@
 
 .tab.active {
   color: var(--dsw-alias-label-primary);
-  border-bottom-color: var(--dsw-alias-state-business-primary);
+  background: var(--dsw-alias-bg-overlay);
 }
 
 .content {

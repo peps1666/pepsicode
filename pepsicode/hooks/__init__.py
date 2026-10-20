@@ -25,6 +25,7 @@ from pepsicode.hooks.models import (
 )
 from pepsicode.hooks.runtime import create_hook_engine
 from pepsicode.hooks.trust import HookTrustStore
+from pepsicode.python_runtime import project_python
 
 _hook_manager = HookManager()
 
@@ -75,7 +76,7 @@ def create_script_hook(script_path: Path) -> AsyncHookHandler:
             suffix = script_path.suffix.lower()
             if sys.platform == "win32" and suffix in {".py", ".sh", ".bat", ".cmd", ".ps1"}:
                 if suffix == ".py":
-                    prefix = [sys.executable, script]
+                    prefix = [project_python(context.cwd), script]
                 elif suffix in {".bat", ".cmd"}:
                     prefix = ["cmd", "/c", script]
                 elif suffix == ".ps1":

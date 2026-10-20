@@ -6,7 +6,7 @@ const ts = require("typescript");
 const source = readFileSync(join(__dirname, "../electron/server-runtime.ts"), "utf8");
 const output = ts.transpileModule(source, {compilerOptions: {module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022}}).outputText;
 const api = {};
-new Function("exports", output)(api);
+new Function("exports", "require", output)(api, require);
 
 test("Python inherits arbitrary provider credentials and settings without Electron runtime flags", () => {
   const source = {ANTHROPIC_API_KEY: "dummy", MOONSHOT_API_KEY: "dummy", TEAM_CUSTOM_KEY: "dummy", PEPSI_CODE_PROVIDER: "kimi", PEPSI_CODE_MODEL: "custom-model", PATH: "python-path", ELECTRON_RUN_AS_NODE: "1", CHROME_CRASHPAD_PIPE_NAME: "bad", NODE_OPTIONS: "--require injected"};

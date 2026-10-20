@@ -1,30 +1,30 @@
 import { app, BrowserWindow, ipcMain, dialog } from "electron";
-import { spawn, ChildProcess } from "child_process";
-import * as path from "path";
-import * as net from "net";
+import type { ChildProcess } from "node:child_process";
+import { mkdirSync, createWriteStream, type WriteStream } from "node:fs";
+import * as path from "node:path";
+import * as net from "node:net";
 import { randomBytes } from "node:crypto";
 import { pathToFileURL } from "node:url";
-import { pythonEnvironment, serverOrigins, trustedRenderer } from "./server-runtime";
+import { backendLaunch, serverOrigins, trustedRenderer } from "./server-runtime";
+import { launchBackend, stopBackend } from "./backend-process";
 
-// On Windows, Electron helper processes briefly attach to a parent console
-// before the main loop takes over, which can show a brief black window.
-// These flags reduce the number of helper processes and the chance of
-// seeing a console window flash.
 if (process.platform === "win32") {
-  // --no-sandbox avoids spawning an extra sandbox helper process.
+  app.setAppUserModelId("com.pepsicode.client");
+  // Preserve the Windows launch mode used by the existing desktop client.
   app.commandLine.appendSwitch("no-sandbox");
-  // Stable console output: write Electron logs to stderr rather than
-  // opening a log file dialog.  Pairs well with the python server's
-  // stdio: ["ignore", "pipe", "pipe"] setup.
-  app.commandLine.appendSwitch("enable-logging", "stderr");
-  // Bind the AppUserModelID so Windows shows the correct taskbar icon
-  // and doesn't fall back to a console window.
-  app.setAppUserModelId("com.pepsicode.app");
+}
+if (process.env.PEPSI_CODE_DESKTOP_DATA_DIR) {
+  const dataDir = path.resolve(process.env.PEPSI_CODE_DESKTOP_DATA_DIR);
+  mkdirSync(dataDir, { recursive: true });
+  mkdirSync(path.join(dataDir, "backend-home"), { recursive: true });
+  app.setPath("userData", dataDir);
 }
 
 let mainWindow: BrowserWindow | null = null;
 let serverProcess: ChildProcess | null = null;
-let serverPort = 8765;
+let serverPort = 0;
+let quitting = false;
+let backendLog: WriteStream | null = null;
 const serverToken = randomBytes(32).toString("hex");
 
 function rendererURL(): string {
@@ -33,245 +33,108 @@ function rendererURL(): string {
     : pathToFileURL(path.join(__dirname, "..", "dist", "index.html")).href;
 }
 
-function findFreePort(start: number): Promise<number> {
+async function findFreePort(): Promise<number> {
   return new Promise((resolve, reject) => {
-    const tryPort = (port: number, attempts: number) => {
-      if (attempts <= 0) {
-        reject(new Error("Could not find a free port"));
-        return;
-      }
-      const socket = new net.Socket();
-      socket.setTimeout(500);
-      socket.on("connect", () => {
-        // Port is in use, try next
-        socket.destroy();
-        tryPort(port + 1, attempts - 1);
-      });
-      socket.on("error", () => {
-        // Port is free (connection refused)
-        socket.destroy();
-        resolve(port);
-      });
-      socket.on("timeout", () => {
-        socket.destroy();
-        resolve(port);
-      });
-      socket.connect(port, "127.0.0.1");
-    };
-    tryPort(start, 20);
-  });
-}
-
-async function startPythonServer(port: number): Promise<void> {
-  const isDev = !app.isPackaged;
-  const pythonCmd = process.env.PEPSI_PYTHON || "python";
-
-  const args = ["-m", "pepsicode.server", "--port", String(port), "--log-level", "INFO"];
-
-  // In dev mode, __dirname is dist-electron/, so go up to pepsicode-client/,
-  // then up to pepsicode/ (the Python package root).
-  // In production, use the packaged resources path.
-  const cwd = isDev
-    ? path.resolve(__dirname, "..", "..")
-    : process.resourcesPath;
-
-  console.log(`[electron] Starting Python server: ${pythonCmd} ${args.join(" ")} (cwd: ${cwd})`);
-
-  const cleanEnv = pythonEnvironment(process.env);
-  cleanEnv["PEPSI_CODE_SERVER_TOKEN"] = serverToken;
-  cleanEnv["PEPSI_CODE_SERVER_ORIGINS"] = JSON.stringify(serverOrigins(rendererURL()));
-
-  // Suppress Windows GUI assertion pop-ups for the Python child and its
-  // grandchildren (MCP stdio servers, cmd.exe).  We do this via
-  // ``PYTHONFAULTHANDLER`` so that any crash prints a Python traceback to
-  // stderr (which Electron captures) rather than opening a "Python has
-  // stopped working" modal.
-  //
-  // Note: we deliberately do NOT pass ``creationFlags: CREATE_NO_WINDOW``
-  // (0x08000000) to spawn.  Combined with ``windowsHide: true`` that flag
-  // is redundant, and on some Windows builds it can cause the child's
-  // stdio pipes to be closed prematurely — the agent loop then appears
-  // to "lose" history messages because the server log lines that the
-  // session/index depends on never reach the renderer.
-  cleanEnv["PYTHONFAULTHANDLER"] = "1";
-  cleanEnv["PYTHONUNBUFFERED"] = "1";
-
-  serverProcess = spawn(pythonCmd, args, {
-    cwd,
-    stdio: ["ignore", "pipe", "pipe"],
-    env: cleanEnv,
-    windowsHide: true,
-  });
-
-  serverProcess.stdout?.on("data", (data: Buffer) => {
-    console.log(`[pepsicode-server] ${data.toString().trim()}`);
-  });
-
-  serverProcess.stderr?.on("data", (data: Buffer) => {
-    console.error(`[pepsicode-server] ${data.toString().trim()}`);
-  });
-
-  serverProcess.on("exit", (code) => {
-    console.log(`Python server exited with code ${code}`);
-  });
-
-  // Wait for the server to be ready by polling the port
-  const ready = await waitForPort(port, 10000);
-  if (!ready) {
-    console.error(`[electron] Python server did not become ready on port ${port}`);
-  }
-}
-
-function waitForPort(port: number, timeoutMs: number): Promise<boolean> {
-  const start = Date.now();
-  return new Promise((resolve) => {
-    const check = () => {
-      const socket = new net.Socket();
-      socket.setTimeout(500);
-      socket.on("connect", () => {
-        socket.destroy();
-        resolve(true);
-      });
-      socket.on("error", () => {
-        socket.destroy();
-        if (Date.now() - start > timeoutMs) {
-          resolve(false);
-        } else {
-          setTimeout(check, 300);
-        }
-      });
-      socket.on("timeout", () => {
-        socket.destroy();
-        if (Date.now() - start > timeoutMs) {
-          resolve(false);
-        } else {
-          setTimeout(check, 300);
-        }
-      });
-      socket.connect(port, "127.0.0.1");
-    };
-    check();
+    const probe = net.createServer();
+    probe.once("error", reject);
+    probe.listen(0, "127.0.0.1", () => {
+      const address = probe.address() as net.AddressInfo;
+      probe.close((error) => error ? reject(error) : resolve(address.port));
+    });
   });
 }
 
 function createWindow(): void {
   mainWindow = new BrowserWindow({
-    width: 1400,
-    height: 900,
-    minWidth: 800,
-    minHeight: 600,
-    title: "Pepsicode",
-    backgroundColor: "#ffffff",
+    width: 1400, height: 900, minWidth: 800, minHeight: 600,
+    title: "Pepsicode", backgroundColor: "#ffffff",
+    show: process.env.PEPSI_CODE_DESKTOP_SMOKE !== "1",
     webPreferences: {
       preload: path.join(__dirname, "preload.js"),
-      contextIsolation: true,
-      nodeIntegration: false,
+      contextIsolation: true, nodeIntegration: false,
     },
     titleBarStyle: process.platform === "darwin" ? "hiddenInset" : "default",
   });
-
-  const isDev = !app.isPackaged;
-  mainWindow.loadURL(rendererURL());
-  if (isDev && process.env.PEPSI_DEV_SERVER === "1") {
-    // Hot-reload dev mode: requires `npm run dev` running separately
+  mainWindow.setMenuBarVisibility(false);
+  void mainWindow.loadURL(rendererURL());
+  if (!app.isPackaged && process.env.PEPSI_DEV_SERVER === "1") {
     mainWindow.webContents.openDevTools({ mode: "detach" });
   }
-
-  mainWindow.on("closed", () => {
-    mainWindow = null;
-  });
+  mainWindow.on("closed", () => { mainWindow = null; });
 }
 
-function killStaleServers(): void {
-  // Best-effort: kill any leftover pepsicode python server processes from
-  // previous runs so they don't hold onto ports and confuse the client.
+async function start(): Promise<void> {
+  const logPath = path.join(app.getPath("userData"), "backend.log");
+  mkdirSync(path.dirname(logPath), { recursive: true });
+  backendLog = createWriteStream(logPath, { flags: "a" });
+  backendLog.on("error", (error) => console.error("Unable to write backend log:", error.message));
   try {
-    const { execSync } = require("child_process");
-    // Find PIDs listening on 127.0.0.1 in the 8765..8785 range that are
-    // python processes running pepsicode.server.
-    let out = "";
-    try {
-      out = execSync('netstat -ano | findstr "127.0.0.1:876"', { encoding: "utf8" });
-    } catch {
-      // findstr returns non-zero when no match; ignore.
-    }
-    const seen = new Set<number>();
-    for (const line of out.split(/\r?\n/)) {
-      const m = line.match(/127\.0\.0\.1:(87\d{2})\s+\S+\s+\S+\s+(\d+)/);
-      if (!m) continue;
-      const pid = Number(m[2]);
-      if (pid && !seen.has(pid)) {
-        seen.add(pid);
-        try {
-          // Only kill python processes to avoid touching unrelated services.
-          const tasklist = execSync(`tasklist /FI "PID eq ${pid}" /NH /FO CSV`, {
-            encoding: "utf8",
-          });
-          if (/python|pepsicode/i.test(tasklist)) {
-            execSync(`taskkill /F /PID ${pid}`, { stdio: "ignore" });
-            console.log(`[electron] Killed stale server PID ${pid}`);
-          }
-        } catch {
-          // ignore individual failures
-        }
+    const projectRoot = path.resolve(__dirname, "..", "..");
+    const workspace = process.env.PEPSI_CODE_WORKSPACE ||
+      (app.isPackaged ? path.join(app.getPath("documents"), "Pepsicode Projects") : projectRoot);
+    mkdirSync(workspace, { recursive: true });
+    const launch = backendLaunch({ packaged: app.isPackaged, resourcesPath: process.resourcesPath,
+      projectRoot, workspace, env: process.env });
+    serverPort = await findFreePort();
+    backendLog.write(`\n[${new Date().toISOString()}] Starting backend on port ${serverPort}\n`);
+    serverProcess = await launchBackend(launch, {
+      port: serverPort, token: serverToken, origins: serverOrigins(rendererURL()),
+      onLog: (text) => backendLog?.write(text),
+    });
+    serverProcess.once("exit", (code) => {
+      serverProcess = null;
+      if (!quitting) {
+        dialog.showErrorBox("Pepsicode 后端已停止", `后端意外退出（${code}）。请重新启动应用。\n日志：${logPath}`);
+        app.quit();
       }
-    }
-  } catch (e) {
-    console.warn("[electron] killStaleServers failed:", e);
-  }
-}
-
-app.whenReady().then(async () => {
-  try {
-    killStaleServers();
-    serverPort = await findFreePort(8765);
-    console.log(`[electron] Using port ${serverPort}`);
-    await startPythonServer(serverPort);
-  } catch (err) {
-    console.error("Failed to start Python server:", err);
-  }
-
-  createWindow();
-
-  app.on("activate", () => {
-    if (BrowserWindow.getAllWindows().length === 0) {
-      createWindow();
-    }
-  });
-});
-
-app.on("window-all-closed", () => {
-  if (serverProcess) {
-    serverProcess.kill();
-    serverProcess = null;
-  }
-  if (process.platform !== "darwin") {
+    });
+    createWindow();
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    backendLog.write(`Startup failed: ${message}\n`);
+    dialog.showErrorBox("Pepsicode 启动失败", `${message}\n\n请确认已完整解压 ZIP。\n日志：${logPath}`);
     app.quit();
   }
-});
+}
 
-app.on("before-quit", () => {
+if (!app.requestSingleInstanceLock()) app.quit();
+else {
+  app.on("second-instance", () => {
+    if (mainWindow?.isMinimized()) mainWindow.restore();
+    mainWindow?.focus();
+  });
+  void app.whenReady().then(start);
+}
+
+app.on("activate", () => {
+  if (!mainWindow && serverProcess && !quitting) createWindow();
+});
+app.on("window-all-closed", () => { if (process.platform !== "darwin") app.quit(); });
+app.on("before-quit", (event) => {
+  if (quitting) return;
+  quitting = true;
   if (serverProcess) {
-    serverProcess.kill();
+    event.preventDefault();
+    const child = serverProcess;
     serverProcess = null;
-  }
+    void stopBackend(child).catch((error) => backendLog?.write(`Shutdown: ${error.message}\n`))
+      .finally(() => { backendLog?.end(); app.quit(); });
+  } else backendLog?.end();
 });
 
 ipcMain.handle("get-server-port", () => serverPort);
 ipcMain.handle("get-server-connection", (event) => {
-  if (!mainWindow || event.sender !== mainWindow.webContents ||
+  if (!mainWindow || !serverProcess || event.sender !== mainWindow.webContents ||
       event.senderFrame !== mainWindow.webContents.mainFrame ||
       !trustedRenderer(event.senderFrame.url, rendererURL())) {
-    throw new Error("Untrusted connection credential request");
+    throw new Error("Untrusted connection credential request or backend unavailable");
   }
   return { port: serverPort, token: serverToken };
 });
-
 ipcMain.handle("select-folder", async () => {
   if (!mainWindow) return null;
   const result = await dialog.showOpenDialog(mainWindow, {
-    properties: ["openDirectory"],
-    title: "选择项目文件夹",
+    properties: ["openDirectory"], title: "选择项目文件夹",
   });
   return result.canceled ? null : result.filePaths[0];
 });
