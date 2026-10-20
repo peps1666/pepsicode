@@ -9,7 +9,7 @@ export const effortLabels: Record<string, string> = {
 
 export default function ModelSettings({ onClose }: { onClose: () => void }) {
   const { model, provider, providers, reasoningEffort, models, catalogError, loadProviderModels, isRunning, isMock, modelUpdating, updateModel } = useSessionStore();
-  const [adding, setAdding] = useState(false);
+  const [setupProvider, setSetupProvider] = useState<string | null>(null);
   const [draftProvider, setDraftProvider] = useState(provider);
   const [choices, setChoices] = useState(models);
   const [catalogNotice, setCatalogNotice] = useState(catalogError);
@@ -22,6 +22,7 @@ export default function ModelSettings({ onClose }: { onClose: () => void }) {
   const selectedModel = draftModel.trim();
   const capabilities: ModelCapabilities | undefined = choices.find((item) => item.id === selectedModel);
   const busy = isRunning || modelUpdating || refreshing;
+  const unconfigured = isMock || !providers.find((item) => item.id === draftProvider)?.configured;
 
   async function refresh() {
     setRefreshing(true);
@@ -45,6 +46,7 @@ export default function ModelSettings({ onClose }: { onClose: () => void }) {
 
   useEffect(() => {
     let cancelled = false;
+    if (unconfigured) { setRefreshing(false); return; }
     setRefreshing(true);
     setError("");
     loadProviderModels(draftProvider).then((result) => {
@@ -53,7 +55,7 @@ export default function ModelSettings({ onClose }: { onClose: () => void }) {
       if (!cancelled) setError(e instanceof Error ? e.message : String(e));
     }).finally(() => { if (!cancelled) setRefreshing(false); });
     return () => { cancelled = true; };
-  }, [draftProvider, loadProviderModels]);
+  }, [draftProvider, loadProviderModels, unconfigured]);
 
   async function submit(event: FormEvent) {
     event.preventDefault();
@@ -69,17 +71,21 @@ export default function ModelSettings({ onClose }: { onClose: () => void }) {
 
   return (
     <dialog ref={dialogRef} className={styles.dialog} onCancel={(event) => { if (modelUpdating) event.preventDefault(); else onClose(); }} aria-labelledby="model-settings-title">
-      {adding ? <ProviderSetup onDone={onClose} onCancel={() => setAdding(false)} /> : <form onSubmit={submit}>
+      {setupProvider !== null ? <ProviderSetup initialProvider={setupProvider} onDone={onClose} onCancel={() => setSetupProvider(null)} /> : <form onSubmit={submit}>
         <h2 id="model-settings-title">模型与思考深度</h2>
         <p>从下一轮对话生效，保留当前聊天记录。</p>
-        <button type="button" onClick={() => setAdding(true)} disabled={isRunning || modelUpdating}>+ 添加自定义厂商</button>
+        <button type="button" onClick={() => setSetupProvider(draftProvider || "deepseek")} disabled={isRunning || modelUpdating}>配置服务商 / API Key</button>
+        {unconfigured && <p>选择 DeepSeek、Kimi、GLM 或千问即可填写 API Key，无需修改配置文件。</p>}
         {providers.length > 0 && <label className={styles.field}>
           服务商
-          <select value={draftProvider} disabled={busy} onChange={(event) => {
-            if (event.target.value === "__add__") { setAdding(true); return; }
+          <select aria-label="服务商" value={draftProvider} disabled={isRunning || modelUpdating} onChange={(event) => {
+            if (event.target.value === "__add__") { setSetupProvider("custom"); return; }
+            const selected = providers.find((item) => item.id === event.target.value);
+            if (selected && !selected.configured) { setSetupProvider(selected.id); return; }
             setDraftProvider(event.target.value); setDraftModel(""); setEffort("default"); setChoices([]); setCatalogNotice("");
           }}>
-            {providers.map((item) => <option key={item.id} value={item.id} disabled={!item.configured}>{item.name}{item.configured ? "" : "（未配置 Key）"}</option>)}
+            {!draftProvider && <option value="" disabled>请选择服务商</option>}
+            {providers.map((item) => <option key={item.id} value={item.id}>{item.name}{item.configured ? "" : "（点击配置 Key）"}</option>)}
             <option value="__add__">+ 添加自定义厂商…</option>
           </select>
         </label>}
@@ -92,7 +98,7 @@ export default function ModelSettings({ onClose }: { onClose: () => void }) {
           </select>
         </label>
         <p>名称来自当前 API，选择后使用对应的模型 ID 发起请求。</p>
-        <button type="button" onClick={() => void refresh()} disabled={busy}>{refreshing ? "读取中…" : "刷新模型列表"}</button>
+        <button type="button" onClick={() => void refresh()} disabled={busy || unconfigured}>{refreshing ? "读取中…" : "刷新模型列表"}</button>
         {catalogNotice && <p className={styles.error} role="status">{catalogNotice}</p>}
         <label className={styles.field}>
           思考深度

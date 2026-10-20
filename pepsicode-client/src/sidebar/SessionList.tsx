@@ -3,6 +3,7 @@ import { useSessionStore } from "../stores/session";
 import { useProjectsStore, projectKey, projectName } from "../stores/projects";
 import styles from "./SessionList.module.css";
 import Icon from "../components/Icon";
+import CatLogo from "../components/CatLogo";
 
 function shortenPath(path: string): string {
   const parts = path.replace(/\\/g, "/").split("/").filter(Boolean);
@@ -64,7 +65,7 @@ export default function SessionList() {
   return (
     <div className={styles.container}>
       <div className={styles.header}>
-        <span className={styles.brand}><Icon name="terminal" size={21} /><span>pepsicode</span></span>
+        <span className={styles.brand}><CatLogo size={27} /><span>pepsicode</span></span>
         <span className={styles.localBadge}>本地</span>
       </div>
       <button type="button" className={styles.newBtn} onClick={() => handleNew()} disabled={busy}>
@@ -119,7 +120,7 @@ export default function SessionList() {
         {!projects.length && <div className={styles.empty}>添加一个项目，开始新的对话。</div>}
       </div>
       <div className={styles.footer}>
-        <span className={styles.avatar}><Icon name="terminal" size={16} /></span>
+        <span className={styles.avatar}><CatLogo size={24} /></span>
         <span>本地工作空间<small title={cwd}>{cwd ? shortenPath(cwd) : "选择一个项目开始"}</small></span>
         <span className={styles.statusDot} title="已连接本地服务" />
       </div>

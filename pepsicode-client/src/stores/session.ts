@@ -95,7 +95,7 @@ interface SessionState {
   cwd: string;
   model: string;
   provider: string;
-  providers: Array<{ id: string; name: string; configured: boolean }>;
+  providers: Array<{ id: string; name: string; configured: boolean; baseUrl: string }>;
   loadProviderModels: (provider: string, refresh?: boolean) => Promise<{ models: ModelCapabilities[]; catalogError: string }>;
   probeProvider: (draft: ProviderDraft) => Promise<{ token: string; models: ModelCapabilities[]; catalogError: string; verified: boolean }>;
   saveProvider: (token: string, model: string) => Promise<void>;

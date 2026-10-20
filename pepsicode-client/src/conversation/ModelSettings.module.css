@@ -40,3 +40,5 @@
 .summary { font-size: 13px; line-height: 1.6; }
 .summary dt { margin-top: 12px; color: var(--dsw-alias-label-secondary); }
 .summary dd { margin: 3px 0 0; overflow-wrap: anywhere; }
+.advanced { margin-top: 18px; font-size: 12px; }
+.advanced summary { cursor: pointer; color: var(--dsw-alias-label-secondary); }

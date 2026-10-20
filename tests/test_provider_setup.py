@@ -220,10 +220,12 @@ def test_terminal_cancel_and_previous_step_do_not_save_or_expose_key(setup_api):
     assert "custom" not in json.loads(config.PEPSI_CODE_SETTINGS_PATH.read_text())["providers"]
 
 
+@pytest.mark.parametrize("provider", ["custom", "deepseek", "kimi", "glm", "qwen"])
 def test_desktop_probe_cancel_and_confirm_bootstrap_initial_mock_without_losing_history(
-    setup_api, tmp_path, monkeypatch
+    setup_api, tmp_path, monkeypatch, provider
 ):
     draft, _, _ = setup_api
+    draft = {**draft, "provider": provider}
     session = ClientSession(str(tmp_path))
     session.model, session.tools = MockModelAdapter(), ToolRegistry([])
     session.tools.mutation_count = 1
@@ -247,7 +249,7 @@ def test_desktop_probe_cancel_and_confirm_bootstrap_initial_mock_without_losing_
         )
 
     result = asyncio.run(setup())
-    assert result["provider"] == "custom" and not result["isMock"]
+    assert result["provider"] == provider and not result["isMock"]
     assert session.messages == [{"role": "user", "content": "keep me"}]
     assert session._provider_setup is None and isinstance(session.model, AnthropicModelAdapter)
     assert session.tools.mutation_count > session.tools.verified_mutation_count
@@ -331,6 +333,17 @@ def test_all_presets_are_listed_with_deepseek_first_and_default(tmp_path):
     runtime = {}
     configure_providers(runtime, {"providers": {"kimi": {"apiKey": "k"}, "deepseek": {"apiKey": "d"}}}, {})
     assert runtime["provider"] == "deepseek"
+
+
+def test_desktop_provider_catalog_includes_public_setup_defaults_without_credentials():
+    from pepsicode.llm.providers import PROVIDERS
+
+    catalog = provider_catalog({})
+    assert [item["id"] for item in catalog] == ["deepseek", "kimi", "glm", "qwen"]
+    for item in catalog:
+        assert item["baseUrl"] == PROVIDERS[item["id"]]["baseUrl"]
+        assert not item["configured"]
+        assert "apiKey" not in item and "authToken" not in item
 
 
 def test_unconfigured_preset_opens_its_setup_at_the_api_key_step(tmp_path, monkeypatch):

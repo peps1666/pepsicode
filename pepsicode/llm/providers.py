@@ -129,6 +129,7 @@ def provider_catalog(runtime: dict) -> list[dict[str, Any]]:
                 "id": identifier,
                 "name": profile.get("providerName") or preset["name"],
                 "configured": bool(profile.get("apiKey") or profile.get("authToken")),
+                "baseUrl": preset["baseUrl"],
             }
         )
     return entries

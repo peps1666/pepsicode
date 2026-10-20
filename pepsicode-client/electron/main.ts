@@ -48,6 +48,7 @@ function createWindow(): void {
   mainWindow = new BrowserWindow({
     width: 1400, height: 900, minWidth: 800, minHeight: 600,
     title: "Pepsicode", backgroundColor: "#ffffff",
+    icon: path.join(__dirname, "..", "dist", "app-icon.png"),
     show: process.env.PEPSI_CODE_DESKTOP_SMOKE !== "1",
     webPreferences: {
       preload: path.join(__dirname, "preload.js"),

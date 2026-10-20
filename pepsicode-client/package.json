@@ -1,6 +1,6 @@
 {
   "name": "pepsicode-client",
-  "version": "2.0.0",
+  "version": "2.0.1",
   "description": "Pepsicode local coding agent desktop client",
   "author": "pepsicode contributors",
   "license": "MIT",
@@ -18,13 +18,13 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "clsx": "^2.1.1",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "react-markdown": "^9.0.1",
     "remark-gfm": "^4.0.0",
     "shiki": "^1.12.0",
-    "zustand": "^4.5.4",
-    "clsx": "^2.1.1"
+    "zustand": "^4.5.4"
   },
   "devDependencies": {
     "@types/react": "^18.3.3",
@@ -33,6 +33,8 @@
     "concurrently": "^8.2.2",
     "electron": "^31.0.0",
     "electron-builder": "^24.13.3",
+    "rcedit": "5.0.2",
+    "react-test-renderer": "18.3.1",
     "typescript": "^5.5.3",
     "vite": "^5.3.4",
     "vite-plugin-electron": "^0.28.7",
@@ -47,13 +49,32 @@
     "beforePack": "scripts/check-backend.cjs",
     "afterPack": "scripts/windows-launcher.cjs",
     "win": {
-      "target": [{ "target": "zip", "arch": ["x64"] }],
-      "signAndEditExecutable": false
+      "target": [
+        {
+          "target": "zip",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "signAndEditExecutable": false,
+      "icon": "assets/app-icon.ico"
     },
-    "extraResources": [{ "from": "../build/desktop-backend/pepsicode-server", "to": "backend" }],
+    "extraResources": [
+      {
+        "from": "../build/desktop-backend/pepsicode-server",
+        "to": "backend"
+      }
+    ],
     "extraFiles": [
-      { "from": "../docs/portable-readme.txt", "to": "使用说明.txt" },
-      { "from": "../LICENSE", "to": "LICENSE-pepsicode.txt" }
+      {
+        "from": "../docs/portable-readme.txt",
+        "to": "浣跨敤璇存槑.txt"
+      },
+      {
+        "from": "../LICENSE",
+        "to": "LICENSE-pepsicode.txt"
+      }
     ],
     "directories": {
       "output": "release"
