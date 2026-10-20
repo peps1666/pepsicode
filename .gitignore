@@ -63,6 +63,10 @@ server_log.txt
 # Session artifacts
 session-log.txt
 
+# Runtime session data that local runs can leave inside the package directory;
+# it must never be collected into the frozen desktop backend.
+pepsicode/.pepsi-code/
+
 # Internal development plans (keep local, don't publish)
 docs/superpowers/
 .pepsi-code/plans/

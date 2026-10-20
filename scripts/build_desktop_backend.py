@@ -74,6 +74,10 @@ def main() -> None:
         env=env,
     )
     executable = root / "build/desktop-backend/pepsicode-server/pepsicode-server.exe"
+    # `--collect-data pepsicode` copies every non-Python file under the package,
+    # which would ship session data left behind by local runs.
+    for stale in executable.parent.rglob(".pepsi-code"):
+        shutil.rmtree(stale, ignore_errors=True)
     for name in ("LICENSE.txt", "LICENSE_PYTHON.txt", "LICENSE"):
         license_path = Path(sys.base_prefix) / name
         if license_path.is_file():
