@@ -73,6 +73,7 @@ from pepsicode.logging_config import get_logger, setup_logging
 from pepsicode.permissions import PermissionManager, PermissionMode
 from pepsicode.server import protocol
 from pepsicode.server.security import authenticate
+from pepsicode.server.thinking import ThinkingStream
 from pepsicode.tools import create_default_tool_registry
 from pepsicode.types import ChatMessage
 from pepsicode.usage import cache_hit_percentage, usage_snapshot
@@ -974,9 +975,11 @@ class PepsiCodeServer:
 
             # Token streaming: accumulate and emit deltas
             message_started = False
+            thinking = ThinkingStream(lambda name, data: asyncio.run_coroutine_threadsafe(emit(name, data), loop))
 
             def on_token(token: Any) -> None:
                 nonlocal message_started
+                thinking.consume(token)
                 if token.type == "usage":
                     asyncio.run_coroutine_threadsafe(
                         emit("usage/update", usage_snapshot(session.context_manager, token.usage)), loop
@@ -990,6 +993,7 @@ class PepsiCodeServer:
                 asyncio.run_coroutine_threadsafe(emit("message/delta", {"text": token.content}), loop)
 
             def on_tool_event(event_name: str, data: dict) -> None:
+                thinking.finish()
                 if isinstance(data.get("output"), str):
                     data = {**data, "output": data["output"][:10000]}
                 asyncio.run_coroutine_threadsafe(emit(event_name, data), loop)
@@ -1016,6 +1020,7 @@ class PepsiCodeServer:
 
             def finish_assistant_message(content: str, *, is_error: bool) -> None:
                 nonlocal message_started
+                thinking.finish("interrupted" if is_error else "completed")
                 if not message_started:
                     message_started = True
                     asyncio.run_coroutine_threadsafe(emit("message/start", {}), loop)
@@ -1024,6 +1029,7 @@ class PepsiCodeServer:
 
             def on_progress_message(content: str) -> None:
                 nonlocal message_started
+                thinking.finish("cancelled" if session._cancellation_event.is_set() else "completed")
                 if message_started:
                     asyncio.run_coroutine_threadsafe(
                         emit("message/end", {"content": content, "role": "progress"}), loop
@@ -1068,6 +1074,7 @@ class PepsiCodeServer:
                             memory=session.memory_manager,
                         )
                 finally:
+                    thinking.finish("cancelled" if session._cancellation_event.is_set() else "interrupted")
                     session._worker_active.clear()
 
             executor = ThreadPoolExecutor(max_workers=1)

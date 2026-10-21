@@ -93,6 +93,9 @@ EventName = Literal[
     "message/start",
     "message/delta",
     "message/end",
+    "thinking/start",
+    "thinking/delta",
+    "thinking/end",
     "progress/message",
     "tool/call",
     "tool/result",
@@ -144,7 +147,16 @@ def serialize_session_history(messages: list[dict[str, Any]]) -> list[dict[str, 
         if message.get("internal"):
             continue
         role = message.get("role")
-        if role == "system" or role == "assistant_thinking":
+        if role == "system":
+            continue
+
+        if role == "assistant_thinking":
+            for block in message.get("blocks", []):
+                if not isinstance(block, dict) or block.get("type") != "thinking":
+                    continue
+                content = block.get("thinking")
+                if isinstance(content, str) and content.strip():
+                    history.append({"role": "thinking", "content": content})
             continue
 
         if role in {"user", "assistant"}:

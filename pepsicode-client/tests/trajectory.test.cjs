@@ -45,6 +45,18 @@ test("historical unknown durations stay unknown; unfinished tools stop spinning 
   assert.equal(formatDuration(1250), "1.3 s");
 });
 
+test("thinking has its own trajectory row and cancelled thoughts stop spinning", () => {
+  const rows = buildTrajectory([
+    msg("1", "user"), msg("2", "thinking", {content:"Inspect first",thinkingStatus:"cancelled"}),
+    msg("3", "thinking", {content:"Another thought",isStreaming:true}), msg("4", "assistant", {content:"Answer"}),
+  ], true);
+  assert.deepEqual(rows.map(row=>row.kind),["user","thinking","thinking","assistant"]);
+  assert.equal(rows[1].label,"模型思考");
+  assert.equal(rows[1].status,"cancelled");
+  assert.equal(rows[2].status,"running");
+  assert.equal(rows[3].output,"Answer");
+});
+
 test("retries are independent records; provider error text and authentication failures remain visible", () => {
   const rows = buildTrajectory([
     msg("1", "user"), msg("2", "progress", { activityKind: "retry", content: "Retry", retry: { attempt: 1, limit: 2, delay_ms: 500, reason: "HTTP 503" } }),

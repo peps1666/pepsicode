@@ -4,12 +4,14 @@ import type { SlashCommandInfo } from "../conversation/commandCompletion";
 
 export interface ChatMessage {
   id: string;
-  role: "user" | "assistant" | "system" | "tool_call" | "tool_result" | "progress";
+  role: "user" | "assistant" | "system" | "tool_call" | "tool_result" | "progress" | "thinking";
   content: string;
   toolName?: string;
   toolInput?: Record<string, unknown>;
   isError?: boolean;
   isStreaming?: boolean;
+  thinkingId?: string;
+  thinkingStatus?: "completed" | "cancelled" | "interrupted";
   timestamp: number;
   entryId?: string;
   callId?: string;
@@ -70,7 +72,7 @@ export interface QueuedInput {
 
 interface SessionHistoryItem {
   entry_id?: string;
-  role: "user" | "assistant" | "progress" | "tool_call" | "tool_result";
+  role: "user" | "assistant" | "progress" | "tool_call" | "tool_result" | "thinking";
   content?: string;
   tool_name?: string;
   tool_input?: unknown;
@@ -198,6 +200,13 @@ function appendError(messages: ChatMessage[], content: unknown): ChatMessage[] {
   return last?.isError && last.content === next.content ? messages : [...messages, next];
 }
 
+function settleStreaming(messages: ChatMessage[], status: "cancelled" | "interrupted"): ChatMessage[] {
+  return messages.map(message => message.isStreaming ? {
+    ...message, isStreaming: false,
+    ...(message.role === "thinking" ? { thinkingStatus: status } : {}),
+  } : message);
+}
+
 function hydrateSessionHistory(value: unknown): ChatMessage[] {
   if (!Array.isArray(value)) return [];
   const baseTime = Date.now();
@@ -205,6 +214,7 @@ function hydrateSessionHistory(value: unknown): ChatMessage[] {
     "user",
     "assistant",
     "progress",
+    "thinking",
     "tool_call",
     "tool_result",
   ]);
@@ -279,6 +289,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     void sendRequest(ws, "turn/regenerate", { entry_id: id }, { timeoutMs: null }).catch((error) => {
       set((state) => ({
         isRunning: false, isStopping: false, branchError: String(error),
+        messages: settleStreaming(state.messages, "interrupted"),
         draft: [...state.pendingInputs.map((item) => item.display_content || item.content), ...(state.draft ? [state.draft] : [])].join("\n\n"),
         pendingInputs: [],
       }));
@@ -435,7 +446,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
           set((state) => {
             const messages = [...state.messages];
             const last = messages[messages.length - 1];
-            if (last && last.isStreaming) {
+            if (last?.role === "assistant" && last.isStreaming) {
               messages[messages.length - 1] = { ...last, content: last.content + (data.text || "") };
             }
             return { messages };
@@ -447,7 +458,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
             const messages = [...state.messages];
             let streamingIndex = -1;
             for (let index = messages.length - 1; index >= 0; index -= 1) {
-              if (messages[index].isStreaming) {
+              if (messages[index].role === "assistant" && messages[index].isStreaming) {
                 streamingIndex = index;
                 break;
               }
@@ -472,6 +483,28 @@ export const useSessionStore = create<SessionState>((set, get) => ({
             }
             return { messages };
           });
+          break;
+        }
+        case "thinking/start": {
+          if (typeof data.id !== "string") break;
+          set(state => ({ messages: [...state.messages, {
+            id: nextMsgId(), role: "thinking", content: "", thinkingId: data.id,
+            isStreaming: true, timestamp: Date.now(),
+          }] }));
+          break;
+        }
+        case "thinking/delta": {
+          set(state => ({ messages: state.messages.map(message =>
+            message.role === "thinking" && message.thinkingId === data.id && message.isStreaming
+              ? { ...message, content: message.content + (typeof data.text === "string" ? data.text : "") }
+              : message) }));
+          break;
+        }
+        case "thinking/end": {
+          set(state => ({ messages: state.messages.map(message =>
+            message.role === "thinking" && message.thinkingId === data.id && message.isStreaming
+              ? { ...message, isStreaming: false, thinkingStatus: data.status === "cancelled" ? "cancelled" : data.status === "interrupted" ? "interrupted" : "completed" }
+              : message) }));
           break;
         }
         case "progress/message": {
@@ -552,9 +585,9 @@ export const useSessionStore = create<SessionState>((set, get) => ({
             isRunning: false,
             isStopping: false,
             pendingPermission: null,
-            messages: data.status === "error"
+            messages: settleStreaming(data.status === "error"
               ? appendError(state.messages, data.error)
-              : state.messages,
+              : state.messages, data.status === "cancelled" ? "cancelled" : "interrupted"),
           }));
           get().refreshCost();
           get().refreshContext();
@@ -623,7 +656,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         isStopping: false,
         draft: [...state.pendingInputs.map((item) => item.display_content || item.content), ...(state.draft ? [state.draft] : [])].join("\n\n"),
         pendingInputs: [],
-        messages: appendError(state.messages, e instanceof Error ? e.message : e),
+        messages: settleStreaming(appendError(state.messages, e instanceof Error ? e.message : e), "interrupted"),
       }));
     });
   },

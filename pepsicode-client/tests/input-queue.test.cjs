@@ -55,6 +55,26 @@ async function session() {
   };
 }
 
+test("thinking streams independently, closes on cancellation, and survives history replacement", async () => {
+  const api = await session();
+  api.event("thinking/start", {id:"thought-1"});
+  api.event("thinking/delta", {id:"thought-1",text:"先读取"});
+  api.event("thinking/delta", {id:"stale",text:"must not appear"});
+  api.event("thinking/delta", {id:"thought-1",text:"项目。"});
+  api.event("thinking/end", {id:"thought-1",status:"completed"});
+  api.event("message/start", {});
+  api.event("message/delta", {text:"Answer"});
+  api.event("message/end", {content:"Answer"});
+  assert.deepEqual(api.store.getState().messages.map(m=>[m.role,m.content,m.isStreaming]), [["thinking","先读取项目。",false],["assistant","Answer",false]]);
+  api.event("thinking/start", {id:"thought-2"});
+  api.event("thinking/delta", {id:"thought-2",text:"Partial"});
+  api.event("turn/end", {status:"cancelled"});
+  assert.equal(api.store.getState().messages.at(-1).isStreaming,false);
+  assert.equal(api.store.getState().messages.at(-1).thinkingStatus,"cancelled");
+  api.event("session/view", {session_id:"test",history:[{role:"thinking",content:"先读取项目。"},{role:"assistant",content:"Answer"}]});
+  assert.deepEqual(api.store.getState().messages.map(m=>[m.role,m.content]), [["thinking","先读取项目。"],["assistant","Answer"]]);
+});
+
 test("execution IDs, timing, retries and verification survive authoritative history replacement", async () => {
   const api = await session();
   api.event("tool/call", {tool:"read_file",input:{path:"a"},call_id:"actual",started_at:1000});
@@ -144,6 +164,8 @@ test("stop waits for turn settlement and blocks further queue submissions", asyn
 test("a dropped connection retains queued input and the current draft", async () => {
   const api = await session();
   await api.store.getState().runTurn("initial");
+  api.event("thinking/start", {id:"disconnect-thought"});
+  api.event("thinking/delta", {id:"disconnect-thought",text:"Partial"});
   api.emit({ pending: [{ id: "pending", content: "queued work", mode: "follow_up" }] });
   api.store.getState().setDraft("still editing");
   api.disconnect();
@@ -151,6 +173,7 @@ test("a dropped connection retains queued input and the current draft", async ()
   assert.equal(api.store.getState().draft, "queued work\n\nstill editing");
   assert.deepEqual(api.store.getState().pendingInputs, []);
   assert.equal(api.store.getState().isRunning, false);
+  assert.equal(api.store.getState().messages.find(m=>m.role==="thinking").thinkingStatus,"interrupted");
 });
 
 test("command discovery is available before typing and supports explicit refresh", async () => {
@@ -209,6 +232,8 @@ test("regeneration waits for authoritative history and restores queued drafts on
   assert.deepEqual(api.calls.at(-1), { method: "turn/regenerate", params: { entry_id: "one" } });
   assert.equal(api.store.getState().isRunning, true);
   assert.equal(api.store.getState().messages.length, 1);
+  api.event("thinking/start", {id:"regeneration-thought"});
+  api.event("thinking/delta", {id:"regeneration-thought",text:"Regenerated thought"});
   api.emit({ pending: [{ id: "pending", content: "next task", mode: "follow_up" }] });
   api.store.getState().setDraft("editing");
   api.disconnect();
@@ -217,4 +242,6 @@ test("regeneration waits for authoritative history and restores queued drafts on
   assert.equal(api.store.getState().isRunning, false);
   assert.deepEqual(api.store.getState().pendingInputs, []);
   assert.match(api.store.getState().branchError, /closed/);
+  assert.equal(api.store.getState().messages.at(-1).isStreaming,false);
+  assert.equal(api.store.getState().messages.at(-1).thinkingStatus,"interrupted");
 });

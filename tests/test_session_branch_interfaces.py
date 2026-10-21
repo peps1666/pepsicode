@@ -41,6 +41,44 @@ def client(project):
     return session
 
 
+@pytest.mark.parametrize("cancelled", [False, True])
+def test_desktop_thinking_stream_is_separate_and_settles_on_cancel(project, cancelled):
+    async def scenario():
+        server, session, events = PepsiCodeServer(), client(project), []
+        block = {"type": "thinking", "thinking": "Inspect project first", "signature": "PRIVATE_SIGNATURE"}
+
+        class ThinkingModel(Model):
+            def next_stream(self, messages):
+                yield StreamToken(type="thinking", content="Inspect project first")
+                if cancelled:
+                    session._cancellation_event.set()
+                yield StreamToken(type="thinking", thinking_block=block)
+                yield StreamToken(type="text", content="Public answer")
+                yield StreamToken(type="done")
+
+        async def emit(name, data):
+            events.append((name, data))
+
+        session.model = ThinkingModel()
+        await server._run_turn({"input": "Inspect"}, session, emit, asyncio.get_running_loop())
+        # Worker callbacks are scheduled onto this loop in their original order.
+        await asyncio.sleep(0)
+        thinking_events = [(name, data) for name, data in events if name.startswith("thinking/")]
+        assert [name for name, _ in thinking_events] == ["thinking/start", "thinking/delta", "thinking/end"]
+        assert thinking_events[-1][1]["status"] == ("cancelled" if cancelled else "completed")
+        assert "PRIVATE_SIGNATURE" not in str(events)
+        if not cancelled:
+            names = [name for name, _ in events]
+            assert names.index("thinking/end") < names.index("message/start")
+            saved = load_session(session.session_data.session_id)
+            assert next(m for m in saved.messages if m["role"] == "assistant_thinking")["blocks"] == [block]
+            history = session.conversation_view()["history"]
+            assert [m["role"] for m in history] == ["user", "thinking", "assistant"]
+            assert history[1]["content"] == "Inspect project first"
+
+    asyncio.run(scenario())
+
+
 def test_desktop_fork_and_clone_keep_source_and_files_intact(project):
     marker = project / "code.py"
     marker.write_text("present disk state", encoding="utf-8")

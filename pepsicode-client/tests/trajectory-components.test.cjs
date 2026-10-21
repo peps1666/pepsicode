@@ -17,6 +17,16 @@ const ThinkingGroup=load(path.resolve(__dirname,"../src/conversation/ThinkingGro
 const ExecutionTrace=load(path.resolve(__dirname,"../src/conversation/ExecutionTrace")).default;
 const messages=[{id:"call",role:"tool_call",content:"",callId:"failed",toolName:"read_file",toolInput:{path:"missing"},timestamp:0},{id:"result",role:"tool_result",content:"File missing",callId:"failed",toolName:"read_file",isError:true,durationMs:2,timestamp:0}];
 
+test("provider thinking is labeled and can be expanded independently from tool activity", () => {
+  let renderer;
+  act(()=>{renderer=create(React.createElement(ThinkingGroup,{messages:[{id:"thought",role:"thinking",content:"先检查目录，再读取说明。",timestamp:0}],autoExpanded:false}));});
+  act(()=>renderer.root.findAllByType("button")[0].props.onClick());
+  assert.ok(JSON.stringify(renderer.toJSON()).includes("模型思考"));
+  assert.ok(JSON.stringify(renderer.toJSON()).includes("先检查目录，再读取说明。"));
+  assert.equal(renderer.root.findAllByType("details").length,1);
+  act(()=>renderer.unmount());
+});
+
 test("completed chat keeps an error summary and trace entry without expanding all error output", () => {
   let renderer, opened=0;
   act(()=>{renderer=create(React.createElement(ThinkingGroup,{messages,autoExpanded:false,onViewTrace:()=>opened++}));});

@@ -5,7 +5,7 @@ import { buildToolActivities } from "./toolActivity";
 import styles from "./ThinkingGroup.module.css";
 
 export function isThinkingMessage(message: ChatMessage): boolean {
-  return message.role === "progress" || message.role === "tool_call" || message.role === "tool_result";
+  return message.role === "thinking" || message.role === "progress" || message.role === "tool_call" || message.role === "tool_result";
 }
 
 interface ThinkingGroupProps {
@@ -32,6 +32,7 @@ export default function ThinkingGroup({ messages, autoExpanded, onViewTrace }: T
 
   const toolCalls = messages.filter((message) => message.role === "tool_call").length;
   const summary = [
+    messages.some(message => message.role === "thinking") ? "含模型思考" : null,
     toolCalls > 0 ? `${toolCalls} 个工具` : null,
     failures > 0 ? `${failures} 个失败` : null,
   ].filter(Boolean).join(" · ");

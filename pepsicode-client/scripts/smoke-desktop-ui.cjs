@@ -43,6 +43,7 @@ async function main() {
   }
   let authenticatedCalls = 0;
   let modelRequests = 0;
+  let thinkingReplayRequests = 0;
   const api = http.createServer((request, response) => {
     if (request.headers.authorization !== "Bearer desktop-local-test-key") {
       response.writeHead(401); response.end(); return;
@@ -53,9 +54,11 @@ async function main() {
       response.end(JSON.stringify({ data: [{ id: "desktop-test-model", name: "Desktop Test Model" }] }));
       return;
     }
-    request.resume();
+    let requestBody = "";
+    request.on("data", chunk => { requestBody += chunk; });
     request.on("end", () => {
       modelRequests++;
+      if (requestBody.includes("fixture-thinking-signature")) thinkingReplayRequests++;
       if (modelRequests === 1) {
         response.writeHead(503, { "Content-Type": "application/json" });
         response.end(JSON.stringify({ error: { message: "Transient fixture failure" } }));
@@ -69,20 +72,29 @@ async function main() {
       };
       const call = calls[modelRequests];
       const blocks = call ? [
-        ["content_block_start", { index: 0, content_block: { type: "tool_use", id: call.id, name: call.name, input: {} } }],
-        ["content_block_delta", { index: 0, delta: { type: "input_json_delta", partial_json: JSON.stringify(call.input) } }],
+        ["content_block_start", { index: 2, content_block: { type: "tool_use", id: call.id, name: call.name, input: {} } }],
+        ["content_block_delta", { index: 2, delta: { type: "input_json_delta", partial_json: JSON.stringify(call.input) } }],
       ] : [
-        ["content_block_start", { index: 0, content_block: { type: "text", text: "" } }],
-        ["content_block_delta", { index: 0, delta: { type: "text_delta", text: modelRequests > 5 ? "LOCAL_TRAJECTORY_CONTINUE_OK" : "LOCAL_PROVIDER_RESTART_OK" } }],
+        ["content_block_start", { index: 2, content_block: { type: "text", text: "" } }],
+        ["content_block_delta", { index: 2, delta: { type: "text_delta", text: modelRequests > 5 ? "LOCAL_TRAJECTORY_CONTINUE_OK" : "LOCAL_PROVIDER_RESTART_OK" } }],
       ];
       const events = [
         ["message_start", { message: { usage: { input_tokens: 10 } } }],
-        ...blocks,
+        ["content_block_start", { index: 0, content_block: { type: "thinking", thinking: "" } }],
+        ["content_block_delta", { index: 0, delta: { type: "thinking_delta", thinking: `LOCAL_MODEL_THINKING_${modelRequests}：先检查项目状态，再选择下一步操作。` } }],
+      ];
+      response.write(events.map(([event, data]) => `event: ${event}\ndata: ${JSON.stringify({ type: event, ...data })}\n\n`).join(""));
+      const remainder = [
+        ["content_block_delta", { index: 0, delta: { type: "signature_delta", signature: "fixture-thinking-signature" } }],
         ["content_block_stop", { index: 0 }],
+        ["content_block_start", { index: 1, content_block: { type: "redacted_thinking", data: "fixture-redacted-secret" } }],
+        ["content_block_stop", { index: 1 }],
+        ...blocks,
+        ["content_block_stop", { index: 2 }],
         ["message_delta", { delta: { stop_reason: "end_turn" }, usage: { output_tokens: 5 } }],
         ["message_stop", {}],
       ];
-      response.end(events.map(([event, data]) => `event: ${event}\ndata: ${JSON.stringify({ type: event, ...data })}\n\n`).join(""));
+      setTimeout(() => response.end(remainder.map(([event, data]) => `event: ${event}\ndata: ${JSON.stringify({ type: event, ...data })}\n\n`).join("")), 650);
     });
   });
   await new Promise(resolve => api.listen(0, "127.0.0.1", resolve));
@@ -220,9 +232,15 @@ async function main() {
     await setValue("#task-composer", "Verify saved local provider", "HTMLTextAreaElement");
     await until(() => evaluate("!!document.querySelector('button[aria-label=\"发送\"]:not(:disabled)')"), "Restart send remained disabled");
     await evaluate("document.querySelector('button[aria-label=\"发送\"]').click()");
+    await until(() => evaluate("document.querySelector('[data-model-thinking]')?.innerText.includes('LOCAL_MODEL_THINKING_2') && document.body.innerText.includes('思考中…')"), "Provider thinking did not stream before tools and final answer");
     await until(() => evaluate("document.body.innerText.includes('LOCAL_PROVIDER_RESTART_OK')"), "Saved provider failed to perform an authenticated streamed roundtrip");
     await until(() => evaluate("!document.querySelector('button[aria-label=\"停止任务\"]')"), "Trajectory turn did not finish");
     assert.equal(await evaluate("document.body.innerText.includes('No verification commands found')"), false, "No-check warning leaked into chat");
+    await evaluate("Array.from(document.querySelectorAll('button')).find(button => button.innerText.startsWith('执行过程')).click()");
+    assert.equal(await evaluate("Array.from(document.querySelectorAll('[data-model-thinking]')).length"), 4, "Public thinking blocks missing after authoritative history refresh");
+    assert.equal(await evaluate("Array.from(document.querySelectorAll('[data-model-thinking]'))[0].textContent.includes('LOCAL_MODEL_THINKING_2')"), true);
+    assert.equal(await evaluate("document.body.textContent.includes('fixture-thinking-signature') || document.body.textContent.includes('fixture-redacted-secret')"), false, "Signed or redacted metadata leaked to the renderer");
+    assert.ok(thinkingReplayRequests >= 3, "Signed thinking was lost from provider replay");
     assert.equal(fs.readFileSync(path.join(workspace, "trajectory-result.txt"), "utf8"), "written once");
     await evaluate("document.querySelector('#trace-tab').click()");
     await until(() => evaluate("!!document.querySelector('tr[data-call-id=\"read-missing\"]')"), "Recorded tool IDs did not survive authoritative history refresh");
@@ -246,7 +264,7 @@ async function main() {
     fs.writeFileSync(path.join(build, "desktop-zip-smoke.json"), JSON.stringify({
       passed: true, archive: path.basename(archive), runtimePath: env.PATH,
       sha256: fs.readFileSync(archive + ".sha256", "utf8").split(/\s+/)[0],
-      checks: ["real ZIP extraction", "Unicode and space paths", "isolated profile", "no Python/Node on PATH", "real renderer and bundled backend", "mock message roundtrip", "styled custom menu within viewport", "menu Escape preserves dialog", "all builtin providers selectable", "DeepSeek key setup and save", "key absent from UI summary, localStorage and logs", "provider persists after restart", "authenticated local provider streaming roundtrip", "transient streaming request recovery", "durable tool call IDs and real timing", "failed and successful tools in trajectory", "no-check verification stays out of chat", "continue from recorded failure without replay", "cat icon embedded in both executables", "backend shutdown"],
+      checks: ["real ZIP extraction", "Unicode and space paths", "isolated profile", "no Python/Node on PATH", "real renderer and bundled backend", "mock message roundtrip", "styled custom menu within viewport", "menu Escape preserves dialog", "all builtin providers selectable", "DeepSeek key setup and save", "key absent from UI summary, localStorage and logs", "provider persists after restart", "authenticated local provider streaming roundtrip", "transient streaming request recovery", "live public provider thinking before tools", "thinking survives history refresh", "signed thinking preserved for replay; metadata hidden from UI", "durable tool call IDs and real timing", "failed and successful tools in trajectory", "no-check verification stays out of chat", "continue from recorded failure without replay", "cat icon embedded in both executables", "backend shutdown"],
     }, null, 2));
     console.log("PASS: ZIP desktop, provider setup/restart, streaming retry, durable execution trajectory, failed tools, continue without replay, cat icons and backend shutdown; no Python/Node on PATH.");
   } catch (error) {

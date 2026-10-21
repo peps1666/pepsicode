@@ -1,0 +1,10 @@
+.thinking { min-width: 0; color: var(--dsw-alias-label-secondary); font-size: 12px; }
+.thinking summary { display: flex; align-items: center; gap: 7px; min-height: 36px; padding: 7px 9px; border-radius: 7px; list-style: none; cursor: pointer; font-weight: 500; }
+.thinking summary::-webkit-details-marker { display: none; }
+.thinking summary:hover { background: var(--dsw-alias-interactive-bg-hover); }
+.thinking summary:focus-visible { outline: 2px solid var(--dsw-alias-state-business-primary); outline-offset: 2px; }
+.thinking summary svg { width: 13px; height: 13px; flex-shrink: 0; color: var(--dsw-alias-label-tertiary); transition: transform .15s ease; }
+.thinking[open] summary svg { transform: rotate(90deg); }
+.thinking small { margin-left: auto; color: var(--dsw-alias-label-tertiary); font-size: 11px; font-weight: 400; }
+.content { max-height: 320px; overflow: auto; margin: 0 9px 10px 22px; padding: 10px 12px; border-left: 2px solid var(--dsw-alias-border-l2); color: var(--dsw-alias-label-tertiary); line-height: 1.8; white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; }
+@media (prefers-reduced-motion: reduce) { .thinking summary svg { transition: none; } }

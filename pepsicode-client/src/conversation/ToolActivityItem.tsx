@@ -2,6 +2,7 @@ import { useId } from "react";
 import type { ToolActivity } from "./toolActivity";
 import { describeTool } from "./toolActivity";
 import styles from "./ToolActivityItem.module.css";
+import ModelThinking from "./ModelThinking";
 
 function ToolIcon({ name }: { name: string }) {
   const path = name === "run_command"
@@ -17,6 +18,7 @@ function ToolIcon({ name }: { name: string }) {
 export default function ToolActivityItem({ activity, active }: { activity: ToolActivity; active: boolean }) {
   const detailsId = useId();
   const { message } = activity;
+  if (message.role === "thinking") return <ModelThinking message={message} />;
   if (message.role === "progress") {
     return <p className={styles.progress}>{message.content}</p>;
   }

@@ -3,7 +3,7 @@ import { buildToolActivities, describeTool } from "./toolActivity";
 
 export type TraceStatus = "completed" | "running" | "failed" | "blocked" | "cancelled" | "not_run" | "retry";
 export interface TraceRow {
-  id: string; turn: number; kind: "user" | "assistant" | "tool" | "progress" | "retry" | "verification";
+  id: string; turn: number; kind: "user" | "assistant" | "tool" | "progress" | "retry" | "verification" | "thinking";
   label: string; summary: string; output: string; status: TraceStatus;
   input?: Record<string, unknown>; callId?: string; startedAt?: number; durationMs?: number; exitCode?: number;
   retry?: ChatMessage["retry"];
@@ -55,10 +55,10 @@ export function buildTrajectory(messages: ChatMessage[], running: boolean, verif
           callId: message.callId || result?.callId, startedAt: message.startedAt || result?.startedAt, durationMs: result?.durationMs, exitCode: result?.exitCode });
       } else {
         const retry = message.activityKind === "retry";
-        const kind = retry ? "retry" : message.role === "progress" ? "progress" : message.role === "user" ? "user" : "assistant";
-        rows.push({ id, turn, kind, label: retry ? "模型请求重试" : kind === "progress" ? "执行进度" : kind === "user" ? "用户输入" : "模型回复",
+        const kind = retry ? "retry" : message.role === "thinking" ? "thinking" : message.role === "progress" ? "progress" : message.role === "user" ? "user" : "assistant";
+        rows.push({ id, turn, kind, label: retry ? "模型请求重试" : kind === "thinking" ? "模型思考" : kind === "progress" ? "执行进度" : kind === "user" ? "用户输入" : "模型回复",
           summary: message.content.replace(/\s+/g, " ").trim() || "正在生成回复…", output: message.content, retry: message.retry, startedAt: message.retry?.started_at,
-          status: message.isError ? "failed" : message.isStreaming ? "running" : retry ? "retry" : "completed" });
+          status: message.isError ? "failed" : message.isStreaming ? "running" : message.thinkingStatus === "cancelled" || message.thinkingStatus === "interrupted" ? "cancelled" : retry ? "retry" : "completed" });
       }
     });
     const saved = [...turnMessages].reverse().find(message => message.verification)?.verification;
