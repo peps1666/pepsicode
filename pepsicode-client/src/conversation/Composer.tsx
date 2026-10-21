@@ -5,6 +5,7 @@ import { commandDraft, matchingCommands, type SlashCommandInfo } from "./command
 import Icon from "../components/Icon";
 import Select from "../components/Select";
 import { effortLabels } from "./ModelSettings";
+import PermissionPrompt from "./PermissionPrompt";
 
 const accessModes = {
   read_only: { label: "只读", description: "查看文件和搜索，禁止编辑及命令执行。" },
@@ -150,6 +151,7 @@ export default function Composer({ onSend, disabled, running, onOpenSettings }: 
           {commandError && <small role="alert">{commandError}</small>}
         </div>
       )}
+      <PermissionPrompt />
       <div className={styles.card}>
         <textarea
           id="task-composer"

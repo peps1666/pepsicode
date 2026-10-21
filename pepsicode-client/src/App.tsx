@@ -5,11 +5,10 @@ import SessionList from "./sidebar/SessionList";
 import DetailsPanel from "./panels/DetailsPanel";
 import { useConnectionStore } from "./stores/connection";
 import { useSessionStore, type InputMode } from "./stores/session";
-import PermissionPrompt from "./conversation/PermissionPrompt";
 
 export default function App() {
   const { connect, status, error } = useConnectionStore();
-  const { initialize, pendingPermission } = useSessionStore();
+  const { initialize } = useSessionStore();
 
   useEffect(() => {
     async function init() {
@@ -52,7 +51,6 @@ export default function App() {
         center={(controls) => <ChatView onSend={handleSend} frameControls={controls} />}
         details={<DetailsPanel />}
       />
-      {pendingPermission && <PermissionPrompt />}
     </>
   );
 }

@@ -664,13 +664,15 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   approvePermission: async (decision: string, feedback?: string) => {
     const { ws } = useConnectionStore.getState();
     const { pendingPermission } = get();
-    if (!ws || !pendingPermission) return;
-    set({ pendingPermission: null });
-    await sendRequest(ws, "tool/approve", {
+    if (!pendingPermission) return;
+    if (!ws) throw new Error("本地服务已断开连接");
+    const result = await sendRequest(ws, "tool/approve", {
       prompt_id: pendingPermission.prompt_id,
       decision,
       feedback: feedback || "",
     });
+    if (result.resolved === false) throw new Error("这项权限请求已结束");
+    if (get().pendingPermission?.prompt_id === pendingPermission.prompt_id) set({ pendingPermission: null });
   },
 
   refreshSessions: async () => {

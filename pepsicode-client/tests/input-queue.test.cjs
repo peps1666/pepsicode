@@ -11,6 +11,7 @@ async function session() {
   let enqueueError;
   let failTurn;
   let branchError;
+  let approval;
   const connection = {
     useConnectionStore: { getState: () => ({ ws: {} }) },
     onMessage: (handler) => handlers.push(handler),
@@ -32,6 +33,7 @@ async function session() {
       if (method === "turn/enqueue" && enqueueError) throw enqueueError;
       if (method === "turn/cancel") return { cancelled: true };
       if (method === "turn/dequeue") return { removed: true };
+      if (method === "tool/approve" && approval) return approval();
       return {};
     },
   };
@@ -52,6 +54,7 @@ async function session() {
     rejectEnqueue: () => { enqueueError = new Error("task is finishing"); },
     disconnect: () => failTurn(new Error("WebSocket connection closed")),
     rejectBranch: () => { branchError = new Error("invalid branch"); },
+    onApproval: (handler) => { approval = handler; },
   };
 }
 
@@ -73,6 +76,22 @@ test("thinking streams independently, closes on cancellation, and survives histo
   assert.equal(api.store.getState().messages.at(-1).thinkingStatus,"cancelled");
   api.event("session/view", {session_id:"test",history:[{role:"thinking",content:"先读取项目。"},{role:"assistant",content:"Answer"}]});
   assert.deepEqual(api.store.getState().messages.map(m=>[m.role,m.content]), [["thinking","先读取项目。"],["assistant","Answer"]]);
+});
+
+test("failed approval retains the request; late replies cannot erase a newer request", async () => {
+  const api=await session(),request={prompt_id:"first",kind:"command",summary:"run",details:[],scope:"python",choices:[]};
+  api.event("permission/request",request);
+  api.onApproval(async()=>{throw new Error("offline");});
+  await assert.rejects(api.store.getState().approvePermission("allow_once"),/offline/);
+  assert.equal(api.store.getState().pendingPermission.prompt_id,"first");
+  let finish;api.onApproval(()=>new Promise(resolve=>{finish=resolve;}));
+  const pending=api.store.getState().approvePermission("allow_once");
+  api.event("permission/request",{...request,prompt_id:"second"});
+  finish({resolved:true});await pending;
+  assert.equal(api.store.getState().pendingPermission.prompt_id,"second");
+  api.onApproval(async()=>({resolved:true}));
+  await api.store.getState().approvePermission("deny_once");
+  assert.equal(api.store.getState().pendingPermission,null);
 });
 
 test("execution IDs, timing, retries and verification survive authoritative history replacement", async () => {
