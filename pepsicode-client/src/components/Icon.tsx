@@ -1,6 +1,9 @@
 import type { SVGProps } from "react";
 
 const paths = {
+  check: <path d="m5 12 4 4L19 6" />,
+  settings: <><path d="M4 7h16M4 17h16" /><circle cx="9" cy="7" r="3" fill="var(--dsw-alias-bg-layer-1)" /><circle cx="15" cy="17" r="3" fill="var(--dsw-alias-bg-layer-1)" /></>,
+  refresh: <><path d="M20 7v5h-5M4 17v-5h5" /><path d="M6 7a7 7 0 0 1 12-1l2 3M4 15l2 3a7 7 0 0 0 12-1" /></>,
   terminal: <><path d="m5 7 5 5-5 5M13 17h6" /></>,
   compose: <><path d="M12 4H5a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2h13a2 2 0 0 0 2-2v-7" /><path d="m16 3 5 5M10 14l1-5 7-7 4 4-7 7-5 1Z" /></>,
   folder: <path d="M3 7V5a2 2 0 0 1 2-2h5l2 3h7a2 2 0 0 1 2 2v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7Z" />,

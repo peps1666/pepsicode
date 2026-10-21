@@ -9,6 +9,7 @@
   align-items: center;
   justify-content: center;
   z-index: 1000;
+  backdrop-filter: blur(2px);
   animation: fadeIn var(--ds-transition-duration-fast) ease;
 }
 
@@ -20,12 +21,13 @@
 .modal {
   background-color: var(--dsw-alias-bg-layer-1);
   border: 1px solid var(--dsw-alias-border-l2);
-  border-radius: 12px;
-  min-width: 440px;
+  border-radius: 18px;
+  width: min(560px, calc(100vw - 40px));
+  min-width: 0;
   max-width: 600px;
   max-height: 80vh;
   overflow: hidden;
-  box-shadow: var(--dsw-shadow-lv3);
+  box-shadow: var(--pc-dialog-shadow);
   display: flex;
   flex-direction: column;
 }
@@ -66,7 +68,7 @@
 
 .details {
   background-color: var(--dsw-alias-markdown-code-block);
-  border-radius: 6px;
+  border-radius: var(--pc-control-radius);
   padding: 10px 14px;
   font-family: var(--ds-font-family-code);
   font-size: 12px;
@@ -113,11 +115,12 @@
   gap: 8px;
   padding: 12px 20px 16px;
   border-top: 1px solid var(--dsw-alias-border-l2);
+  background: var(--dsw-alias-bg-layer-2);
 }
 
 .allowBtn, .denyBtn, .neutralBtn, .cancelBtn, .submitBtn {
   padding: 7px 14px;
-  border-radius: 6px;
+  border-radius: var(--pc-control-radius);
   font-size: 13px;
   font-weight: 500;
   transition: background-color var(--ds-transition-duration-fast) ease, opacity var(--ds-transition-duration-fast) ease;

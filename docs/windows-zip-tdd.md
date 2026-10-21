@@ -59,6 +59,15 @@
 
 ## 参考
 
+## v2.0.3：统一客户端控件
+
+- 以 `Select`、`Button` 共用组件替换模型设置、服务商配置与输入时机中的原生下拉及零散按钮；同步整理弹窗层级、操作区、权限弹窗和复选框样式。视觉规则见 `desktop-ui-style.md`。
+- 客户端 57 项测试通过，包括禁用项跳过、方向键 / Home / End / 输入定位、Enter、Escape 与 Tab，及配置确认前不保存和切换服务商清空 Key。
+- 实际浏览器连接隔离后端，完成服务商配置、模型选择，并检查常规与 820×620 窗口的菜单边界、白色菜单背景、Escape 保留外层弹窗与 Tab 关闭菜单；生成截图后进行视觉检查。
+- 实际 ZIP 验收通过：没有原生 select，菜单在窗口内可见，四个服务商可配置，Key 保存及重启后的认证流式请求成功，退出清理后端，图标资源完整；测试未使用真实 API Key。
+
+## 参考资料
+
 - [PyInstaller 运行时路径与 sys.executable](https://pyinstaller.org/en/stable/runtime-information.html)
 - [PyInstaller 冻结应用的外部程序调用注意事项](https://pyinstaller.org/en/stable/common-issues-and-pitfalls.html)
 - [electron-builder 资源打包](https://www.electron.build/v26/docs/contents/)；本项目使用的 24.x 字段以安装包自带类型定义为准。

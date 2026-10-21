@@ -1,6 +1,12 @@
 /* Neutral desktop palette; existing semantic tokens also theme dialogs and tools. */
 
 body {
+  --pc-control-height: 40px;
+  --pc-control-radius: 9px;
+  --pc-focus: #92968c;
+  --pc-menu-shadow: 0 8px 30px rgb(30 29 24 / 10%), 0 2px 6px rgb(30 29 24 / 4%);
+  --pc-dialog-shadow: 0 24px 80px rgb(30 29 24 / 18%), 0 4px 16px rgb(30 29 24 / 6%);
+  --dsw-alias-bg-mask-1: rgb(30 29 24 / 26%);
   color-scheme: light;
   --dsw-alias-bg-base: #ffffff;
   --dsw-alias-bg-layer-1: #ffffff;
@@ -49,8 +55,24 @@ button:disabled {
   cursor: default;
 }
 
+input[type="checkbox"] {
+  appearance: none;
+  width: 15px;
+  height: 15px;
+  border: 1px solid var(--dsw-alias-border-l3);
+  border-radius: 4px;
+  background: var(--dsw-alias-bg-layer-1);
+  cursor: pointer;
+}
+input[type="checkbox"]:checked {
+  border-color: var(--dsw-alias-button-primary-fill);
+  background: var(--dsw-alias-button-primary-fill) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='m4 8 2.5 2.5L12 5' fill='none' stroke='white' stroke-width='1.7' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") center / 15px;
+}
+input[type="checkbox"]:focus-visible { outline: 2px solid var(--pc-focus); outline-offset: 2px; }
+input[type="checkbox"]:disabled { opacity: .45; cursor: not-allowed; }
+
 button:focus-visible, summary:focus-visible, select:focus-visible, a:focus-visible {
-  outline: 2px solid #7a8478;
+  outline: 2px solid var(--pc-focus);
   outline-offset: 3px;
 }
 

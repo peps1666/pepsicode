@@ -2,6 +2,9 @@ import { useEffect, useRef, useState, type FormEvent } from "react";
 import { useSessionStore, type ModelCapabilities } from "../stores/session";
 import styles from "./ModelSettings.module.css";
 import ProviderSetup from "./ProviderSetup";
+import Select from "../components/Select";
+import Button from "../components/Button";
+import Icon from "../components/Icon";
 
 export const effortLabels: Record<string, string> = {
   default: "默认", off: "关闭思考", low: "低", medium: "中", high: "高", xhigh: "超高", max: "最高",
@@ -71,56 +74,50 @@ export default function ModelSettings({ onClose }: { onClose: () => void }) {
 
   return (
     <dialog ref={dialogRef} className={styles.dialog} onCancel={(event) => { if (modelUpdating) event.preventDefault(); else onClose(); }} aria-labelledby="model-settings-title">
-      {setupProvider !== null ? <ProviderSetup initialProvider={setupProvider} onDone={onClose} onCancel={() => setSetupProvider(null)} /> : <form onSubmit={submit}>
-        <h2 id="model-settings-title">模型与思考深度</h2>
-        <p>从下一轮对话生效，保留当前聊天记录。</p>
-        <button type="button" onClick={() => setSetupProvider(draftProvider || "deepseek")} disabled={isRunning || modelUpdating}>配置服务商 / API Key</button>
-        {unconfigured && <p>选择 DeepSeek、Kimi、GLM 或千问即可填写 API Key，无需修改配置文件。</p>}
-        {providers.length > 0 && <label className={styles.field}>
-          服务商
-          <select aria-label="服务商" value={draftProvider} disabled={isRunning || modelUpdating} onChange={(event) => {
-            if (event.target.value === "__add__") { setSetupProvider("custom"); return; }
-            const selected = providers.find((item) => item.id === event.target.value);
-            if (selected && !selected.configured) { setSetupProvider(selected.id); return; }
-            setDraftProvider(event.target.value); setDraftModel(""); setEffort("default"); setChoices([]); setCatalogNotice("");
-          }}>
-            {!draftProvider && <option value="" disabled>请选择服务商</option>}
-            {providers.map((item) => <option key={item.id} value={item.id}>{item.name}{item.configured ? "" : "（点击配置 Key）"}</option>)}
-            <option value="__add__">+ 添加自定义厂商…</option>
-          </select>
-        </label>}
-        <label className={styles.field}>
-          模型
-          <select autoFocus value={draftModel} disabled={busy} required
-            onChange={(event) => { setDraftModel(event.target.value); setEffort("default"); }}>
-            {!choices.some((item) => item.id === draftModel) && <option value={draftModel} disabled>{draftModel ? `${draftModel}（未在接口列表中）` : "请选择模型"}</option>}
-            {choices.map((item) => <option key={item.id} value={item.id}>{item.name || item.id}{item.name && item.name !== item.id ? ` (${item.id})` : ""}</option>)}
-          </select>
-        </label>
-        <p>名称来自当前 API，选择后使用对应的模型 ID 发起请求。</p>
-        <button type="button" onClick={() => void refresh()} disabled={busy || unconfigured}>{refreshing ? "读取中…" : "刷新模型列表"}</button>
-        {catalogNotice && <p className={styles.error} role="status">{catalogNotice}</p>}
-        <label className={styles.field}>
-          思考深度
-          <select value={effort} onChange={(event) => setEffort(event.target.value)} disabled={busy || !capabilities || capabilities.reasoningLevels.length <= 1}>
-            {(capabilities?.reasoningLevels || ["default"]).map((level) => (
-              <option key={level} value={level}>{effortLabels[level] || level}</option>
-            ))}
-          </select>
-        </label>
-        {capabilities?.reasoningMode === "none" && <p>暂未声明该模型的思考能力，使用服务端默认设置。</p>}
-        <label className={styles.checkbox}>
-          <input type="checkbox" checked={persist} onChange={(event) => setPersist(event.target.checked)} disabled={busy} />
-          同时保存为新会话默认设置
-        </label>
-        <p>切换服务商会使用该服务商独立的 API 地址与 Key。环境变量仍优先于保存的默认设置。</p>
-        {error && <p className={styles.error} role="alert">{error}</p>}
-        <div className={styles.actions}>
-          <button type="button" onClick={onClose} disabled={modelUpdating}>取消</button>
-          <button type="submit" disabled={busy || isMock || !capabilities || capabilities.id !== selectedModel}>
-            {modelUpdating ? "应用中…" : "应用"}
-          </button>
+      {setupProvider !== null ? <ProviderSetup initialProvider={setupProvider} onDone={onClose} onCancel={() => setSetupProvider(null)} /> : <form className={styles.form} onSubmit={submit}>
+        <header className={styles.heading}>
+          <span className={styles.headingIcon}><Icon name="settings" size={21} /></span>
+          <div><h2 id="model-settings-title">模型设置</h2><p>选择服务商、模型与思考深度</p></div>
+          <Button variant="ghost" className={styles.close} aria-label="关闭模型设置" onClick={onClose} disabled={modelUpdating}><Icon name="close" size={17} /></Button>
+        </header>
+        <div className={styles.section}>
+          <div className={styles.field}>
+            <div className={styles.fieldHeading}><span>服务商</span><Button variant="ghost" className={styles.inlineButton} onClick={() => setSetupProvider(draftProvider || "deepseek")} disabled={isRunning || modelUpdating}>配置 API Key</Button></div>
+            <Select label="服务商" value={draftProvider} disabled={isRunning || modelUpdating} placeholder="选择服务商"
+              options={[...providers.map(item => ({ value: item.id, label: item.name, description: item.configured ? "已配置" : "填写 API Key 后使用" })), { value: "__add__", label: "添加自定义厂商", separator: true }]}
+              onChange={(value) => {
+                if (value === "__add__") { setSetupProvider("custom"); return; }
+                const selected = providers.find(item => item.id === value);
+                if (selected && !selected.configured) { setSetupProvider(selected.id); return; }
+                setDraftProvider(value); setDraftModel(""); setEffort("default"); setChoices([]); setCatalogNotice("");
+              }} />
+            {unconfigured && <p className={styles.hint}>首次使用？选择服务商即可填写 API Key。</p>}
+          </div>
+          <div className={styles.field}>
+            <div className={styles.fieldHeading}><span>模型</span><Button variant="ghost" className={styles.inlineButton} onClick={() => void refresh()} disabled={busy || unconfigured}><Icon name="refresh" size={13} />{refreshing ? "读取中" : "刷新列表"}</Button></div>
+            <Select label="模型" value={draftModel} disabled={busy || unconfigured} autoFocus={!unconfigured}
+              placeholder={unconfigured ? "请先配置服务商" : refreshing ? "正在读取模型…" : "选择模型"}
+              options={unconfigured ? [] : choices.map(item => ({ value: item.id, label: item.name || item.id, description: item.name && item.name !== item.id ? item.id : undefined }))}
+              onChange={value => { setDraftModel(value); setEffort("default"); }} />
+            {catalogNotice && <p className={styles.notice} role="status">{catalogNotice}</p>}
+          </div>
+          <div className={styles.field}>
+            <span className={styles.fieldTitle}>思考深度</span>
+            <Select label="思考深度" value={effort} options={(capabilities?.reasoningLevels || ["default"]).map(level => ({ value: level, label: effortLabels[level] || level }))}
+              onChange={setEffort} disabled={busy || !capabilities || capabilities.reasoningLevels.length <= 1} />
+            <p className={styles.hint}>{capabilities?.reasoningMode === "none" ? "当前模型使用服务端默认思考设置。" : "新设置从下一轮对话生效，当前聊天记录会保留。"}</p>
+          </div>
         </div>
+        <label className={styles.preference}>
+          <input type="checkbox" checked={persist} onChange={event => setPersist(event.target.checked)} disabled={busy} />
+          <span><strong>设为新会话默认</strong><small>下次新建对话时使用此配置</small></span>
+        </label>
+        {error && <p className={styles.error} role="alert">{error}</p>}
+        <footer className={styles.actions}>
+          <span className={styles.footerNote}>Key 仅保存在本机</span>
+          <Button onClick={onClose} disabled={modelUpdating}>取消</Button>
+          <Button variant="primary" type="submit" disabled={busy || isMock || !capabilities || capabilities.id !== selectedModel}>{modelUpdating ? "应用中…" : "应用设置"}</Button>
+        </footer>
       </form>}
     </dialog>
   );

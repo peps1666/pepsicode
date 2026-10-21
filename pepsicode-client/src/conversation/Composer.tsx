@@ -3,6 +3,7 @@ import styles from "./Composer.module.css";
 import { useSessionStore, type InputMode } from "../stores/session";
 import { commandDraft, matchingCommands, type SlashCommandInfo } from "./commandCompletion";
 import Icon from "../components/Icon";
+import Select from "../components/Select";
 import { effortLabels } from "./ModelSettings";
 
 const accessModes = {
@@ -199,11 +200,8 @@ export default function Composer({ onSend, disabled, running, onOpenSettings }: 
             </div>
           </details>
           {running && (
-            <select className={styles.inputMode} aria-label="输入执行时机" value={inputMode}
-              onChange={(event) => setInputMode(event.target.value as InputMode)}>
-              <option value="steer">补充当前任务</option>
-              <option value="follow_up">完成后执行</option>
-            </select>
+            <Select compact label="输入执行时机" value={inputMode} onChange={value => setInputMode(value as InputMode)}
+              options={[{ value: "steer", label: "补充当前任务" }, { value: "follow_up", label: "完成后执行" }]} />
           )}
           {running && <button type="button" className={styles.stopButton} disabled={isStopping}
             aria-label={isStopping ? "正在停止" : "停止任务"}

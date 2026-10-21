@@ -133,22 +133,32 @@ async function main() {
     await until(() => evaluate("document.body.innerText.includes('This is a minimal pepsicode shell.')"), "Mock response did not reach the real renderer");
     await until(() => evaluate("!!Array.from(document.querySelectorAll('button')).find(b => b.innerText === '配置模型' && !b.disabled)"), "Model settings remained disabled");
     await evaluate("Array.from(document.querySelectorAll('button')).find(b => b.innerText === '配置模型').click()");
-    assert.deepEqual(await evaluate("Array.from(document.querySelector('select[aria-label=\"服务商\"]').options).filter(o => ['deepseek','kimi','glm','qwen'].includes(o.value)).map(o => ({id:o.value,disabled:o.disabled}))"),
+    await evaluate("document.querySelector('button[role=\"combobox\"][aria-label=\"服务商\"]').click()");
+    assert.equal(await evaluate("document.querySelectorAll('select').length"), 0, "Native select popup returned to the UI");
+    assert.equal(await evaluate("(() => { const menu = document.querySelector('[role=\"listbox\"]'); const rect = menu.getBoundingClientRect(); return getComputedStyle(menu).backgroundColor === 'rgb(255, 255, 255)' && rect.left >= 0 && rect.top >= 0 && rect.right <= innerWidth && rect.bottom <= innerHeight; })()"), true, "Styled menu was clipped or outside the viewport");
+    assert.deepEqual(await evaluate("Array.from(document.querySelectorAll('[role=\"option\"]')).filter(o => ['deepseek','kimi','glm','qwen'].includes(o.dataset.value)).map(o => ({id:o.dataset.value,disabled:o.getAttribute('aria-disabled') === 'true'}))"),
       ["deepseek", "kimi", "glm", "qwen"].map(id => ({ id, disabled: false })));
+    await evaluate("document.querySelector('button[role=\"combobox\"][aria-label=\"服务商\"]').dispatchEvent(new KeyboardEvent('keydown', {key:'Escape',bubbles:true,cancelable:true}))");
+    assert.equal(await evaluate("!!document.querySelector('dialog[open]') && !document.querySelector('[role=\"listbox\"]')"), true);
     const setValue = async (selector, value, tag = "HTMLInputElement", event = "input") => evaluate(`(() => {
       const input = document.querySelector(${JSON.stringify(selector)});
       Object.getOwnPropertyDescriptor(${tag}.prototype, 'value').set.call(input, ${JSON.stringify(value)});
       input.dispatchEvent(new Event(${JSON.stringify(event)}, { bubbles: true }));
     })()`);
-    await setValue('select[aria-label="服务商"]', "deepseek", "HTMLSelectElement", "change");
+    const choose = async (label, value) => {
+      await evaluate(`document.querySelector('button[role="combobox"][aria-label=${JSON.stringify(label)}]').click()`);
+      await until(() => evaluate(`!!document.querySelector('[role="option"][data-value=${JSON.stringify(value)}]')`), "Custom menu did not open");
+      await evaluate(`document.querySelector('[role="option"][data-value=${JSON.stringify(value)}]').click()`);
+    };
+    await choose("服务商", "deepseek");
     assert.equal(await evaluate("document.querySelector('input[aria-label=\"API 地址\"]').value"), "https://api.deepseek.com/anthropic");
     assert.equal(await evaluate("document.querySelector('input[aria-label=\"API Key\"]').type"), "password");
     await setValue('input[aria-label="API Key"]', "desktop-local-test-key");
     await evaluate("document.querySelector('dialog details').open = true");
     await setValue('input[aria-label="API 地址"]', baseUrl);
     await evaluate("document.querySelector('dialog form').requestSubmit()");
-    await until(() => evaluate("!!document.querySelector('select[aria-label=\"选择模型\"]')"), "Provider model discovery did not complete");
-    await setValue('select[aria-label="选择模型"]', "desktop-test-model", "HTMLSelectElement", "change");
+    await until(() => evaluate("!!document.querySelector('button[role=\"combobox\"][aria-label=\"选择模型\"]')"), "Provider model discovery did not complete");
+    await choose("选择模型", "desktop-test-model");
     await evaluate("document.querySelector('dialog form').requestSubmit()");
     assert.equal(await evaluate("document.querySelector('dialog').innerText.includes('desktop-local-test-key')"), false);
     await evaluate("document.querySelector('dialog form').requestSubmit()");
@@ -202,7 +212,7 @@ async function main() {
     fs.writeFileSync(path.join(build, "desktop-zip-smoke.json"), JSON.stringify({
       passed: true, archive: path.basename(archive), runtimePath: env.PATH,
       sha256: fs.readFileSync(archive + ".sha256", "utf8").split(/\s+/)[0],
-      checks: ["real ZIP extraction", "Unicode and space paths", "isolated profile", "no Python/Node on PATH", "real renderer and bundled backend", "mock message roundtrip", "all builtin providers selectable", "DeepSeek key setup and save", "key absent from UI summary, localStorage and logs", "provider persists after restart", "authenticated local provider streaming roundtrip", "cat icon embedded in both executables", "backend shutdown"],
+      checks: ["real ZIP extraction", "Unicode and space paths", "isolated profile", "no Python/Node on PATH", "real renderer and bundled backend", "mock message roundtrip", "styled custom menu within viewport", "menu Escape preserves dialog", "all builtin providers selectable", "DeepSeek key setup and save", "key absent from UI summary, localStorage and logs", "provider persists after restart", "authenticated local provider streaming roundtrip", "cat icon embedded in both executables", "backend shutdown"],
     }, null, 2));
     console.log("PASS: ZIP desktop, cat executable icons, builtin key setup, persistence across restart, authenticated local provider streaming and backend shutdown; no Python/Node on PATH.");
   } catch (error) {

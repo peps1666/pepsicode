@@ -7,8 +7,8 @@ const ts = require("typescript");
 const React = require("react");
 const { create, act } = require("react-test-renderer");
 
-function component(name, state) {
-  const filename = path.resolve(__dirname, `../src/conversation/${name}.tsx`);
+function component(name, state, directory = "conversation") {
+  const filename = path.resolve(__dirname, `../src/${directory}/${name}.tsx`);
   const code = ts.transpileModule(fs.readFileSync(filename, "utf8"), {
     compilerOptions: { module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX, target: ts.ScriptTarget.ES2022, esModuleInterop: true },
   }).outputText;
@@ -18,6 +18,7 @@ function component(name, state) {
     if (id === "../stores/session") return { useSessionStore: () => state };
     if (id.endsWith(".css")) return { default: {} };
     if (id === "./ProviderSetup") return { default: component("ProviderSetup", state), __esModule: true };
+    if (id.startsWith("../components/") || id === "./Icon") return { default: component(id.split("/").pop(), state, "components"), __esModule: true };
     return requireLocal(id);
   }, result);
   return result.default;
@@ -30,7 +31,11 @@ function state(overrides = {}) {
     cancelProviderSetup: async () => {}, ...overrides };
 }
 const submit = async root => act(async () => root.findByType("form").props.onSubmit({ preventDefault() {} }));
-const edit = (root, name, value) => act(() => root.findByProps({ "aria-label": name }).props.onChange({ target: { value } }));
+const edit = (root, name, value) => act(() => {
+  const customSelect = root.findAll(node => typeof node.type === "function" && node.props.label === name)[0];
+  if (customSelect) customSelect.props.onChange(value);
+  else root.findByProps({ "aria-label": name }).props.onChange({ target: { value } });
+});
 
 test("first run allows selecting every built-in provider and opens its API key editor", async () => {
   for (const preset of presets) {
@@ -38,9 +43,9 @@ test("first run allows selecting every built-in provider and opens its API key e
     await act(async () => { renderer = create(React.createElement(component("ModelSettings", state()), { onClose() {} })); });
     const select = renderer.root.findByProps({ "aria-label": "服务商" });
     assert.ok(!select.props.disabled);
-    assert.ok(!select.findAllByType("option").find(item => item.props.value === preset.id).props.disabled);
+    assert.ok(!renderer.root.findByProps({ label: "服务商" }).props.options.find(item => item.value === preset.id).disabled);
     edit(renderer.root, "服务商", preset.id);
-    assert.equal(renderer.root.findByProps({ "aria-label": "配置服务商" }).props.value, preset.id);
+    assert.equal(renderer.root.findByProps({ label: "配置服务商" }).props.value, preset.id);
     assert.equal(renderer.root.findByProps({ "aria-label": "API Key" }).props.type, "password");
     await act(async () => renderer.unmount());
   }

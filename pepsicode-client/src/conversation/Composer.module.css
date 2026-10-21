@@ -142,7 +142,7 @@
   border: 1px solid var(--dsw-alias-border-l2-darkmode-thin);
   border-radius: 12px;
   background: var(--dsw-specific-input-major);
-  box-shadow: var(--dsw-shadow-lv2);
+  box-shadow: var(--pc-menu-shadow);
 }
 
 .permissionOptions button {
@@ -159,7 +159,7 @@
 
 .permissionOptions button:hover,
 .permissionOptions button[aria-pressed="true"] {
-  background: var(--dsw-alias-bg-base);
+  background: var(--dsw-alias-interactive-bg-hover);
 }
 
 .permissionOptions small {
@@ -265,16 +265,6 @@
   .modelButton small {
     display: none;
   }
-}
-
-.inputMode {
-  max-width: 140px;
-  padding: 6px;
-  border: 1px solid var(--dsw-alias-border-l2-darkmode-thin);
-  border-radius: 8px;
-  background: var(--dsw-specific-input-major);
-  color: var(--dsw-alias-label-primary);
-  font-size: 12px;
 }
 
 .stopButton {
