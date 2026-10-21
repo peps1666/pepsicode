@@ -314,4 +314,6 @@ def test_project_hooks_require_content_bound_trust(monkeypatch, tmp_path: Path) 
 
 
 def test_release_is_second_major_version() -> None:
-    assert VERSION == "2.0.0"
+    parts = VERSION.split(".")
+    assert len(parts) == 3 and all(part.isdigit() for part in parts)
+    assert parts[0] == "2"

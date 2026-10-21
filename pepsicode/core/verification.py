@@ -90,7 +90,9 @@ class ProjectVerifier:
                 reason_code="no_changes",
             )
         if permissions is not None and (permissions.is_plan_mode or permissions.access_mode.value == "read_only"):
-            return VerificationResult(False, "Read-only/Plan mode; verification commands not run", status="not_run")
+            return VerificationResult(
+                False, "Read-only/Plan mode; verification commands not run", status="not_run", reason_code="read_only"
+            )
         try:
             checks = discover_checks(
                 cwd, self.runtime.get("verificationCommands"), self.runtime.get("verificationDiscovery")
@@ -99,7 +101,9 @@ class ProjectVerifier:
         except (ValueError, OSError, TypeError) as error:
             return VerificationResult(False, str(error), status="blocked")
         if not checks:
-            return VerificationResult(False, "No verification commands found; result is unverified", status="not_run")
+            return VerificationResult(
+                False, "No verification commands found; result is unverified", status="not_run", reason_code="no_checks"
+            )
         reports = []
         failed = []
         not_run = []
@@ -231,7 +235,7 @@ def _run_verified_turn_once(*, runtime: dict | None, runner, on_verification=Non
         runtime["_lastVerification"] = report
         if on_verification:
             on_verification(report)
-        if announce and progress and result.reason_code not in {"no_changes", "awaiting_user"}:
+        if announce and progress and not on_verification and report["status"] != "not_run":
             progress(f"Verification [{report['status']}]: {result.reason}")
 
     verifier = ProjectVerifier(
@@ -278,4 +282,9 @@ def _run_verified_turn_once(*, runtime: dict | None, runner, on_verification=Non
         callback = options.get("on_error_message") or options.get("on_assistant_message")
         if callback:
             callback(message)
+    if report is not None:
+        for message in reversed(result.messages):
+            if message.get("role") == "assistant":
+                message["verification"] = report
+                break
     return result.messages

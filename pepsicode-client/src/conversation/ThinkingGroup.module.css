@@ -1,4 +1,7 @@
 .container { min-width: 0; }
+.headingRow { display: flex; align-items: center; gap: 12px; }
+.traceLink { padding: 4px 6px; border-radius: 6px; color: var(--dsw-alias-label-tertiary); font-size: 11px; white-space: nowrap; }
+.traceLink:hover { background: var(--dsw-alias-interactive-bg-hover); color: var(--dsw-alias-label-primary); }
 .header {
   display: flex;
   align-items: center;

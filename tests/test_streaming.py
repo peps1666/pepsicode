@@ -459,7 +459,9 @@ def test_streaming_turn_replays_thinking_before_its_tool_call_and_forwards_it():
         max_steps=3,
     )
     roles = [message["role"] for message in model.requests[1]]
-    assert roles == ["user", "assistant_thinking", "assistant_tool_call", "tool_result"]
+    assert roles == ["user", "assistant_thinking", "assistant_tool_call", "tool_result", "user"]
+    assert model.requests[1][-1].get("internal") is True
+    assert "tool failed" in model.requests[1][-1]["content"].lower()
     assert model.requests[1][1]["blocks"] == [{"type": "thinking", "thinking": "Need the file.", "signature": "s1"}]
     assert seen == ["Need the file.", "The tool failed; answer anyway."]
     assert result[-1] == {"role": "assistant", "content": "Done."}

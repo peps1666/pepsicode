@@ -546,23 +546,47 @@ class AnthropicModelAdapter:
         usage_state: dict[str, int] = {}
         thinking_state: dict[int, dict[str, Any]] = {}
 
-        raise_if_cancelled()
-        try:
-            response = urllib.request.urlopen(request, timeout=120)  # noqa: S310
-        except urllib.error.HTTPError as error:
-            # Try to surface the provider's error message just like ``_send`` does.
+        # Retry only before a stream has begun. Never replay emitted tool calls or text.
+        max_retries = _get_retry_limit()
+        for attempt in range(max_retries + 1):
+            raise_if_cancelled()
+            retry_after = None
             try:
-                data = _read_json_body(error)
-            except Exception:  # noqa: BLE001
-                data = {}
-            status = getattr(error, "code", 0)
-            if _is_context_overflow(data, status):
-                raise ContextOverflowError(_extract_error_message(data, status))
-            if status == OVERLOAD_STATUS:
-                raise ServiceOverloadError(_extract_error_message(data, status))
-            raise RuntimeError(_extract_error_message(data, status))
-        except urllib.error.URLError as error:
-            raise RuntimeError(f"Model stream request failed: {error}") from error
+                response = urllib.request.urlopen(request, timeout=120)  # noqa: S310
+                break
+            except urllib.error.HTTPError as error:
+                status = error.code
+                retry_after = _parse_retry_after_ms(error.headers.get("retry-after"))
+                try:
+                    data = _read_json_body(error)
+                except Exception:  # noqa: BLE001
+                    data = {}
+                finally:
+                    error.close()
+                if _is_context_overflow(data, status):
+                    raise ContextOverflowError(_extract_error_message(data, status))
+                if not _should_retry_status(status) or attempt >= max_retries:
+                    if status == OVERLOAD_STATUS:
+                        raise ServiceOverloadError(_extract_error_message(data, status))
+                    raise RuntimeError(_extract_error_message(data, status))
+                reason = f"HTTP {status}"
+            except (urllib.error.URLError, TimeoutError, ConnectionError) as error:
+                if attempt >= max_retries:
+                    raise RuntimeError(f"Model stream request failed: {error}") from error
+                reason = "Connection unavailable" if not isinstance(error, TimeoutError) else "Connection timeout"
+            delay = min(MAX_RETRY_DELAY_MS, _get_retry_delay_ms(attempt + 1, retry_after))
+            yield StreamToken(
+                type="retry",
+                content=f"模型连接暂时不可用，正在重试（{attempt + 1}/{max_retries}）",
+                retry={
+                    "attempt": attempt + 1,
+                    "limit": max_retries,
+                    "delay_ms": delay,
+                    "reason": reason,
+                    "started_at": int(time.time() * 1000),
+                },
+            )
+            _sleep(delay)
 
         # Read the SSE stream chunk by chunk, buffering partial event blocks.
         buffer = ""

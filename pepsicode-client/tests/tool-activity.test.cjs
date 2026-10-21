@@ -42,7 +42,19 @@ test("retains unmatched results and pending calls", () => {
 
 test("normalizes target text without modifying the original arguments", () => {
   const call = message("1", "tool_call", "run_command", { toolInput: { command: "npm test\n -- --run" } });
-  assert.deepEqual(describeTool(call), { label: "Run command", target: "npm test -- --run" });
+  assert.deepEqual(describeTool(call), { label: "运行命令", target: "npm test -- --run" });
   assert.equal(call.toolInput.command, "npm test\n -- --run");
   assert.deepEqual(describeTool(message("2", "tool_call", "custom_tool")), { label: "Custom tool", target: "" });
+});
+
+test("same-name calls completed out of order are matched by actual call IDs", () => {
+  const a = message("1", "tool_call", "read_file", { callId: "a" });
+  const b = message("2", "tool_call", "read_file", { callId: "b" });
+  const bResult = message("3", "tool_result", "read_file", { callId: "b", content: "B" });
+  const aResult = message("4", "tool_result", "read_file", { callId: "a", content: "A" });
+  const rows = buildToolActivities([a, b, bResult, aResult]);
+  assert.equal(rows[0].result, aResult);
+  assert.equal(rows[1].result, bResult);
+  const orphan = message("5", "tool_result", "read_file", { callId: "other" });
+  assert.equal(buildToolActivities([a, orphan])[0].result, undefined);
 });

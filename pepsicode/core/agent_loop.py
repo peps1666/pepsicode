@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from collections.abc import Callable, Generator, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import closing, nullcontext
@@ -315,68 +316,120 @@ def append_queued_inputs(
     return bool(pending)
 
 
+def _tool_recovery_nudge(calls, results):
+    failed = [
+        call["toolName"]
+        for call, result in zip(calls, results, strict=False)
+        if not result.ok and result.status not in {"blocked", "cancelled"} and not result.awaitUser
+    ]
+    if not failed:
+        return None
+    return {
+        "role": "user",
+        "internal": True,
+        "content": (
+            "A tool failed (" + ", ".join(failed) + "). Inspect the returned error and continue the user's task "
+            "by correcting arguments, checking the current state, or choosing another appropriate tool. "
+            "Do not blindly repeat a write or command: check whether it partially completed first. "
+            "Do not bypass a permission denial or cancellation. If recovery requires user input, "
+            "explain the concrete blocker and what is still incomplete; never claim the failed operation succeeded."
+        ),
+    }
+
+
 def _execute_calls_in_order(
     calls: Sequence[dict[str, Any]],
     tools: ToolRegistry,
     context: ToolContext,
     on_tool_start: Callable[[str, dict[str, Any]], None] | None,
     on_tool_result: Callable[[str, str, bool], None] | None,
+    on_tool_event: Callable[[str, dict[str, Any]], None] | None = None,
 ):
-    """Execute tool calls, running consecutive concurrency-safe (read-only)
-    calls in parallel while keeping side-effecting tools exclusive.
+    """Keep model history ordered; structured observers see actual completion order."""
 
-    Results are returned in the original call order so the message history
-    stays deterministic regardless of which tool finished first.
-    """
+    def notify(name, data):
+        if on_tool_event:
+            try:
+                on_tool_event(name, data)
+            except Exception as error:  # noqa: BLE001 - observers cannot turn a finished tool into a failure
+                logger.debug("Tool observer failed: %s", type(error).__name__)
+
+    def execute(k, rejected=None):
+        call = calls[k]
+        started_at, clock = int(time.time() * 1000), time.monotonic()
+        common = {"tool": call["toolName"], "call_id": str(call.get("id", "")), "started_at": started_at}
+        notify("tool/call", {**common, "input": call["input"], "status": "running"})
+        result = (
+            rejected
+            if rejected is not None
+            else tools.execute(
+                call["toolName"],
+                call["input"],
+                replace(context, tool_use_id=str(call.get("id", "")), call_index=k),
+            )
+        )
+        duration = max(0, round((time.monotonic() - clock) * 1000))
+        status = result.status or ("completed" if result.ok else "failed")
+        call["_telemetry"] = {
+            "startedAt": started_at,
+            "durationMs": duration,
+            "toolStatus": status,
+            "exitCode": result.exit_code,
+        }
+        notify(
+            "tool/result",
+            {
+                **common,
+                "output": result.output,
+                "is_error": not result.ok,
+                "status": status,
+                "duration_ms": duration,
+                "exit_code": result.exit_code,
+            },
+        )
+        return result
+
+    def start(k):
+        if on_tool_start and not on_tool_event:
+            on_tool_start(calls[k]["toolName"], calls[k]["input"])
+
+    def finish(k, result):
+        if on_tool_result and not on_tool_event:
+            on_tool_result(calls[k]["toolName"], result.output, not result.ok)
+
     results: list = [None] * len(calls)
-    index = 0
-    total = len(calls)
-    if total > 1 and any(call.get("toolName") == "exit_plan_mode" for call in calls):
-        message = "exit_plan_mode must be the only tool call in its response; no tools were executed."
-        for k, call in enumerate(calls):
-            if on_tool_start:
-                on_tool_start(call["toolName"], call["input"])
-            results[k] = ToolResult(ok=False, output=message)
-            if on_tool_result:
-                on_tool_result(call["toolName"], message, True)
+    if len(calls) > 1 and any(call.get("toolName") == "exit_plan_mode" for call in calls):
+        for k in range(len(calls)):
+            start(k)
+            results[k] = execute(
+                k,
+                ToolResult(
+                    False,
+                    "exit_plan_mode must be the only tool call in its response; no tools were executed.",
+                    status="blocked",
+                ),
+            )
+            finish(k, results[k])
         return results
-    while index < total:
-        run = []
-        cursor = index
-        while cursor < total and _is_concurrency_safe(tools, calls[cursor]["toolName"]):
+    index = 0
+    while index < len(calls):
+        run, cursor = [], index
+        while cursor < len(calls) and _is_concurrency_safe(tools, calls[cursor]["toolName"]):
             run.append(cursor)
             cursor += 1
-
         if len(run) > 1:
             for k in run:
-                if on_tool_start:
-                    on_tool_start(calls[k]["toolName"], calls[k]["input"])
+                start(k)
             with ThreadPoolExecutor(max_workers=min(MAX_PARALLEL_TOOLS, len(run))) as pool:
-                future_by_index = {
-                    k: pool.submit(
-                        tools.execute,
-                        calls[k]["toolName"],
-                        calls[k]["input"],
-                        replace(context, tool_use_id=str(calls[k].get("id", "")), call_index=k),
-                    )
-                    for k in run
-                }
+                futures = {k: pool.submit(execute, k) for k in run}
                 for k in run:
-                    results[k] = future_by_index[k].result()
-                    if on_tool_result:
-                        on_tool_result(calls[k]["toolName"], results[k].output, not results[k].ok)
+                    results[k] = futures[k].result()
+                    finish(k, results[k])
             index = cursor
         else:
-            k = index
-            if on_tool_start:
-                on_tool_start(calls[k]["toolName"], calls[k]["input"])
-            results[k] = tools.execute(
-                calls[k]["toolName"],
-                calls[k]["input"],
-                replace(context, tool_use_id=str(calls[k].get("id", "")), call_index=k),
-            )
-            if on_tool_result:
-                on_tool_result(calls[k]["toolName"], results[k].output, not results[k].ok)
+            start(index)
+            results[index] = execute(index)
+            finish(index, results[index])
             index += 1
     return results
 
@@ -392,6 +445,7 @@ def run_agent_turn(
     max_steps: int = 50,
     on_tool_start: Callable[[str, dict], None] | None = None,
     on_tool_result: Callable[[str, str, bool], None] | None = None,
+    on_tool_event: Callable[[str, dict[str, Any]], None] | None = None,
     on_assistant_message: Callable[[str], None] | None = None,
     on_progress_message: Callable[[str], None] | None = None,
     context_manager: ContextManager | None = None,
@@ -789,6 +843,7 @@ def run_agent_turn(
             context,
             on_tool_start,
             on_tool_result,
+            on_tool_event,
         )
 
         await_user_result = None
@@ -810,6 +865,7 @@ def run_agent_turn(
                     "toolName": call["toolName"],
                     "content": bounded_output,
                     "isError": not result.ok,
+                    **call.get("_telemetry", {}),
                 }
             )
             if context_manager is not None:
@@ -822,6 +878,10 @@ def run_agent_turn(
             if result.awaitUser and await_user_result is None:
                 await_user_result = result
 
+        if await_user_result is None:
+            guidance = _tool_recovery_nudge(next_step.calls, results)
+            if guidance:
+                current_messages.append(guidance)
         if await_user_result is not None:
             if on_assistant_message:
                 on_assistant_message(await_user_result.output)
@@ -958,6 +1018,7 @@ def run_agent_turn_stream(
     on_token: Callable[[StreamToken], None] | None = None,
     on_tool_start: Callable[[str, dict], None] | None = None,
     on_tool_result: Callable[[str, str, bool], None] | None = None,
+    on_tool_event: Callable[[str, dict[str, Any]], None] | None = None,
     on_assistant_message: Callable[[str], None] | None = None,
     on_error_message: Callable[[str], None] | None = None,
     on_progress_message: Callable[[str], None] | None = None,
@@ -1061,6 +1122,19 @@ def run_agent_turn_stream(
 
                 def on_stream_token(token: StreamToken) -> None:
                     raise_if_cancelled()
+                    if token.type == "retry":
+                        record = {
+                            "role": "assistant_progress",
+                            "content": token.content,
+                            "activityKind": "retry",
+                            "retry": token.retry,
+                        }
+                        current_messages.append(record)
+                        if on_tool_event:
+                            on_tool_event("request/retry", {"content": token.content, "retry": token.retry})
+                        elif on_progress_message:
+                            on_progress_message(token.content)
+                        return
                     if token.type == "usage" and token.usage is not None and context_manager is not None:
                         context_manager.update_usage(prompt_tokens(token.usage), token.usage.get("output_tokens", 0))
                     if on_token is not None:
@@ -1269,6 +1343,7 @@ def run_agent_turn_stream(
                 context,
                 on_tool_start,
                 on_tool_result,
+                on_tool_event,
             )
 
             await_user_result = None
@@ -1290,6 +1365,7 @@ def run_agent_turn_stream(
                         "toolName": call["toolName"],
                         "content": bounded_output,
                         "isError": not result.ok,
+                        **call.get("_telemetry", {}),
                     }
                 )
                 if context_manager is not None:
@@ -1302,6 +1378,10 @@ def run_agent_turn_stream(
                 if result.awaitUser and await_user_result is None:
                     await_user_result = result
 
+            if await_user_result is None:
+                guidance = _tool_recovery_nudge(parsed_calls, results)
+                if guidance:
+                    current_messages.append(guidance)
             if await_user_result is not None:
                 if on_assistant_message:
                     on_assistant_message(await_user_result.output)

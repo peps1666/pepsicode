@@ -55,6 +55,27 @@ async function session() {
   };
 }
 
+test("execution IDs, timing, retries and verification survive authoritative history replacement", async () => {
+  const api = await session();
+  api.event("tool/call", {tool:"read_file",input:{path:"a"},call_id:"actual",started_at:1000});
+  api.event("tool/result", {tool:"read_file",output:"Failed",is_error:true,call_id:"actual",started_at:1000,duration_ms:42,status:"failed",exit_code:1});
+  api.event("request/retry", {content:"Retry",retry:{attempt:1,limit:2,delay_ms:500,reason:"HTTP 503"}});
+  assert.equal(api.store.getState().messages[1].durationMs,42);
+  assert.equal(api.store.getState().messages[2].activityKind,"retry");
+  const verification={status:"not_run",reason_code:"no_checks",reason:"No checks",ok:false};
+  api.event("session/view", {session_id:"test",history:[
+    {role:"tool_call",tool_name:"read_file",call_id:"actual",tool_input:{path:"a"}},
+    {role:"tool_result",tool_name:"read_file",call_id:"actual",started_at:1000,duration_ms:42,status:"failed",exit_code:1,content:"Failed",is_error:true},
+    {role:"progress",content:"Retry",activity_kind:"retry",retry:{attempt:1,limit:2,delay_ms:500,reason:"HTTP 503"}},
+    {role:"assistant",content:"Answer",verification},
+  ]});
+  const messages=api.store.getState().messages;
+  assert.equal(messages[0].callId,messages[1].callId);
+  assert.equal(messages[1].durationMs,42);
+  assert.equal(messages[2].retry.attempt,1);
+  assert.deepEqual(messages[3].verification,verification);
+});
+
 test("resuming a conversation in another project sends its workspace and refreshes that project's list", async () => {
   const api = await session();
   await api.store.getState().resumeSession("other-chat", "/another-project");

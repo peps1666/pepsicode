@@ -9,6 +9,8 @@ import styles from "./ChatView.module.css";
 import Icon, { type IconName } from "../components/Icon";
 import CatLogo from "../components/CatLogo";
 import type { FrameControls } from "../layout/AppFrame";
+import ExecutionTrace from "./ExecutionTrace";
+import type { TraceRow } from "./trajectory";
 
 const suggestions: { icon: IconName; title: string; detail: string; prompt: string }[] = [
   { icon: "search", title: "了解这个项目", detail: "梳理结构与核心逻辑", prompt: "帮我梳理这个项目的目录结构、技术栈和核心执行流程。" },
@@ -45,6 +47,19 @@ function buildTimeline(messages: ChatMessage[]): TimelineBlock[] {
 export default function ChatView({ onSend, frameControls }: { onSend: (input: string, mode?: InputMode) => Promise<void>; frameControls: FrameControls }) {
   const { messages, isRunning, cwd, modelUpdating, permissionUpdating, sessionId, planMode, verification, branchUpdating, branchError, setDraft } = useSessionStore();
   const [treeOpen, setTreeOpen] = useState(false);
+  const [view, setView] = useState<"chat" | "trace">("chat");
+  const [continuationError, setContinuationError] = useState("");
+  const traceFailures = messages.filter(message => message.isError && ["tool_result", "assistant"].includes(message.role)).length;
+  function continueFrom(row: TraceRow) {
+    if (isRunning || modelUpdating || branchUpdating || permissionUpdating || !sessionId) return;
+    setContinuationError("");
+    setView("chat");
+    const prompt = "继续处理当前任务中的失败步骤：" + row.label + " " + row.summary +
+      "\n失败记录：" + row.output.slice(0, 1500) +
+      "\n请先分析错误和当前项目状态，确认之前操作是否部分完成，再调整参数或选择替代方案继续。保留已有结果；不要直接重复写入或命令，也不要绕过权限或取消操作。若仍受阻，请说明未完成的部分。";
+    void onSend(prompt).catch(error => setContinuationError(error instanceof Error ? error.message : String(error)));
+  }
+
   const projectName = cwd.replace(/\\/g, "/").split("/").filter(Boolean).pop() || "本地项目";
   const taskName = messages.find((message) => message.role === "user")?.content || "新任务";
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -88,9 +103,21 @@ export default function ChatView({ onSend, frameControls }: { onSend: (input: st
           <button className={styles.iconButton} type="button" onClick={frameControls.toggleDetails} title={frameControls.detailsCollapsed ? "展开会话详情" : "收起会话详情"} aria-label={frameControls.detailsCollapsed ? "展开会话详情" : "收起会话详情"} aria-expanded={!frameControls.detailsCollapsed} aria-controls="session-details"><Icon name="panel" /></button>
         </div>
       </header>
+      <nav className={styles.viewTabs} role="tablist" aria-label="会话视图" onKeyDown={event => {
+        if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+        event.preventDefault();
+        const next = event.key === "Home" ? "chat" : event.key === "End" ? "trace" : view === "chat" ? "trace" : "chat";
+        setView(next); event.currentTarget.querySelector<HTMLButtonElement>(next === "chat" ? "#chat-tab" : "#trace-tab")?.focus();
+      }}>
+        <button type="button" role="tab" id="chat-tab" tabIndex={view === "chat" ? 0 : -1} aria-selected={view === "chat"} aria-controls="conversation-content" onClick={() => setView("chat")}>对话</button>
+        <button type="button" role="tab" id="trace-tab" tabIndex={view === "trace" ? 0 : -1} aria-selected={view === "trace"} aria-controls="execution-content" onClick={() => setView("trace")}>执行轨迹{traceFailures > 0 && <span className={styles.failureCount}>{traceFailures}</span>}</button>
+      </nav>
       {treeOpen && <SessionTree onClose={() => setTreeOpen(false)} />}
       {branchError && !treeOpen && <p className={styles.branchError} role="alert">{branchError}</p>}
-      <div className={styles.messageList} ref={scrollRef} onScroll={handleScroll}>
+      {continuationError && <p className={styles.branchError} role="alert">{continuationError}</p>}
+      {view === "trace" ? <div id="execution-content" role="tabpanel" aria-labelledby="trace-tab" className={styles.traceArea}>
+        <ExecutionTrace messages={messages} running={isRunning} verification={verification} canContinue={Boolean(sessionId) && !isRunning && !modelUpdating && !branchUpdating && !permissionUpdating} onContinue={continueFrom} />
+      </div> : <div id="conversation-content" role="tabpanel" aria-labelledby="chat-tab" className={styles.messageList} ref={scrollRef} onScroll={handleScroll}>
         {messages.length === 0 ? (
           <div className={styles.emptyState}>
             <div className={styles.welcomeMark}><CatLogo size={54} /></div>
@@ -111,21 +138,12 @@ export default function ChatView({ onSend, frameControls }: { onSend: (input: st
                 key={`thinking-${block.messages[0].id}`}
                 messages={block.messages}
                 autoExpanded={isRunning && !currentTurnHasAnswer && block.endIndex > lastUserIndex}
+                onViewTrace={() => setView("trace")}
               />
             ))}
           </div>
         )}
-      </div>
-      {verification && !["no_changes", "awaiting_user"].includes(verification.reason_code || "") && (
-        <details className={styles.verification} role="status">
-          <summary>
-            {({ passed: "验证通过", failed: "验证失败", not_run: "尚未验证", blocked: "验证受阻", cancelled: "验证已停止" } as Record<string, string>)[verification.status] || verification.status}
-            {" · "}
-            {({ disabled: "项目未开启自动验证", no_tests: "没有找到可运行的检查" } as Record<string, string>)[verification.reason_code || ""] || verification.reason}
-          </summary>
-          {verification.details && <pre>{verification.details}</pre>}
-        </details>
-      )}
+      </div>}
       <Composer onSend={onSend} onOpenSettings={() => setSettingsOpen(true)} disabled={!sessionId || modelUpdating || permissionUpdating || branchUpdating} running={isRunning} />
       {settingsOpen && <ModelSettings onClose={() => setSettingsOpen(false)} />}
     </div>

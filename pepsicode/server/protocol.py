@@ -96,6 +96,8 @@ EventName = Literal[
     "progress/message",
     "tool/call",
     "tool/result",
+    "request/retry",
+    "verification/update",
     "permission/request",
     "hook/notification",
     "hook/context",
@@ -157,13 +159,28 @@ def serialize_session_history(messages: list[dict[str, Any]]) -> list[dict[str, 
                     "content": content,
                     "is_error": bool(message.get("isError", False)),
                     "entry_id": message.get("entryId"),
+                    **(
+                        {"verification": message["verification"]}
+                        if isinstance(message.get("verification"), dict)
+                        else {}
+                    ),
                 }
             )
             continue
 
         if role == "assistant_progress":
             content, _ = parse_assistant_text(str(message.get("content", "")))
-            history.append({"role": "progress", "content": content})
+            history.append(
+                {
+                    "role": "progress",
+                    "content": content,
+                    **(
+                        {"activity_kind": message["activityKind"], "retry": message.get("retry")}
+                        if message.get("activityKind")
+                        else {}
+                    ),
+                }
+            )
             continue
 
         if role == "assistant_tool_call":
@@ -172,6 +189,7 @@ def serialize_session_history(messages: list[dict[str, Any]]) -> list[dict[str, 
                     "role": "tool_call",
                     "tool_name": str(message.get("toolName", "unknown")),
                     "tool_input": message.get("input"),
+                    **({"call_id": message["toolUseId"]} if message.get("toolUseId") else {}),
                 }
             )
             continue
@@ -183,6 +201,17 @@ def serialize_session_history(messages: list[dict[str, Any]]) -> list[dict[str, 
                     "content": str(message.get("content", "")),
                     "tool_name": str(message.get("toolName", "unknown")),
                     "is_error": bool(message.get("isError", False)),
+                    **{
+                        wire: message[key]
+                        for key, wire in (
+                            ("toolUseId", "call_id"),
+                            ("startedAt", "started_at"),
+                            ("durationMs", "duration_ms"),
+                            ("toolStatus", "status"),
+                            ("exitCode", "exit_code"),
+                        )
+                        if message.get(key) is not None
+                    },
                 }
             )
 

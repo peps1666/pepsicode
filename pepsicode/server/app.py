@@ -989,6 +989,11 @@ class PepsiCodeServer:
                     asyncio.run_coroutine_threadsafe(emit("message/start", {}), loop)
                 asyncio.run_coroutine_threadsafe(emit("message/delta", {"text": token.content}), loop)
 
+            def on_tool_event(event_name: str, data: dict) -> None:
+                if isinstance(data.get("output"), str):
+                    data = {**data, "output": data["output"][:10000]}
+                asyncio.run_coroutine_threadsafe(emit(event_name, data), loop)
+
             def on_tool_start(tool_name: str, tool_input: dict) -> None:
                 asyncio.run_coroutine_threadsafe(
                     emit("tool/call", {"tool": tool_name, "input": tool_input, "status": "running"}), loop
@@ -1052,6 +1057,7 @@ class PepsiCodeServer:
                             context_manager=session.context_manager,
                             cost_tracker=session.cost_tracker,
                             on_token=on_token,
+                            on_tool_event=on_tool_event,
                             on_tool_start=on_tool_start,
                             on_tool_result=on_tool_result,
                             on_assistant_message=on_assistant_message,

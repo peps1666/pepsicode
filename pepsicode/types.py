@@ -30,6 +30,13 @@ class ChatMessage(TypedDict, total=False):
     input: Any
     isError: bool
     awaitingUser: bool
+    startedAt: int
+    durationMs: int
+    toolStatus: str
+    exitCode: int | None
+    activityKind: str
+    retry: dict[str, Any]
+    verification: dict[str, Any]
 
 
 class ToolCall(TypedDict):
@@ -73,13 +80,14 @@ class StreamToken:
                          it must be sent back unchanged alongside the tool calls it preceded
     """
 
-    type: Literal["text", "tool_use", "thinking", "usage", "done"]
+    type: Literal["text", "tool_use", "thinking", "usage", "done", "retry"]
     content: str = ""
     tool_name: str | None = None
     tool_id: str | None = None
     tool_input_partial: str = ""
     usage: dict[str, int] | None = None
     thinking_block: dict[str, Any] | None = None
+    retry: dict[str, Any] | None = None
 
 
 class ModelAdapter(Protocol):

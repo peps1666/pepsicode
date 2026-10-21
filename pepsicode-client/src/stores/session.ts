@@ -12,6 +12,18 @@ export interface ChatMessage {
   isStreaming?: boolean;
   timestamp: number;
   entryId?: string;
+  callId?: string;
+  startedAt?: number;
+  durationMs?: number;
+  toolStatus?: string;
+  exitCode?: number;
+  activityKind?: "retry";
+  retry?: { attempt: number; limit: number; delay_ms: number; reason: string; started_at?: number };
+  verification?: VerificationReport;
+}
+
+export interface VerificationReport {
+  status: string; reason: string; reason_code?: string; details?: string; ok: boolean;
 }
 
 export interface BranchNode {
@@ -63,6 +75,14 @@ interface SessionHistoryItem {
   tool_name?: string;
   tool_input?: unknown;
   is_error?: boolean;
+  call_id?: string;
+  started_at?: number;
+  duration_ms?: number;
+  status?: string;
+  exit_code?: number;
+  activity_kind?: "retry";
+  retry?: ChatMessage["retry"];
+  verification?: VerificationReport;
 }
 
 interface SessionState {
@@ -74,7 +94,7 @@ interface SessionState {
   forkSession: (id: string) => Promise<void>;
   cloneSession: () => Promise<void>;
   regenerate: (id: string) => Promise<void>;
-  verification: { status: string; reason: string; reason_code?: string; details?: string; ok: boolean } | null;
+  verification: VerificationReport | null;
   cacheHitPercentage: number | null;
   accessMode: "read_only" | "auto" | "full_access";
   permissionUpdating: boolean;
@@ -205,6 +225,14 @@ function hydrateSessionHistory(value: unknown): ChatMessage[] {
       isError: Boolean(item.is_error),
       timestamp: baseTime + index,
       entryId: item.entry_id,
+      callId: item.call_id,
+      startedAt: item.started_at,
+      durationMs: item.duration_ms,
+      toolStatus: item.status,
+      exitCode: item.exit_code,
+      activityKind: item.activity_kind,
+      retry: item.retry,
+      verification: item.verification,
     } satisfies ChatMessage];
   });
 }
@@ -456,6 +484,10 @@ export const useSessionStore = create<SessionState>((set, get) => ({
           }));
           break;
         }
+        case "request/retry": {
+          set(state => ({ messages: [...state.messages, { id: nextMsgId(), role: "progress", content: data.content || "正在重试模型连接", timestamp: Date.now(), activityKind: "retry", retry: data.retry }] }));
+          break;
+        }
         case "tool/call": {
           const id = nextMsgId();
           set((state) => ({
@@ -467,6 +499,8 @@ export const useSessionStore = create<SessionState>((set, get) => ({
                 content: "",
                 toolName: data.tool,
                 toolInput: data.input,
+                callId: data.call_id,
+                startedAt: data.started_at,
                 timestamp: Date.now(),
               },
             ],
@@ -484,6 +518,11 @@ export const useSessionStore = create<SessionState>((set, get) => ({
                 content: data.output || "",
                 toolName: data.tool,
                 isError: data.is_error,
+                callId: data.call_id,
+                startedAt: data.started_at,
+                durationMs: data.duration_ms,
+                toolStatus: data.status,
+                exitCode: data.exit_code,
                 timestamp: Date.now(),
               },
             ],

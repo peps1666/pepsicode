@@ -30,6 +30,7 @@ async function main() {
   const userData = path.join(home, "desktop-profile");
   const workspace = path.join(directory, "项目 workspace");
   fs.mkdirSync(workspace, { recursive: true });
+  fs.writeFileSync(path.join(workspace, "README.md"), "Local desktop trajectory fixture.\n");
   fs.mkdirSync(userData, { recursive: true });
   execFileSync(path7za, ["x", archive, `-o${application}`, "-y"], { windowsHide: true, stdio: "pipe" });
   const icon = fs.readFileSync(path.join(client, "assets/app-icon.ico"));
@@ -41,6 +42,7 @@ async function main() {
     }
   }
   let authenticatedCalls = 0;
+  let modelRequests = 0;
   const api = http.createServer((request, response) => {
     if (request.headers.authorization !== "Bearer desktop-local-test-key") {
       response.writeHead(401); response.end(); return;
@@ -53,11 +55,29 @@ async function main() {
     }
     request.resume();
     request.on("end", () => {
+      modelRequests++;
+      if (modelRequests === 1) {
+        response.writeHead(503, { "Content-Type": "application/json" });
+        response.end(JSON.stringify({ error: { message: "Transient fixture failure" } }));
+        return;
+      }
       response.setHeader("Content-Type", "text/event-stream");
+      const calls = {
+        2: { id: "read-missing", name: "read_file", input: { path: "missing-trajectory-file.txt" } },
+        3: { id: "read-existing", name: "read_file", input: { path: "README.md" } },
+        4: { id: "write-result", name: "write_file", input: { path: "trajectory-result.txt", content: "written once" } },
+      };
+      const call = calls[modelRequests];
+      const blocks = call ? [
+        ["content_block_start", { index: 0, content_block: { type: "tool_use", id: call.id, name: call.name, input: {} } }],
+        ["content_block_delta", { index: 0, delta: { type: "input_json_delta", partial_json: JSON.stringify(call.input) } }],
+      ] : [
+        ["content_block_start", { index: 0, content_block: { type: "text", text: "" } }],
+        ["content_block_delta", { index: 0, delta: { type: "text_delta", text: modelRequests > 5 ? "LOCAL_TRAJECTORY_CONTINUE_OK" : "LOCAL_PROVIDER_RESTART_OK" } }],
+      ];
       const events = [
         ["message_start", { message: { usage: { input_tokens: 10 } } }],
-        ["content_block_start", { index: 0, content_block: { type: "text", text: "" } }],
-        ["content_block_delta", { index: 0, delta: { type: "text_delta", text: "LOCAL_PROVIDER_RESTART_OK" } }],
+        ...blocks,
         ["content_block_stop", { index: 0 }],
         ["message_delta", { delta: { stop_reason: "end_turn" }, usage: { output_tokens: 5 } }],
         ["message_stop", {}],
@@ -201,6 +221,20 @@ async function main() {
     await until(() => evaluate("!!document.querySelector('button[aria-label=\"发送\"]:not(:disabled)')"), "Restart send remained disabled");
     await evaluate("document.querySelector('button[aria-label=\"发送\"]').click()");
     await until(() => evaluate("document.body.innerText.includes('LOCAL_PROVIDER_RESTART_OK')"), "Saved provider failed to perform an authenticated streamed roundtrip");
+    await until(() => evaluate("!document.querySelector('button[aria-label=\"停止任务\"]')"), "Trajectory turn did not finish");
+    assert.equal(await evaluate("document.body.innerText.includes('No verification commands found')"), false, "No-check warning leaked into chat");
+    assert.equal(fs.readFileSync(path.join(workspace, "trajectory-result.txt"), "utf8"), "written once");
+    await evaluate("document.querySelector('#trace-tab').click()");
+    await until(() => evaluate("!!document.querySelector('tr[data-call-id=\"read-missing\"]')"), "Recorded tool IDs did not survive authoritative history refresh");
+    assert.equal(await evaluate("document.querySelector('tr[data-call-id=\"read-missing\"]').dataset.status"), "failed");
+    assert.equal(await evaluate("document.querySelector('tr[data-call-id=\"read-existing\"]').dataset.status"), "completed");
+    assert.equal(await evaluate("document.body.innerText.includes('模型请求重试') && document.body.innerText.includes('项目未发现自动检查命令')"), true);
+    await evaluate("document.querySelector('tr[data-call-id=\"read-missing\"]').click()");
+    assert.equal(await evaluate("document.querySelector('aside[aria-label=\"执行步骤详情\"]').innerText.includes('missing-trajectory-file.txt')"), true);
+    assert.equal(await evaluate("document.querySelector('aside[aria-label=\"执行步骤详情\"]').innerText.includes(' ms')"), true, "Recorded tool duration missing");
+    await evaluate("Array.from(document.querySelectorAll('button')).find(button => button.innerText === '继续处理').click()");
+    await until(() => evaluate("document.body.innerText.includes('LOCAL_TRAJECTORY_CONTINUE_OK')"), "Continue from failure did not resume the task");
+    assert.equal(modelRequests, 6, "Continuing must not silently replay prior tool calls");
     assert.ok(authenticatedCalls >= 3);
     const restartPort = Number([...fs.readFileSync(path.join(userData, "backend.log"), "utf8").matchAll(/Starting backend on port (\d+)/g)].at(-1)[1]);
     await evaluate("window.close()").catch(() => {});
@@ -212,9 +246,9 @@ async function main() {
     fs.writeFileSync(path.join(build, "desktop-zip-smoke.json"), JSON.stringify({
       passed: true, archive: path.basename(archive), runtimePath: env.PATH,
       sha256: fs.readFileSync(archive + ".sha256", "utf8").split(/\s+/)[0],
-      checks: ["real ZIP extraction", "Unicode and space paths", "isolated profile", "no Python/Node on PATH", "real renderer and bundled backend", "mock message roundtrip", "styled custom menu within viewport", "menu Escape preserves dialog", "all builtin providers selectable", "DeepSeek key setup and save", "key absent from UI summary, localStorage and logs", "provider persists after restart", "authenticated local provider streaming roundtrip", "cat icon embedded in both executables", "backend shutdown"],
+      checks: ["real ZIP extraction", "Unicode and space paths", "isolated profile", "no Python/Node on PATH", "real renderer and bundled backend", "mock message roundtrip", "styled custom menu within viewport", "menu Escape preserves dialog", "all builtin providers selectable", "DeepSeek key setup and save", "key absent from UI summary, localStorage and logs", "provider persists after restart", "authenticated local provider streaming roundtrip", "transient streaming request recovery", "durable tool call IDs and real timing", "failed and successful tools in trajectory", "no-check verification stays out of chat", "continue from recorded failure without replay", "cat icon embedded in both executables", "backend shutdown"],
     }, null, 2));
-    console.log("PASS: ZIP desktop, cat executable icons, builtin key setup, persistence across restart, authenticated local provider streaming and backend shutdown; no Python/Node on PATH.");
+    console.log("PASS: ZIP desktop, provider setup/restart, streaming retry, durable execution trajectory, failed tools, continue without replay, cat icons and backend shutdown; no Python/Node on PATH.");
   } catch (error) {
     const logFile = path.join(userData, "backend.log");
     const backendOutput = fs.existsSync(logFile) ? fs.readFileSync(logFile, "utf8") : "No backend log was created";

@@ -11,11 +11,12 @@ export function isThinkingMessage(message: ChatMessage): boolean {
 interface ThinkingGroupProps {
   messages: ChatMessage[];
   autoExpanded: boolean;
+  onViewTrace?: () => void;
 }
 
-export default function ThinkingGroup({ messages, autoExpanded }: ThinkingGroupProps) {
+export default function ThinkingGroup({ messages, autoExpanded, onViewTrace }: ThinkingGroupProps) {
   const failures = messages.filter((message) => message.role === "tool_result" && message.isError).length;
-  const [expanded, setExpanded] = useState(autoExpanded || failures > 0);
+  const [expanded, setExpanded] = useState(autoExpanded);
   const wasAutoExpanded = useRef(autoExpanded);
   const contentId = useId();
   const activities = buildToolActivities(messages);
@@ -24,7 +25,7 @@ export default function ThinkingGroup({ messages, autoExpanded }: ThinkingGroupP
     if (autoExpanded) {
       setExpanded(true);
     } else if (wasAutoExpanded.current) {
-      setExpanded(failures > 0);
+      setExpanded(false);
     }
     wasAutoExpanded.current = autoExpanded;
   }, [autoExpanded, failures]);
@@ -37,7 +38,7 @@ export default function ThinkingGroup({ messages, autoExpanded }: ThinkingGroupP
 
   return (
     <section className={styles.container}>
-      <button
+      <div className={styles.headingRow}><button
         type="button"
         className={styles.header}
         onClick={() => setExpanded((value) => !value)}
@@ -45,10 +46,10 @@ export default function ThinkingGroup({ messages, autoExpanded }: ThinkingGroupP
         aria-controls={contentId}
       >
         <span className={`${styles.indicator} ${autoExpanded ? styles.indicatorActive : ""}`} />
-        <span className={styles.title}>{autoExpanded ? "执行中…" : "工具活动"}</span>
+        <span className={styles.title}>{autoExpanded ? "执行中…" : "执行过程"}</span>
         {summary && <span className={`${styles.summary} ${failures ? styles.hasFailures : ""}`}>{summary}</span>}
         <svg className={`${styles.chevron} ${expanded ? styles.chevronOpen : ""}`} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true"><path d="m6 4 4 4-4 4" /></svg>
-      </button>
+      </button>{onViewTrace && <button type="button" className={styles.traceLink} onClick={onViewTrace}>查看轨迹</button>}</div>
       {expanded && (
         <div className={styles.content} id={contentId}>
           {activities.map((activity) => <ToolActivityItem key={activity.message.id} activity={activity} active={autoExpanded} />)}
