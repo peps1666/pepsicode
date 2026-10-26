@@ -6,6 +6,8 @@ import subprocess
 from datetime import datetime
 from pathlib import Path
 
+from pepsicode.execution import process as process_service
+from pepsicode.execution.filesystem import FILES
 from pepsicode.worktree.changes import count_worktree_changes
 from pepsicode.worktree.models import Worktree, WorktreeSession
 from pepsicode.worktree.session import load_worktree_session, save_worktree_session
@@ -53,7 +55,7 @@ class WorktreeManager:
         from pepsicode.subprocess_utils import hide_window_kwargs
 
         env = {**os.environ, **GIT_ENV}
-        return subprocess.run(
+        return process_service.run(
             ["git"] + args,
             cwd=cwd or self.repo_root,
             capture_output=True,
@@ -158,7 +160,7 @@ class WorktreeManager:
             self.active[name] = wt
             return wt
 
-        os.makedirs(self.worktree_dir, exist_ok=True)
+        FILES.mkdir(self.worktree_dir)
 
         result = self._run_git(
             [

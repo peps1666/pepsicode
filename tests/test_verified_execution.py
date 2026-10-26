@@ -53,6 +53,9 @@ def test_actual_failure_is_fed_back_and_fixed_then_reverified(tmp_path):
     calls = []
     runtime = {
         "verificationMode": "auto",
+        "taskAcceptance": [
+            {"id": "addition", "kind": "file_contains", "path": "calculation.py", "text": "return a + b"}
+        ],
         "verificationCommands": [
             {
                 "name": "addition behavior",

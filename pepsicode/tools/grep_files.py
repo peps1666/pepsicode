@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+from pepsicode.execution.filesystem import FILES
 from pepsicode.tooling import ToolDefinition, ToolResult
 from pepsicode.workspace import resolve_tool_path
 
@@ -52,7 +53,7 @@ def _run(input_data: dict, context) -> ToolResult:
         if not file_path.is_file():
             continue
         try:
-            lines = file_path.read_text(encoding="utf-8").splitlines()
+            lines = FILES.read_text(file_path).splitlines()
         except UnicodeDecodeError:
             skipped += 1
             continue

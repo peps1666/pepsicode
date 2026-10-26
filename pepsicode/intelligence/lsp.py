@@ -16,6 +16,7 @@ from concurrent.futures import TimeoutError as FutureTimeout
 from pathlib import Path
 
 from pepsicode.cancellation import TurnCancelledError
+from pepsicode.execution import process as process_service
 from pepsicode.subprocess_utils import hide_window_kwargs
 
 LANGUAGES = {
@@ -117,21 +118,13 @@ class LspClient:
         self.diagnostics: dict[str, tuple[int | None, list]] = {}
         self._diagnostics_changed = threading.Condition()
         self._closed = False
-        if context.permissions is not None:
-            outcome = context.permissions.check_command(
-                command[0],
-                command[1:],
-                str(root),
-                force_prompt_reason="Start a language server to analyze this workspace",
-            )
-            if outcome.is_denied or outcome.is_unavailable:
-                raise PermissionError(outcome.denial_message(scope=command[0]))
         executable = shutil.which(command[0]) or command[0]
         argv = [executable, *command[1:]]
         if os.name == "nt" and Path(executable).suffix.lower() in {".cmd", ".bat"}:
             argv = ["cmd", "/d", "/s", "/c", subprocess.list2cmdline(argv)]
-        self.process = subprocess.Popen(
+        self.process = process_service.Popen(
             argv,
+            persistent=True,
             cwd=root,
             env={**os.environ, **environment} if environment else None,
             stdin=subprocess.PIPE,
@@ -139,14 +132,7 @@ class LspClient:
             stderr=subprocess.DEVNULL,
             **hide_window_kwargs({"start_new_session": True} if os.name != "nt" else {}),
         )
-        self._job = None
-        if os.name == "nt":
-            from pepsicode.subprocess_utils import WindowsProcessJob
-
-            try:
-                self._job = WindowsProcessJob(self.process)
-            except OSError:
-                pass
+        self._job = getattr(self.process, "_pepsi_job", None)
         self._reader = threading.Thread(target=self._read, daemon=True)
         self._reader.start()
         try:

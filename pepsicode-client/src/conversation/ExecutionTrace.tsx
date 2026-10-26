@@ -1,12 +1,13 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
-import type { ChatMessage, VerificationReport } from "../stores/session";
+import type { ChatMessage, TaskReport, VerificationReport } from "../stores/session";
 import { buildTrajectory, formatDuration, traceStatusLabels, type TraceRow } from "./trajectory";
 import Icon from "../components/Icon";
 import Button from "../components/Button";
 import styles from "./ExecutionTrace.module.css";
 
-export default function ExecutionTrace({ messages, running, verification, canContinue, onContinue }: {
+export default function ExecutionTrace({ messages, running, verification, taskReport, canContinue, onContinue }: {
   messages: ChatMessage[]; running: boolean; verification: VerificationReport | null;
+  taskReport?: TaskReport | null;
   canContinue: boolean; onContinue: (row: TraceRow) => void;
 }) {
   const rows = useMemo(() => buildTrajectory(messages, running, verification), [messages, running, verification]);
@@ -17,6 +18,9 @@ export default function ExecutionTrace({ messages, running, verification, canCon
   const selected = rows.find(row => row.id === selectedId);
   const ledger = useRef<HTMLDivElement>(null);
   const follow = useRef(true);
+  const task = taskReport !== undefined ? taskReport : [...messages].reverse().find(message => message.task)?.task;
+  const latestUser = [...messages].reverse().find(message => message.role === "user");
+  const taskLabels: Record<string, string> = { complete: "已完成", answered: "已回答", active: "处理中", incomplete: "未完成", blocked: "需要处理阻碍", waiting_user: "等待回复", cancelled: "已停止", unknown: "待核对", budget_exhausted: "预算已用尽" };
   const failures = rows.filter(row => row.status === "failed" || row.status === "blocked").length;
   const needle = query.trim().toLocaleLowerCase();
   const filtered = rows.filter(row => (!errorsOnly || ["failed", "blocked", "retry", "cancelled"].includes(row.status)) &&
@@ -28,6 +32,7 @@ export default function ExecutionTrace({ messages, running, verification, canCon
   }, [rows.length]);
 
   return <section className={styles.root} aria-label="执行轨迹">
+    {(task || (running && latestUser)) && <div className={styles.taskStatus} role="status"><strong>任务：{running ? "处理中" : taskLabels[task?.status || ""] || "待验收"}</strong><span>{(running ? latestUser?.content : task?.objective)?.slice(0, 300)}</span>{!running && task && task.criteria.length > 0 && <small>验收 {task.evidence.filter(item => item.status === "satisfied").length}/{task.criteria.length}</small>}</div>}
     <div className={styles.toolbar}>
       <div><strong>执行轨迹</strong><span>{rows.filter(row => row.kind === "tool").length} 次工具调用{failures > 0 ? ` · ${failures} 条异常` : ""}</span></div>
       <div className={styles.filters}>

@@ -155,18 +155,18 @@ def test_undeclared_mcp_tool_requires_approval(tmp_path: Path) -> None:
 
 def test_denied_mcp_tool_raises(tmp_path: Path) -> None:
     manager = PermissionManager(str(tmp_path), prompt=lambda req: {"decision": "deny_once"})
-    with pytest.raises(RuntimeError, match="mcp__remote__write_file"):
+    with pytest.raises(PermissionError, match="mcp__remote__write_file"):
         manager.ensure_tool_allowed(_mcp_tool("mcp__remote__write_file"), {})
 
 
 def test_mcp_tool_without_prompt_is_denied(tmp_path: Path) -> None:
     """Fail closed: no interactive prompt means no third-party tool call."""
     manager = PermissionManager(str(tmp_path))
-    with pytest.raises(RuntimeError):
+    with pytest.raises(PermissionError):
         manager.ensure_tool_allowed(_mcp_tool("mcp__remote__write_file"), {})
 
 
-def test_mcp_approval_is_remembered_for_the_session(tmp_path: Path) -> None:
+def test_mcp_allow_once_does_not_authorize_a_second_invocation(tmp_path: Path) -> None:
     calls: list = []
 
     def _prompt(request):
@@ -178,7 +178,7 @@ def test_mcp_approval_is_remembered_for_the_session(tmp_path: Path) -> None:
     manager.ensure_tool_allowed(tool, {})
     manager.ensure_tool_allowed(tool, {})
 
-    assert len(calls) == 1
+    assert len(calls) == 2
 
 
 def test_denied_mcp_tool_surfaces_as_failed_tool_result(tmp_path: Path) -> None:

@@ -31,9 +31,19 @@ def adapter():
 
 def test_stream_updates_before_first_text_and_merges_final_output(adapter, monkeypatch):
     events = [
-        ("message_start", {"message": {"usage": {
-            "input_tokens": 100, "cache_creation_input_tokens": 100, "cache_read_input_tokens": 800, "output_tokens": 0,
-        }}}),
+        (
+            "message_start",
+            {
+                "message": {
+                    "usage": {
+                        "input_tokens": 100,
+                        "cache_creation_input_tokens": 100,
+                        "cache_read_input_tokens": 800,
+                        "output_tokens": 0,
+                    }
+                }
+            },
+        ),
         ("content_block_delta", {"delta": {"type": "text_delta", "text": "Done"}}),
         ("message_delta", {"usage": {"output_tokens": 20}}),
         ("message_stop", {}),
@@ -49,15 +59,26 @@ def test_stream_updates_before_first_text_and_merges_final_output(adapter, monke
             live.append(usage_snapshot(cm, token.usage))
 
     run_agent_turn_stream(
-        model=adapter, tools=adapter.tools, messages=[{"role": "user", "content": "Hi"}],
-        cwd=".", context_manager=cm, cost_tracker=tracker, on_token=observe, on_usage=final.append,
+        model=adapter,
+        tools=adapter.tools,
+        messages=[{"role": "user", "content": "Hi"}],
+        cwd=".",
+        context_manager=cm,
+        cost_tracker=tracker,
+        on_token=observe,
+        on_usage=final.append,
     )
     assert len(live) == 2
     assert live[0]["cache_hit_percentage"] == 80
     assert live[0]["context"]["total_tokens"] == 1000
     assert live[0]["context"]["usage_percentage"] == 50
     assert live[1]["context"]["total_tokens"] == 1020
-    assert adapter.last_usage == {"input_tokens": 100, "cache_write_tokens": 100, "cache_read_tokens": 800, "output_tokens": 20}
+    assert adapter.last_usage == {
+        "input_tokens": 100,
+        "cache_write_tokens": 100,
+        "cache_read_tokens": 800,
+        "output_tokens": 20,
+    }
     assert tracker.get_total_calls() == 1
     assert tracker.get_model_usage("test-model").cache_read_tokens == 800
     assert len(final) == 1
@@ -66,7 +87,11 @@ def test_stream_updates_before_first_text_and_merges_final_output(adapter, monke
 def test_stream_usage_accumulators_are_independent():
     first, second = {}, {}
     for state, tokens in ((first, 120), (second, 700)):
-        list(_process_sse_event({"event": "message_start", "data": {"message": {"usage": {"input_tokens": tokens}}}}, usage_state=state))
+        list(
+            _process_sse_event(
+                {"event": "message_start", "data": {"message": {"usage": {"input_tokens": tokens}}}}, usage_state=state
+            )
+        )
     list(_process_sse_event({"event": "message_delta", "data": {"usage": {"output_tokens": 10}}}, usage_state=first))
     assert first == {"input_tokens": 120, "output_tokens": 10}
     assert second == {"input_tokens": 700}
@@ -84,21 +109,36 @@ def test_request_without_usage_clears_previous_report(adapter, monkeypatch):
 
 
 def test_nonstream_maps_anthropic_cache_fields(adapter, monkeypatch):
-    monkeypatch.setattr(adapter, "_send", lambda _request: ({
-        "content": [{"type": "text", "text": "Done"}],
-        "usage": {"input_tokens": 100, "output_tokens": 20, "cache_creation_input_tokens": 100, "cache_read_input_tokens": 800},
-    }, 200))
+    monkeypatch.setattr(
+        adapter,
+        "_send",
+        lambda _request: (
+            {
+                "content": [{"type": "text", "text": "Done"}],
+                "usage": {
+                    "input_tokens": 100,
+                    "output_tokens": 20,
+                    "cache_creation_input_tokens": 100,
+                    "cache_read_input_tokens": 800,
+                },
+            },
+            200,
+        ),
+    )
     adapter.next([])
     assert cache_hit_percentage(adapter.last_usage) == 80
 
 
-@pytest.mark.parametrize("usage,expected", [
-    ({"input_tokens": 100}, None),
-    ({"input_tokens": 0, "cache_read_tokens": 0}, None),
-    ({"input_tokens": 100, "cache_read_tokens": 0}, 0),
-    ({"input_tokens": 100, "cache_write_tokens": 100, "cache_read_tokens": 800}, 80),
-    ({"prompt_tokens": 1000, "prompt_cache_hit_tokens": 800, "prompt_cache_miss_tokens": 200}, 80),
-])
+@pytest.mark.parametrize(
+    "usage,expected",
+    [
+        ({"input_tokens": 100}, None),
+        ({"input_tokens": 0, "cache_read_tokens": 0}, None),
+        ({"input_tokens": 100, "cache_read_tokens": 0}, 0),
+        ({"input_tokens": 100, "cache_write_tokens": 100, "cache_read_tokens": 800}, 80),
+        ({"prompt_tokens": 1000, "prompt_cache_hit_tokens": 800, "prompt_cache_miss_tokens": 200}, 80),
+    ],
+)
 def test_cache_rate_distinguishes_missing_from_zero(usage, expected):
     assert cache_hit_percentage(_normalize_usage(usage)) == expected
 
@@ -188,8 +228,15 @@ def test_tty_passes_usage_observer_and_cost_tracker(tmp_path, monkeypatch):
 
     cm = ContextManager(model="test", context_window=2000)
     tracker = CostTracker()
-    args = TtyAppArgs(runtime=None, tools=ToolRegistry([]), model=None, messages=[{"role": "system", "content": "test"}], cwd=str(tmp_path),
-                      permissions=PermissionManager(str(tmp_path), mode="auto"), context_manager=cm)
+    args = TtyAppArgs(
+        runtime=None,
+        tools=ToolRegistry([]),
+        model=None,
+        messages=[{"role": "system", "content": "test"}],
+        cwd=str(tmp_path),
+        permissions=PermissionManager(str(tmp_path), mode="auto"),
+        context_manager=cm,
+    )
     state = ScreenState(cost_tracker=tracker)
     monkeypatch.setattr("pepsicode.tui.app.save_history_entries", lambda _history: None)
     monkeypatch.setattr("pepsicode.context.context_manager.save_context_state", lambda _manager: None)

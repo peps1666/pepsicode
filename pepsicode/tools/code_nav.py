@@ -4,6 +4,7 @@ import ast
 from pathlib import Path
 from typing import Any
 
+from pepsicode.execution.filesystem import FILES
 from pepsicode.intelligence.fallback import references, source_files
 from pepsicode.intelligence.fallback import symbols as syntax_symbols
 from pepsicode.tooling import ToolDefinition, ToolResult
@@ -31,7 +32,7 @@ def _extract_symbols_from_file(file_path: Path) -> list[dict[str, Any]]:
         return []
 
     try:
-        content = file_path.read_text(encoding="utf-8")
+        content = FILES.read_text(file_path)
         tree = ast.parse(content, filename=str(file_path))
     except (SyntaxError, UnicodeDecodeError):
         return []
@@ -248,7 +249,7 @@ def _run_get_ast_info(input_data: dict, context) -> ToolResult:
         return ToolResult(ok=False, output=f"File not found: {target}")
 
     try:
-        content = target.read_text(encoding="utf-8")
+        content = FILES.read_text(target)
         tree = ast.parse(content, filename=str(target))
     except SyntaxError as e:
         return ToolResult(ok=False, output=f"Syntax error: {e}")

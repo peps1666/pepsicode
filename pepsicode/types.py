@@ -37,6 +37,9 @@ class ChatMessage(TypedDict, total=False):
     activityKind: str
     retry: dict[str, Any]
     verification: dict[str, Any]
+    task: dict[str, Any]
+    source: dict[str, Any]
+    finishReason: str
 
 
 class ToolCall(TypedDict):
@@ -88,6 +91,7 @@ class StreamToken:
     usage: dict[str, int] | None = None
     thinking_block: dict[str, Any] | None = None
     retry: dict[str, Any] | None = None
+    stop_reason: str | None = None
 
 
 class ModelAdapter(Protocol):

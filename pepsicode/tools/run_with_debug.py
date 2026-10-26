@@ -6,6 +6,8 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from pepsicode.execution import process as process_service
+from pepsicode.execution.filesystem import FILES
 from pepsicode.tooling import ToolDefinition, ToolResult
 
 # ---------------------------------------------------------------------------
@@ -65,7 +67,7 @@ def _parse_python_error(output: str, cwd: str) -> list[dict[str, Any]]:
         context_lines = []
         if abs_path.exists():
             try:
-                content = abs_path.read_text(encoding="utf-8")
+                content = FILES.read_text(abs_path)
                 lines = content.split("\n")
                 line_idx = int(line_num) - 1
 
@@ -196,7 +198,7 @@ def _validate(input_data: dict) -> dict:
 def _run(input_data: dict, context) -> ToolResult:
     """Run command with debug output parsing."""
     command = input_data["command"]
-    work_dir = Path(context.cwd) / input_data["cwd"]
+    work_dir = FILES.checked_path(Path(context.cwd) / input_data["cwd"], "command_cwd")
     timeout = input_data["timeout"]
     language = input_data["language"]
 
@@ -212,7 +214,7 @@ def _run(input_data: dict, context) -> ToolResult:
     try:
         from pepsicode.subprocess_utils import hide_window_kwargs
 
-        result = subprocess.run(
+        result = process_service.run(
             shell_cmd,
             cwd=str(work_dir),
             capture_output=True,

@@ -5,6 +5,7 @@ import shlex
 import subprocess
 from typing import Any
 
+from pepsicode.execution import process as process_service
 from pepsicode.tooling import ToolDefinition, ToolResult
 
 # ---------------------------------------------------------------------------
@@ -19,7 +20,7 @@ def _run_docker_command(args: list[str], timeout: int = 30) -> tuple[bool, str, 
     try:
         from pepsicode.subprocess_utils import hide_window_kwargs
 
-        result = subprocess.run(
+        result = process_service.run(
             cmd,
             capture_output=True,
             text=True,
@@ -45,7 +46,7 @@ def _run_compose_command(args: list[str], timeout: int = 30, project_dir: str = 
     try:
         from pepsicode.subprocess_utils import hide_window_kwargs
 
-        result = subprocess.run(
+        result = process_service.run(
             cmd,
             capture_output=True,
             text=True,

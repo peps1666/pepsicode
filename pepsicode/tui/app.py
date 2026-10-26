@@ -2502,6 +2502,8 @@ def _handle_input(
         state.returned_inputs.extend(item.get("display_content") or item["content"] for item in update["returned"])
         rerender()
 
+    if state.session is not None:
+        state.input_queue.bind_session(state.session)
     state.input_queue.start(on_input_queue)
 
     def on_usage(usage: dict) -> None:

@@ -13,7 +13,8 @@ def _build_command_runner(permissions: Any):
     def _run(argv: tuple[str, ...], timeout_seconds: int, context: HookContext) -> HookActionResult:
         if not argv:
             return HookActionResult(output="Hook command argv is empty", success=False)
-        from pepsicode.tooling import ToolContext
+        from pepsicode.execution.runtime import current_scope
+        from pepsicode.tooling import ToolContext, ToolRegistry
         from pepsicode.tools.run_command import run_command_tool
 
         parsed = run_command_tool.validator(
@@ -24,7 +25,9 @@ def _build_command_runner(permissions: Any):
                 "timeout": timeout_seconds,
             }
         )
-        result = run_command_tool.run(
+        scope = current_scope()
+        result = ToolRegistry([run_command_tool]).execute(
+            "run_command",
             parsed,
             ToolContext(
                 cwd=context.cwd,
@@ -32,7 +35,9 @@ def _build_command_runner(permissions: Any):
                 hooks=None,
                 agent_scope=context.agent_scope,
                 suppress_hooks=True,
-                cancellation_event=context.metadata.get("_hook_cancel_event"),
+                execution=scope,
+                cancellation_event=context.metadata.get("_hook_cancel_event")
+                or (scope.cancellation_event if scope else None),
             ),
         )
         return HookActionResult(output=result.output, success=result.ok)

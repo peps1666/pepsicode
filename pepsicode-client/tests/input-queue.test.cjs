@@ -102,17 +102,35 @@ test("execution IDs, timing, retries and verification survive authoritative hist
   assert.equal(api.store.getState().messages[1].durationMs,42);
   assert.equal(api.store.getState().messages[2].activityKind,"retry");
   const verification={status:"not_run",reason_code:"no_checks",reason:"No checks",ok:false};
+  const task={id:"task",revision:2,objective:"Implement feature",status:"incomplete",criteria:[],evidence:[]};
   api.event("session/view", {session_id:"test",history:[
     {role:"tool_call",tool_name:"read_file",call_id:"actual",tool_input:{path:"a"}},
     {role:"tool_result",tool_name:"read_file",call_id:"actual",started_at:1000,duration_ms:42,status:"failed",exit_code:1,content:"Failed",is_error:true},
     {role:"progress",content:"Retry",activity_kind:"retry",retry:{attempt:1,limit:2,delay_ms:500,reason:"HTTP 503"}},
-    {role:"assistant",content:"Answer",verification},
-  ]});
+    {role:"assistant",content:"Answer",verification,task},
+  ],task,pending_inputs:[{id:"restored",content:"next",mode:"follow_up"}]});
   const messages=api.store.getState().messages;
   assert.equal(messages[0].callId,messages[1].callId);
   assert.equal(messages[1].durationMs,42);
   assert.equal(messages[2].retry.attempt,1);
   assert.deepEqual(messages[3].verification,verification);
+  assert.deepEqual(messages[3].task,task);
+  assert.deepEqual(api.store.getState().task,task);
+  assert.equal(api.store.getState().pendingInputs[0].id,"restored");
+});
+
+test("task completion cannot survive a new failed turn or a branch without its authority", async () => {
+  const api = await session();
+  const task={id:"first",revision:2,objective:"Implement feature",status:"complete",criteria:[],evidence:[]};
+  api.event("session/view", {session_id:"test",history:[],task});
+  await api.store.getState().runTurn("Implement another feature");
+  assert.equal(api.store.getState().task,null);
+  const failed={...task,id:"second",status:"budget_exhausted"};
+  api.event("turn/end", {status:"error",error:"Budget exhausted",task:failed});
+  assert.deepEqual(api.store.getState().task,failed);
+  assert.equal(api.store.getState().isRunning,false);
+  api.event("session/view", {session_id:"test",history:[]});
+  assert.equal(api.store.getState().task,null);
 });
 
 test("resuming a conversation in another project sends its workspace and refreshes that project's list", async () => {

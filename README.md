@@ -130,7 +130,7 @@ pepsicode 是一个面向本地开发工作流的 Python 编程代理。它有�
 | 能力 | 说明 |
 | --- | --- |
 | 常驻用量显示 | 输入区下方常驻「缓存命中率」与「上下文窗口占比」，随流式用量即时刷新 |
-| 分层上下文控制 | 大结果头尾保留 → 大输出 artifact 化 → 接近上限自动压缩 → 溢出强制压缩并有限重试 |
+| 分层上下文控制 | 大结果头尾保留 → 大输出 artifact 化 → 完整分块摘要与旧 checkpoint 归并 → 溢出强制压缩并有限重试；摘要失败保留原上下文 |
 | 成本与状态 | `/cost`、`/cost-report`、`/context`、`/status`、`/tasks` 随时查 |
 | 会话持久化 | 自动保存最新消息与终端记录（含未完成输出），`/resume` 按项目列出并恢复 |
 | 持久记忆 | `save_memory` / `search_memory` / `forget_memory`，分 `user` / `project` / `local` 三种作用域 |
@@ -792,6 +792,19 @@ python -m ruff check pepsicode tests
 python -m pytest -q
 ```
 
+行为评测与离线冒烟：
+
+```bash
+python -m pepsicode.evals --list
+python -m pepsicode.evals --mode smoke
+# 使用已配置模型执行真实任务（会产生模型调用费用）
+python -m pepsicode.evals --mode real --runs 3
+```
+
+首批覆盖分页 bug、跨文件功能、两次压缩后继续工作和跨进程恢复，独立验收并输出成功率、耗时、token、费用估算与失败原因。Smoke 使用脚本代理，不计为模型效果。配置、统计边界和报告格式见[真实任务评测](docs/task-evaluations.md)。
+
+用户任务另有独立的状态、修订号与验收证据：实现类任务需要具体验收条件，运行中的需求变更会使旧证据失效；输入队列、Todo 和澄清问题随会话保存。处理流程及限制见[任务生命周期与验收](docs/task-orchestration.md)。
+
 Hooks v2 专项测试：
 
 ```bash
@@ -840,6 +853,7 @@ tests/
 - 后台 Hook 任务在进程关闭时会等待有限时间，未完成任务会被取消。
 - `.pepsi-code/hooks.local.json` 适合本机差异，不应提交。
 - 自动模式是应用层审批策略，不是操作系统级沙箱；被批准运行的程序拥有当前用户的全部权限。
+- 文件、进程、外部调用的统一执行边界，共享预算/取消、版本编辑与中断恢复见 [Harness 执行边界](docs/harness-boundaries.md)。
 
 ## License
 

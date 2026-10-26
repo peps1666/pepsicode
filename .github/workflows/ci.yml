@@ -37,3 +37,6 @@ jobs:
 
       - name: Run tests
         run: pytest tests/ -v --tb=short
+
+      - name: Run offline task evaluation smoke
+        run: python -m pepsicode.evals --mode smoke --output .evals/ci-smoke

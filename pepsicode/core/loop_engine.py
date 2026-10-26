@@ -281,7 +281,7 @@ def run_loop(
             elif last_verification.status == "blocked":
                 task.fail(last_verification.reason)
             else:
-                task.complete()
+                task.status = task.status.__class__.UNVERIFIED
             return LoopResult(False, iteration, messages, last_verification, task, last_verification.status)
 
         if last_verification.ok:

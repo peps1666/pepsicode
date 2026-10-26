@@ -26,6 +26,7 @@ class TaskStatus(str, Enum):
     COMPLETED = "completed"
     CANCELLED = "cancelled"
     FAILED = "failed"
+    UNVERIFIED = "unverified"
 
 
 @dataclass

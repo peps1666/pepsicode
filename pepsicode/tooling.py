@@ -1,14 +1,21 @@
 from __future__ import annotations
 
+import json
 import logging
 import math
 import re
 import threading
+import uuid
 from collections import Counter
 from collections.abc import Callable
+from contextlib import nullcontext
 from dataclasses import dataclass, field
 from enum import Enum
+from functools import wraps
 from typing import Any, Protocol
+
+from pepsicode.cancellation import TurnCancelledError
+from pepsicode.llm.cost_tracker import BudgetExceededError
 
 logger = logging.getLogger(__name__)
 
@@ -103,14 +110,32 @@ class BackgroundTaskResult:
     startedAt: int
 
 
+class ToolStatus(str, Enum):
+    SUCCEEDED = "succeeded"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    ERROR = "error"
+    BLOCKED = "blocked"
+    CANCELLED = "cancelled"
+    TIMED_OUT = "timed_out"
+    UNKNOWN = "unknown"
+    RUNNING = "running"
+    AWAITING_USER = "awaiting_user"
+
+
 @dataclass(slots=True)
 class ToolResult:
     ok: bool
     output: str
     backgroundTask: BackgroundTaskResult | None = None
     awaitUser: bool = False
-    status: str | None = None
+    status: ToolStatus | None = None
     exit_code: int | None = None
+    execution_id: str | None = field(default=None, compare=False)
+
+    def __post_init__(self):
+        if self.status is not None:
+            self.status = ToolStatus(self.status)
 
 
 @dataclass(slots=True)
@@ -128,6 +153,10 @@ class ToolContext:
     # Session memory manager, when the caller has one.  save_memory writes
     # through this instance so the next system prompt sees the new entry.
     memory: Any | None = None
+    execution: Any | None = None
+    external_grant: tuple[str, str] | None = None
+    effect_state: str = "none"
+    control: dict = field(default_factory=dict)
 
 
 Validator = Callable[[Any], Any]
@@ -153,6 +182,34 @@ class ToolDefinition:
     always_loaded: bool = False
     tags: list[str] = field(default_factory=list)
     aliases: list[str] = field(default_factory=list)
+
+    def __post_init__(self):
+        original = self.run
+
+        @wraps(original)
+        def scoped(arguments, context):
+            from pepsicode.execution.runtime import ExecutionScope, bind_scope, bind_tool_context, current_scope
+
+            active = context.execution or current_scope()
+            if active is None:
+                active = ExecutionScope(context.cwd, context.permissions, context.cancellation_event)
+            if context.permissions is None:
+                context.permissions = active.permissions
+            operation = (
+                context.permissions.operation()
+                if context.permissions is not None and hasattr(context.permissions, "operation")
+                else nullcontext()
+            )
+            with bind_scope(active), bind_tool_context(context), operation:
+                try:
+                    active.check_cancelled()
+                except TurnCancelledError:
+                    return ToolResult(False, "Task stopped by user.", status=ToolStatus.CANCELLED)
+                return original(arguments, context)
+
+        if hasattr(original, "__self__"):
+            scoped.__self__ = original.__self__
+        self.run = scoped
 
     @property
     def is_read_only(self) -> bool:
@@ -369,12 +426,67 @@ class ToolRegistry:
         return None
 
     def execute(self, tool_name: str, input_data: Any, context: ToolContext) -> ToolResult:
+        from pepsicode.execution.runtime import bind_scope, current_scope
+
+        scope = context.execution or current_scope()
+        context.execution = scope
+        if scope and context.permissions is None:
+            context.permissions = scope.permissions
+        context.tool_use_id = context.tool_use_id or uuid.uuid4().hex
+        context.effect_state = "none"
+        with bind_scope(scope):
+            result = self._execute(tool_name, input_data, context)
+            context.external_grant = None
+            if (
+                context.effect_state == "unknown" or (not result.ok and context.effect_state == "committed")
+            ) and result.status not in {"cancelled", "timed_out"}:
+                result.status = ToolStatus.UNKNOWN
+                result.ok = False
+            result.execution_id = context.tool_use_id
+            if scope:
+                from pepsicode.core.task_control import snapshot
+
+                task = snapshot(context).get("task") or {}
+                fingerprint = json.dumps(
+                    [task.get("id"), task.get("revision"), tool_name, input_data, result.output],
+                    sort_keys=True,
+                    ensure_ascii=False,
+                    default=str,
+                )
+                with self._lock:
+                    count = scope.repetitions.get("count", 0) + 1 if scope.repetitions.get("key") == fingerprint else 1
+                    scope.repetitions.update(key=fingerprint, count=count)
+                if count in scope.repeat_thresholds:
+                    result.output += f"\n[Harness: {count} identical calls produced the same result. Inspect the result and choose a different approach; do not bypass permission denial or cancellation.]"
+                if result.status == "unknown" or context.effect_state == "unknown":
+                    scope.mark_unknown(context.tool_use_id, tool=tool_name, arguments=input_data)
+                try:
+                    scope.record(
+                        "tool/settled",
+                        call_id=context.tool_use_id,
+                        tool=tool_name,
+                        state=result.status or ("succeeded" if result.ok else "failed"),
+                        effect_state=context.effect_state,
+                        output=result.output,
+                    )
+                except OSError as error:
+                    scope.mark_unknown(context.tool_use_id, tool=tool_name, arguments=input_data)
+                    return ToolResult(
+                        False,
+                        f"Execution outcome could not be committed: {type(error).__name__}; inspect state before retrying",
+                        status="unknown",
+                        execution_id=context.tool_use_id,
+                    )
+            return result
+
+    def _execute(self, tool_name: str, input_data: Any, context: ToolContext) -> ToolResult:
         if context.cancellation_event is not None and context.cancellation_event.is_set():
             return ToolResult(ok=False, output="Task stopped by user; tool was not executed.", status="cancelled")
         tool = self.find(tool_name)
         if tool is None:
             return ToolResult(ok=False, output=f"Unknown tool: {tool_name}")
 
+        dispatched = False
         try:
             parsed = tool.validator(input_data)
             if context.hooks is not None and not context.suppress_hooks:
@@ -396,14 +508,30 @@ class ToolRegistry:
 
             permissions = context.permissions
             if permissions is not None and hasattr(permissions, "ensure_tool_allowed"):
-                permissions.ensure_tool_allowed(tool, parsed)
+                decision = permissions.ensure_tool_allowed(tool, parsed)
+                if tool_name.startswith("mcp__") and not tool.is_read_only and getattr(decision, "is_allowed", False):
+                    context.external_grant = (tool_name, json.dumps(parsed, sort_keys=True, ensure_ascii=False))
             if context.cancellation_event is not None and context.cancellation_event.is_set():
                 return ToolResult(ok=False, output="Task stopped by user; tool was not executed.", status="cancelled")
             affects_workspace = tool.modifies_workspace(parsed)
+            if context.execution and context.execution.has_unknown and affects_workspace:
+                return ToolResult(
+                    False, "Inspect the previous unknown operation before further changes", status="blocked"
+                )
+            if context.execution:
+                context.execution.check_cancelled()
+                context.execution.record(
+                    "tool/started",
+                    call_id=context.tool_use_id,
+                    tool=tool_name,
+                    arguments=parsed,
+                    mutating=affects_workspace,
+                )
             # Count before execution: an integration can write and then raise.
             if affects_workspace:
                 with self._lock:
                     self.mutation_count += 1
+            dispatched = True
             result = tool.run(parsed, context)
             if context.hooks is not None and not context.suppress_hooks:
                 from pepsicode.hooks import HookContext, HookEvent
@@ -430,7 +558,13 @@ class ToolRegistry:
         except (KeyboardInterrupt, SystemExit):
             # 这些异常应该向上传播，不应该被捕获
             raise
+        except BudgetExceededError:
+            raise
+        except TurnCancelledError as error:
+            return ToolResult(False, str(error), status="cancelled")
         except Exception as error:  # noqa: BLE001
+            from pepsicode.execution.filesystem import StaleFileError
+
             if context.hooks is not None and not context.suppress_hooks:
                 from pepsicode.hooks import HookContext, HookEvent
 
@@ -453,8 +587,19 @@ class ToolRegistry:
                     logger.warning("Error hook failed for %s: %s", tool_name, hook_error)
             return ToolResult(
                 ok=False,
-                output=f"{type(tool).__name__} error: {error}",
-                status="blocked" if isinstance(error, PermissionError) else "error",
+                output=f"{type(tool).__name__} error: {error}"
+                + (
+                    "; earlier file changes may already have committed; inspect state before retrying"
+                    if context.effect_state == "committed"
+                    else ""
+                ),
+                status="unknown"
+                if context.effect_state == "committed"
+                else "blocked"
+                if isinstance(error, (PermissionError, StaleFileError))
+                else "unknown"
+                if dispatched and not tool.is_read_only
+                else "error",
             )
 
     @staticmethod

@@ -5,6 +5,7 @@ import json
 import os
 import subprocess
 import threading
+import time
 import urllib.error
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
@@ -13,6 +14,9 @@ from pathlib import Path
 from queue import Empty, Queue
 from typing import Any, Protocol, runtime_checkable
 
+from pepsicode.cancellation import cancellable_response, raise_if_cancelled
+from pepsicode.execution import process as process_service
+from pepsicode.execution.runtime import current_scope
 from pepsicode.tooling import ToolCapability, ToolDefinition, ToolResult
 from pepsicode.version import VERSION
 
@@ -502,8 +506,9 @@ class StdioMcpClient:
             argv = [command, *args]
 
         try:
-            self.process = subprocess.Popen(  # noqa: S603
+            self.process = process_service.Popen(  # noqa: S603
                 argv,
+                persistent=True,
                 cwd=str(process_cwd),
                 env=env,
                 stdin=subprocess.PIPE,
@@ -664,7 +669,20 @@ class StdioMcpClient:
             self._pending[message_id] = response_queue
         self.send({"jsonrpc": "2.0", "id": message_id, "method": method, "params": params})
         try:
-            message = response_queue.get(timeout=timeout_seconds)
+            deadline = time.monotonic() + timeout_seconds
+            while True:
+                raise_if_cancelled()
+                scope = current_scope()
+                if scope:
+                    scope.check_cancelled()
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise Empty()
+                try:
+                    message = response_queue.get(timeout=min(0.05, remaining))
+                    break
+                except Empty:
+                    continue
         except Empty as error:
             with self._lock:
                 self._pending.pop(message_id, None)
@@ -672,6 +690,9 @@ class StdioMcpClient:
             raise RuntimeError(
                 f"MCP {self.server_name}: request timed out for {method}" + (f"\n{stderr}" if stderr else "")
             ) from error
+        finally:
+            with self._lock:
+                self._pending.pop(message_id, None)
         if message.get("error"):
             details = message["error"].get("data")
             suffix = f"\n{json.dumps(details, indent=2, ensure_ascii=False)}" if details else ""
@@ -734,15 +755,9 @@ class StdioMcpClient:
         try:
             return _invoke()
         except Exception as error:  # noqa: BLE001
-            if self._process_alive():
-                raise
-            failure = self._restart()
-            if failure is not None:
-                return failure
-            try:
-                return _invoke()
-            except Exception as retry_error:  # noqa: BLE001
-                return ToolResult(ok=False, output=str(retry_error))
+            # A server may commit before its connection dies. Restarting and
+            # replaying tools/call would duplicate an external mutation.
+            return ToolResult(ok=False, output=str(error), status="unknown")
 
     def close(self) -> None:
         with self._lock:
@@ -754,46 +769,13 @@ class StdioMcpClient:
                 )
 
         if self.process is not None:
+            process = self.process
+            job = getattr(process, "_pepsi_job", None)
             try:
-                if os.name == "nt":
-                    try:
-                        from pepsicode.subprocess_utils import hide_window_kwargs
-
-                        subprocess.run(
-                            ["taskkill", "/T", "/F", "/PID", str(self.process.pid)],
-                            capture_output=True,
-                            timeout=5,
-                            **hide_window_kwargs(),
-                        )
-                    except subprocess.TimeoutExpired:
-                        # taskkill failed, use kill
-                        try:
-                            self.process.kill()
-                        except OSError:
-                            pass
-                    except Exception:
-                        try:
-                            self.process.kill()
-                        except OSError:
-                            pass
-                else:
-                    # Unix: send SIGTERM then SIGKILL
-                    self.process.terminate()
-                    try:
-                        self.process.wait(timeout=3)
-                    except subprocess.TimeoutExpired:
-                        try:
-                            self.process.kill()
-                        except OSError:
-                            pass
-
-                try:
-                    self.process.wait(timeout=3)
-                except subprocess.TimeoutExpired:
-                    pass
-            except OSError:
-                pass
+                process_service.stop(process, job)
             finally:
+                if job is not None:
+                    job.close()
                 self.process = None
 
         self.protocol = None
@@ -879,6 +861,11 @@ class HttpMcpClient:
         """发送 JSON-RPC 请求并等待响应。"""
         if timeout_seconds is None:
             timeout_seconds = self.timeouts.call
+        scope = current_scope()
+        if scope:
+            scope.check_cancelled()
+            if scope.deadline is not None:
+                timeout_seconds = min(timeout_seconds, max(0.01, scope.deadline - time.monotonic()))
         message_id = self.next_id
         self.next_id += 1
         payload = {
@@ -890,7 +877,7 @@ class HttpMcpClient:
         body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
         req = urllib.request.Request(self.url, data=body, headers=self._request_headers(), method="POST")
         try:
-            with urllib.request.urlopen(req, timeout=timeout_seconds) as resp:
+            with cancellable_response(urllib.request.urlopen(req, timeout=timeout_seconds)) as resp:
                 raw = resp.read().decode("utf-8")
                 if capture_session:
                     session_id = resp.headers.get("Mcp-Session-Id")
@@ -1148,12 +1135,37 @@ def create_mcp_backed_tools(*, cwd: str, mcp_servers: dict[str, dict[str, Any]])
                 descriptor_name = str(descriptor.get("name", "tool"))
                 wrapped_name = _wrapped_tool_name(server_name, descriptor_name, taken_names)
                 input_schema = _normalize_input_schema(descriptor.get("inputSchema"))
+                declared_read_only = _is_declared_read_only(read_only_declaration, descriptor_name)
 
                 def _validator(value: Any) -> Any:
                     return value
 
-                def _run(input_data: Any, _context, *, _client=client, _descriptor_name=descriptor_name):
-                    return _client.call_tool(_descriptor_name, input_data)
+                def _run(
+                    input_data: Any,
+                    _context,
+                    *,
+                    _client=client,
+                    _descriptor_name=descriptor_name,
+                    _name=wrapped_name,
+                    _read_only=declared_read_only,
+                ):
+                    if not _read_only:
+                        if _context.permissions is None:
+                            raise PermissionError("MCP mutations require an approval provider")
+                        granted = _context.external_grant == (
+                            _name,
+                            json.dumps(input_data, sort_keys=True, ensure_ascii=False),
+                        )
+                        _context.external_grant = None
+                        if not granted:
+                            outcome = _context.permissions.check_mcp_tool(_name, input_data)
+                            if not outcome.is_allowed:
+                                raise PermissionError(outcome.denial_message(scope=_name))
+                        _context.effect_state = "unknown"
+                    result = _client.call_tool(_descriptor_name, input_data)
+                    if not _read_only and result.ok:
+                        _context.effect_state = "completed"
+                    return result
 
                 # Always state the true server/tool identity: the wrapped
                 # name may have been truncated to fit the API name limit.

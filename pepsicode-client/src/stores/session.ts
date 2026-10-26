@@ -22,6 +22,13 @@ export interface ChatMessage {
   activityKind?: "retry";
   retry?: { attempt: number; limit: number; delay_ms: number; reason: string; started_at?: number };
   verification?: VerificationReport;
+  task?: TaskReport;
+}
+
+export interface TaskReport {
+  id: string; revision: number; objective: string; status: string;
+  criteria: Array<{ id: string; kind: string }>;
+  evidence: Array<{ criterion_id: string; status: string }>;
 }
 
 export interface VerificationReport {
@@ -71,6 +78,7 @@ export interface QueuedInput {
 }
 
 interface SessionHistoryItem {
+  task?: TaskReport;
   entry_id?: string;
   role: "user" | "assistant" | "progress" | "tool_call" | "tool_result" | "thinking";
   content?: string;
@@ -97,6 +105,7 @@ interface SessionState {
   cloneSession: () => Promise<void>;
   regenerate: (id: string) => Promise<void>;
   verification: VerificationReport | null;
+  task: TaskReport | null;
   cacheHitPercentage: number | null;
   accessMode: "read_only" | "auto" | "full_access";
   permissionUpdating: boolean;
@@ -243,6 +252,7 @@ function hydrateSessionHistory(value: unknown): ChatMessage[] {
       activityKind: item.activity_kind,
       retry: item.retry,
       verification: item.verification,
+      task: item.task,
     } satisfies ChatMessage];
   });
 }
@@ -284,7 +294,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   cloneSession: async () => changeBranch("session/clone", {}, set, get),
   regenerate: async (id) => {
     if (get().isRunning || get().branchUpdating || get().modelUpdating) throw new Error("请等待当前操作结束");
-    set({ isRunning: true, branchError: "", verification: null, cacheHitPercentage: null });
+    set({ isRunning: true, branchError: "", verification: null, task: null, cacheHitPercentage: null });
     const { ws } = useConnectionStore.getState();
     void sendRequest(ws, "turn/regenerate", { entry_id: id }, { timeoutMs: null }).catch((error) => {
       set((state) => ({
@@ -296,6 +306,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     });
   },
   verification: null,
+  task: null,
   cacheHitPercentage: null,
   accessMode: "auto",
   permissionUpdating: false,
@@ -399,6 +410,8 @@ export const useSessionStore = create<SessionState>((set, get) => ({
             messages: hydrateSessionHistory(data.history),
             tree: data.tree || null,
             verification: data.verification || null,
+            task: data.task || null,
+            pendingInputs: data.pending_inputs || [],
             cacheHitPercentage: null,
             contextData: null,
             draft: [data.draft, state.draft].filter(Boolean).join("\n\n"),
@@ -583,6 +596,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         case "turn/end": {
           set((state) => ({
             isRunning: false,
+            task: data.task ?? state.task,
             isStopping: false,
             pendingPermission: null,
             messages: settleStreaming(data.status === "error"
@@ -607,7 +621,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     const { ws } = useConnectionStore.getState();
     if (!ws || get().isRunning || get().modelUpdating || get().branchUpdating) return;
     const result = await sendRequest(ws, "session/create", { cwd: get().cwd || undefined });
-    set({ verification: null });
+    set({ verification: null, task: null });
     set({
       sessionId: result.session_id,
       cwd: result.cwd,
@@ -644,7 +658,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       content: input,
       timestamp: Date.now(),
     };
-    set((state) => ({ messages: [...state.messages, userMsg], isRunning: true, cacheHitPercentage: null, verification: null }));
+    set((state) => ({ messages: [...state.messages, userMsg], isRunning: true, cacheHitPercentage: null, verification: null, task: null }));
 
     // Fire-and-forget: turn/run blocks until the agent turn completes.
     // Stream events (message/delta, tool/call, etc.) arrive in the meantime
@@ -715,6 +729,8 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         messages: hydrateSessionHistory(result.history),
         tree: result.tree || null,
         verification: result.verification || null,
+        task: result.task || null,
+        pendingInputs: result.pending_inputs || [],
         isRunning: false,
         pendingPermission: null,
         costData: null,
@@ -777,7 +793,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   },
 
   switchCwd: async (cwd: string) => {
-    set({ verification: null });
+    set({ verification: null, task: null });
     const { ws } = useConnectionStore.getState();
     if (!ws || get().isRunning || get().modelUpdating || get().branchUpdating) return;
     // Re-create the session on the server with the new cwd. The server's

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import copy
+
 from pepsicode.tooling import ToolDefinition, ToolResult
 
 _SEARCH_LIMIT = 20
@@ -23,6 +25,16 @@ def _manager(context):
 
         memory_mgr = create_memory_manager(context.cwd)
     return memory_mgr
+
+
+def _change(manager, memory_scope, context, function, *args, **kwargs):
+    before = copy.deepcopy(manager.memories[memory_scope].entries)
+    try:
+        return function(*args, **kwargs)
+    except Exception:
+        if context.effect_state == "none":
+            manager.memories[memory_scope].entries = before
+        raise
 
 
 def _validate_scope(scope: object) -> str:
@@ -70,7 +82,11 @@ def _run_save(input_data: dict, context) -> ToolResult:
     entry_id = input_data.get("id")
 
     if entry_id:
-        updated = memory_mgr.update_entry(
+        updated = _change(
+            memory_mgr,
+            scope_enum,
+            context,
+            memory_mgr.update_entry,
             scope_enum,
             entry_id,
             input_data["content"],
@@ -85,7 +101,11 @@ def _run_save(input_data: dict, context) -> ToolResult:
         entry = next(item for item in memory_mgr.memories[scope_enum].entries if item.id == entry_id)
         verb = "Updated"
     else:
-        entry = memory_mgr.add_entry(
+        entry = _change(
+            memory_mgr,
+            scope_enum,
+            context,
+            memory_mgr.add_entry,
             scope=scope_enum,
             category=input_data["category"],
             content=input_data["content"],
@@ -117,7 +137,7 @@ def _validate_forget(input_data: dict) -> dict:
 def _run_forget(input_data: dict, context) -> ToolResult:
     memory_mgr = _manager(context)
     scope_enum = _scope_enum(input_data["scope"])
-    if not memory_mgr.delete_entry(scope_enum, input_data["id"]):
+    if not _change(memory_mgr, scope_enum, context, memory_mgr.delete_entry, scope_enum, input_data["id"]):
         return ToolResult(
             ok=False,
             output=f"No {input_data['scope']} memory entry with id {input_data['id']}.",

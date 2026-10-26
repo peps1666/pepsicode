@@ -1,12 +1,11 @@
 from __future__ import annotations
 
+import copy
 import time
+import uuid
 
+from pepsicode.core.task_control import edit_control
 from pepsicode.tooling import ToolDefinition, ToolResult
-
-# In-memory task storage (resets per session)
-_tasks = []
-_task_id_counter = 0
 
 
 def _validate(input_data: dict) -> dict:
@@ -18,49 +17,39 @@ def _validate(input_data: dict) -> dict:
             raise ValueError(f"todo[{i}] must be an object")
         if "content" not in todo:
             raise ValueError(f"todo[{i}] must have a 'content' field")
+        if not isinstance(todo["content"], str) or not todo["content"].strip():
+            raise ValueError("todo content must contain text")
         status = todo.get("status", "pending")
         if status not in ("pending", "in_progress", "completed"):
             raise ValueError(f"todo[{i}] status must be 'pending', 'in_progress', or 'completed'")
+    if len({todo["content"].strip() for todo in todos}) != len(todos):
+        raise ValueError("todo content must be unique")
     return {"todos": todos}
 
 
 def _run(input_data: dict, context) -> ToolResult:
-    global _tasks, _task_id_counter
-
     todos = input_data["todos"]
-
-    # Clear existing tasks and replace
-    _tasks.clear()
-
-    for todo in todos:
-        # Try to find existing task by content
-        existing = None
-        for task in _tasks:
-            if task["content"] == todo["content"]:
-                existing = task
-                break
-
-        if existing:
-            # Update existing task
-            existing["status"] = todo.get("status", existing["status"])
-            if todo.get("status") == "completed" and not existing.get("completed_at"):
-                existing["completed_at"] = time.time()
-        else:
-            # Create new task
-            _task_id_counter += 1
-            new_task = {
-                "id": _task_id_counter,
-                "content": todo["content"],
-                "status": todo.get("status", "pending"),
+    with edit_control(context) as control:
+        task_id = (control.get("task") or {}).get("id")
+        previous = {task["content"]: task for task in control.get("todos", [])}
+        tasks = []
+        for todo in todos:
+            content = todo["content"].strip()
+            task = copy.deepcopy(previous.get(content)) or {
+                "id": uuid.uuid4().hex[:12],
+                "content": content,
                 "created_at": time.time(),
-                "completed_at": time.time() if todo.get("status") == "completed" else None,
             }
-            _tasks.append(new_task)
+            task["status"] = todo.get("status", "pending")
+            task["task_id"] = task_id
+            task["completed_at"] = (task.get("completed_at") or time.time()) if task["status"] == "completed" else None
+            tasks.append(task)
+        control["todos"] = tasks
 
     # Format output
     lines = ["Task list updated:", ""]
 
-    for task in _tasks:
+    for task in tasks:
         status_icon = {
             "pending": "[ ]",
             "in_progress": "[>]",
@@ -72,10 +61,10 @@ def _run(input_data: dict, context) -> ToolResult:
     lines.append("")
 
     # Summary
-    pending = sum(1 for t in _tasks if t["status"] == "pending")
-    in_progress = sum(1 for t in _tasks if t["status"] == "in_progress")
-    completed = sum(1 for t in _tasks if t["status"] == "completed")
-    total = len(_tasks)
+    pending = sum(1 for t in tasks if t["status"] == "pending")
+    in_progress = sum(1 for t in tasks if t["status"] == "in_progress")
+    completed = sum(1 for t in tasks if t["status"] == "completed")
+    total = len(tasks)
 
     lines.extend(
         [

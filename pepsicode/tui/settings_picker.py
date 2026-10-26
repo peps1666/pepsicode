@@ -107,7 +107,9 @@ def create_settings_picker(runtime: dict, kind: str, *, notice: str = "", return
 
 def render_settings_picker(picker: SettingsPicker, cols: int, rows: int) -> list[str]:
     width, height = max(8, cols - 2), max(5, rows)
-    title = {"provider": "选择服务商", "model": "选择模型", "effort": "选择思考强度", "permissions": "选择权限模式"}[picker.kind]
+    title = {"provider": "选择服务商", "model": "选择模型", "effort": "选择思考强度", "permissions": "选择权限模式"}[
+        picker.kind
+    ]
     header = [f"  {BOLD}{title}{RESET}"]
     if picker.kind != "permissions":
         header.append(f"  {SUBTLE}当前模型：{picker.model}{RESET}")

@@ -17,6 +17,9 @@ from tempfile import NamedTemporaryFile
 from typing import Any
 
 from pepsicode.config import PEPSI_CODE_DIR
+from pepsicode.logging_config import get_logger
+
+logger = get_logger("session")
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -78,6 +81,8 @@ class SessionData:
     plan_file_path: str | None = None
     model_settings: dict[str, str] = field(default_factory=dict)
     verification_state: dict[str, Any] | None = None
+    execution_state: dict[str, Any] | None = None
+    task_control: dict[str, Any] = field(default_factory=dict)
     tree: dict[str, Any] = field(default_factory=dict)
     parent_session_id: str | None = None
     parent_entry_id: str | None = None
@@ -208,6 +213,8 @@ def _save_session_locked(session: SessionData) -> None:
         "plan_file_path": session.plan_file_path,
         "model_settings": session.model_settings,
         "verification_state": session.verification_state,
+        "execution_state": session.execution_state,
+        "task_control": session.task_control,
         "tree": session.tree,
         "parent_session_id": session.parent_session_id,
         "parent_entry_id": session.parent_entry_id,
@@ -223,10 +230,14 @@ def _save_session_locked(session: SessionData) -> None:
     }
     _atomic_write(session_path, json.dumps(serializable, indent=2, ensure_ascii=False) + "\n")
 
-    # Update index
-    index = _load_session_index()
-    index[session.session_id] = session.metadata
-    _save_session_index(index)
+    # The session file is the authoritative commit. An auxiliary index failure
+    # must not report rejection after input has already been durably accepted.
+    try:
+        index = _load_session_index()
+        index[session.session_id] = session.metadata
+        _save_session_index(index)
+    except OSError as error:
+        logger.warning("Session committed but its listing index could not be updated: %s", error)
 
 
 def load_session(session_id: str) -> SessionData | None:
@@ -244,8 +255,10 @@ def load_session(session_id: str) -> SessionData | None:
         data = json.loads(raw)
         metadata = SessionMetadata(**data.get("metadata", {}))
         from pepsicode.core.session_tree import validate_tree
+        from pepsicode.core.task_control import validate_control
 
         validate_tree(data.get("tree", {}))
+        validate_control(data.get("task_control", {}))
         return SessionData(
             session_id=data["session_id"],
             created_at=data["created_at"],
@@ -262,6 +275,8 @@ def load_session(session_id: str) -> SessionData | None:
             plan_file_path=data.get("plan_file_path"),
             model_settings=data.get("model_settings", {}),
             verification_state=data.get("verification_state"),
+            execution_state=data.get("execution_state"),
+            task_control=data.get("task_control", {}),
             tree=data.get("tree", {}),
             parent_session_id=data.get("parent_session_id"),
             parent_entry_id=data.get("parent_entry_id"),

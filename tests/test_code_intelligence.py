@@ -73,10 +73,10 @@ def test_rename_preview_never_writes(intelligence):
 
 
 def test_rename_rolls_back_after_second_file_write_fails(intelligence, monkeypatch):
-    from pepsicode.tools import code_intelligence
-
     root, _, registry, context = intelligence
-    original = code_intelligence.os.replace
+    from pepsicode.execution import filesystem
+
+    original = filesystem.os.replace
     calls = []
 
     def replace(source, target):
@@ -85,7 +85,7 @@ def test_rename_rolls_back_after_second_file_write_fails(intelligence, monkeypat
             raise OSError("simulated write failure")
         original(source, target)
 
-    monkeypatch.setattr(code_intelligence.os, "replace", replace)
+    monkeypatch.setattr(filesystem.os, "replace", replace)
     result = registry.execute(
         "rename_symbol",
         {

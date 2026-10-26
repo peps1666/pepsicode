@@ -165,7 +165,8 @@ def test_new_integration_can_trigger_verification_even_when_it_raises(tmp_path):
         return [{"role": "assistant", "content": "Partial generation reported"}]
 
     run_verified_turn(runtime=runtime, runner=agent, model=object(), tools=tools, messages=[], cwd=str(tmp_path))
-    assert tools.mutation_count == 1 and runtime["_lastVerification"]["status"] == "passed"
+    assert tools.mutation_count == 1 and runtime["_lastVerification"]["status"] == "blocked"
+    assert runtime["_lastExecution"]["state"] == "unknown"
 
 
 def test_tool_impact_can_be_dynamic_without_name_lists(tmp_path):
@@ -267,9 +268,9 @@ def test_literal_argv_preserves_executable_paths_and_does_not_infer_shells(tmp_p
 
     executable = str(tmp_path / "a folder" / "tool&name.exe")
     monkeypatch.setattr(
-        run_command,
-        "_run_cancellable_command",
-        lambda command, args, **options: ToolResult(True, json.dumps([command, *args])),
+        run_command.process_service,
+        "run",
+        lambda argv, **options: __import__("subprocess").CompletedProcess(argv, 0, json.dumps(argv), ""),
     )
     tools = ToolRegistry([run_command.run_command_tool])
     context = ToolContext(str(tmp_path), command_is_argv=True, cancellation_event=threading.Event())

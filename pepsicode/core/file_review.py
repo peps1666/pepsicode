@@ -34,18 +34,13 @@ def apply_reviewed_file_change(
     file_path: str,
     target_path: str | Path,
     next_content: str,
+    *,
+    expected_version: str | None = None,
 ) -> ToolResult:
-    target = Path(target_path)
-    previous_content = load_existing_file(target)
-    if previous_content == next_content:
-        return ToolResult(ok=True, output=f"No changes needed for {file_path}")
+    from pepsicode.execution.filesystem import FILES
 
-    diff = build_unified_diff(file_path, previous_content, next_content)
-    if context.permissions is not None:
-        outcome = context.permissions.check_edit(str(target), diff)
-        if outcome.is_denied or outcome.is_unavailable:
-            return ToolResult(ok=False, output=outcome.denial_message(scope=str(target)))
-
-    target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text(next_content, encoding="utf-8")
+    try:
+        FILES.write_text(context, target_path, next_content, expected=expected_version)
+    except PermissionError as error:
+        return ToolResult(False, str(error), status="blocked")
     return ToolResult(ok=True, output=f"Applied reviewed changes to {file_path}")

@@ -14,6 +14,7 @@ from pepsicode.tools.db_explorer import db_explorer_tool
 from pepsicode.tools.diff_viewer import diff_viewer_tool
 from pepsicode.tools.docker_helper import docker_helper_tool
 from pepsicode.tools.edit_file import edit_file_tool
+from pepsicode.tools.execution_status import execution_status_tool
 from pepsicode.tools.exit_plan_mode import exit_plan_mode_tool
 from pepsicode.tools.file_tree import file_tree_tool
 from pepsicode.tools.git import git_tool
@@ -31,6 +32,7 @@ from pepsicode.tools.run_command import run_command_tool
 from pepsicode.tools.run_with_debug import run_with_debug_tool
 from pepsicode.tools.save_memory import forget_memory_tool, save_memory_tool, search_memory_tool
 from pepsicode.tools.task import create_task_tool
+from pepsicode.tools.task_state import task_state_tool
 from pepsicode.tools.test_runner import test_runner_tool
 from pepsicode.tools.todo_write import todo_write_tool
 from pepsicode.tools.web_fetch import web_fetch_tool
@@ -78,6 +80,8 @@ def create_default_tool_registry(
         [
             # User interaction
             ask_user_tool,
+            task_state_tool,
+            execution_status_tool,
             exit_plan_mode_tool,
             # File operations
             list_files_tool,

@@ -3,6 +3,8 @@ from __future__ import annotations
 import urllib.parse
 import urllib.request
 
+from pepsicode.cancellation import cancellable_response
+from pepsicode.execution.external import urlopen
 from pepsicode.tooling import ToolDefinition, ToolResult
 from pepsicode.version import VERSION
 
@@ -35,7 +37,7 @@ def _run(input_data: dict, context) -> ToolResult:
             },
         )
 
-        with urllib.request.urlopen(req, timeout=15) as response:
+        with cancellable_response(urlopen(req, timeout=15)) as response:
             html = response.read().decode("utf-8", errors="replace")
 
         results = _parse_duckduckgo_results(html, num_results)

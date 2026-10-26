@@ -8,12 +8,16 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import time
 from dataclasses import dataclass, field
+from pathlib import Path
+from tempfile import NamedTemporaryFile
 from typing import Any
 
 from pepsicode.config import PEPSI_CODE_DIR
 from pepsicode.context.context_artifacts import ARTIFACT_REFERENCE_PATTERN
+from pepsicode.context.summarization import SummaryError, summarize_transcript
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -142,16 +146,16 @@ def _message_text(message: dict[str, Any]) -> str:
 
 
 def _render_messages_for_summary(messages: list[dict[str, Any]]) -> str:
-    """Flatten messages into a plain-text transcript for a summarizer prompt."""
+    """Render complete messages; token chunking happens after serialization."""
     parts: list[str] = []
     for m in messages:
         role = m.get("role", "")
         if role == "assistant_tool_call":
-            parts.append(f"[tool_call {m.get('toolName')}] {json.dumps(m.get('input'))[:500]}")
+            parts.append(f"[tool_call {m.get('toolName')}] {json.dumps(m.get('input'), ensure_ascii=False)}")
         elif role == "tool_result":
-            parts.append(f"[tool_result {m.get('toolName')}] {str(m.get('content', ''))[:500]}")
+            parts.append(f"[tool_result {m.get('toolName')}] {str(m.get('content', ''))}")
         else:
-            parts.append(f"[{role}] {_message_text(m)[:1000]}")
+            parts.append(f"[{role}] {_message_text(m)}")
     return "\n".join(parts)
 
 
@@ -190,9 +194,7 @@ def _merge_rolling_summary(previous: str, current: str) -> str:
     combined = "\n\n".join(part.strip() for part in (previous, current) if part.strip())
     if len(combined) <= MAX_ROLLING_SUMMARY_CHARS:
         return combined
-    tail_size = MAX_ROLLING_SUMMARY_CHARS // 4
-    head_size = MAX_ROLLING_SUMMARY_CHARS - tail_size - 48
-    return combined[:head_size] + "\n\n[older rolling summary truncated]\n\n" + combined[-tail_size:]
+    raise SummaryError("Extractive checkpoint exceeds its budget; original context retained")
 
 
 # ---------------------------------------------------------------------------
@@ -314,6 +316,10 @@ class CompactBoundary:
     protected_tail_count: int
     artifact_ids: list[str]
     created_at: float
+    summary_method: str = "legacy"
+    summary_calls: int = 0
+    summary_chunks: int = 0
+    warning: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -325,6 +331,10 @@ class CompactBoundary:
             "protected_tail_count": self.protected_tail_count,
             "artifact_ids": list(self.artifact_ids),
             "created_at": self.created_at,
+            "summary_method": self.summary_method,
+            "summary_calls": self.summary_calls,
+            "summary_chunks": self.summary_chunks,
+            "warning": self.warning,
         }
 
     @classmethod
@@ -338,6 +348,10 @@ class CompactBoundary:
             protected_tail_count=int(data.get("protected_tail_count", 0)),
             artifact_ids=[str(item) for item in data.get("artifact_ids", [])],
             created_at=float(data.get("created_at", 0.0)),
+            summary_method=str(data.get("summary_method", "legacy")),
+            summary_calls=int(data.get("summary_calls", 0)),
+            summary_chunks=int(data.get("summary_chunks", 0)),
+            warning=str(data.get("warning", "")),
         )
 
 
@@ -465,7 +479,7 @@ class ContextManager:
     actual_input_tokens: int = 0
     actual_output_tokens: int = 0
     # Optional callback used by compact_messages to LLM-summarize old turns.
-    # Signature: (messages_to_summarize) -> summary_text.  None -> drop-only.
+    # Signature: (transcript_chunk) -> summary_text. None -> marked extractive checkpoint.
     summarizer: Any = None
 
     def __post_init__(self):
@@ -496,23 +510,17 @@ class ContextManager:
         self.actual_output_tokens = 0
         self.update_runtime_state(workspace, permissions)
 
-    def _summarize_dropped(self, dropped: list[dict[str, Any]]) -> str:
-        """Summarize dropped messages, preserving high-value, long-lived info.
-
-        Uses the optional ``summarizer`` callback (an LLM call) when available;
-        otherwise falls back to a regex/heuristic extraction so compaction
-        still keeps file paths, errors, and decisions even with no model.
-        """
-        # Cap the input so the summarizer prompt itself stays bounded.
-        text = _render_messages_for_summary(dropped)[:15000]
-        if self.summarizer is not None:
-            try:
-                summary = self.summarizer(text)
-                if isinstance(summary, str) and summary.strip():
-                    return summary.strip()[:MAX_ROLLING_SUMMARY_CHARS]
-            except Exception:  # noqa: BLE001 - never let summarization break compaction
-                pass
-        return _heuristic_summary(dropped)
+    def _summarize_dropped(self, dropped: list[dict[str, Any]], previous: str = "") -> tuple[str, int, int]:
+        if self.summarizer is None:
+            return _merge_rolling_summary(previous, _heuristic_summary(dropped)), 0, 0
+        result = summarize_transcript(
+            _render_messages_for_summary(dropped),
+            previous=previous,
+            summarize=self.summarizer,
+            estimate=estimate_tokens,
+            max_chars=MAX_ROLLING_SUMMARY_CHARS,
+        )
+        return result.text, result.calls, result.chunks
 
     def update_model(self, model: str) -> None:
         """Update model and adjust context window."""
@@ -549,6 +557,12 @@ class ContextManager:
             "read_file",
             "write_file",
             "edit_file",
+            "patch_file",
+            "modify_file",
+            "notebook_edit",
+            "code_intelligence",
+            "rename_symbol",
+            "grep_files",
             "apply_patch",
             "grep",
             "glob",
@@ -557,6 +571,10 @@ class ContextManager:
             if isinstance(path, str):
                 operation = "error" if not ok else tool_name.removesuffix("_file")
                 self.recovery_state.remember_file(path, operation)
+        elif tool_name == "multi_edit":
+            for change in arguments.get("changes", []):
+                if isinstance(change, dict) and isinstance(change.get("file"), str):
+                    self.recovery_state.remember_file(change["file"], "multi_edit" if ok else "error")
         elif tool_name == "load_skill" and ok:
             name = arguments.get("name")
             if isinstance(name, str) and name.strip():
@@ -688,11 +706,18 @@ class ContextManager:
             )
             return self.messages
 
-        current_summary = self._summarize_dropped(dropped)
         previous_summary = self.compact_boundaries[-1].summary if self.compact_boundaries else ""
         if not previous_summary and prior_markers:
-            previous_summary = _message_text(prior_markers[-1])[: MAX_ROLLING_SUMMARY_CHARS // 2]
-        summary_text = _merge_rolling_summary(previous_summary, current_summary)
+            previous_summary = _message_text(prior_markers[-1])
+        try:
+            summary_text, summary_calls, summary_chunks = self._summarize_dropped(dropped, previous_summary)
+        except SummaryError as error:
+            self.last_compaction_error = str(error)
+            self.circuit_breaker.record(
+                fingerprint=fingerprint, before_tokens=before_estimated, after_tokens=before_estimated, accepted=False
+            )
+            return self.messages
+        warning = "" if self.summarizer is not None else "Extractive checkpoint only: semantic summarizer unavailable"
         current_artifact_ids = {
             artifact_id
             for message in dropped
@@ -700,7 +725,9 @@ class ContextManager:
         }
         previous_artifact_ids = set(self.compact_boundaries[-1].artifact_ids) if self.compact_boundaries else set()
         artifact_ids = sorted(previous_artifact_ids | current_artifact_ids)[-MAX_ROLLING_ARTIFACT_IDS:]
-        protected_tail_count = sum(len(group) for group in groups[-protected_group_count:])
+        protected_tail_count = (
+            sum(len(group) for group in groups[-protected_group_count:]) if protected_group_count else 0
+        )
         marker_body = (
             f"[Context compacted at {time.strftime('%H:%M:%S')}. "
             f"Previous {len(dropped)} messages summarized. "
@@ -709,6 +736,8 @@ class ContextManager:
         )
         if summary_text:
             marker_body += "\n\nSummary of earlier work:\n" + summary_text
+        if warning:
+            marker_body += "\n\nWARNING: " + warning
         marker_body += "\n\n" + self.recovery_state.render()
         if artifact_ids:
             marker_body += "\n- Recoverable context artifacts: " + ", ".join(artifact_ids)
@@ -733,6 +762,17 @@ class ContextManager:
             return self.messages
 
         now = time.time()
+        from pepsicode.execution.runtime import current_scope
+
+        scope = current_scope()
+        if scope:
+            scope.record(
+                "context/compacted",
+                before=self.messages,
+                after=compacted,
+                summary_method="model" if self.summarizer else "extractive",
+                summary_calls=summary_calls,
+            )
         boundary = CompactBoundary(
             version=1,
             summary=summary_text,
@@ -742,6 +782,10 @@ class ContextManager:
             protected_tail_count=protected_tail_count,
             artifact_ids=artifact_ids,
             created_at=now,
+            summary_method="model" if self.summarizer is not None else "extractive",
+            summary_calls=summary_calls,
+            summary_chunks=summary_chunks,
+            warning=warning,
         )
         self.compact_boundaries.append(boundary)
         self.compact_boundaries = self.compact_boundaries[-10:]
@@ -755,6 +799,7 @@ class ContextManager:
         )
         self.messages = compacted
         self.actual_input_tokens = 0
+        self.actual_output_tokens = 0
         self.last_compaction_changed = True
         self.circuit_breaker.record(
             fingerprint=fingerprint,
@@ -777,11 +822,16 @@ class ContextManager:
         if stats.should_compact:
             status = "FULL"
 
-        return (
+        summary = (
             f"Context: {status} {stats.usage_percentage:.0f}% "
             f"({stats.total_tokens:,}/{stats.context_window:,} tokens, "
             f"{stats.messages_count} msgs, {stats.tool_calls_count} tools)"
         )
+        if self.last_compaction_error:
+            summary += f"; compaction skipped: {self.last_compaction_error}"
+        elif self.compact_boundaries and self.compact_boundaries[-1].warning:
+            summary += "; " + self.compact_boundaries[-1].warning
+        return summary
 
     def format_context_details(self) -> str:
         """Get detailed context information for /context command."""
@@ -824,6 +874,8 @@ class ContextManager:
             )
         if self.last_compaction_error:
             lines.append(f"Last compaction skipped: {self.last_compaction_error}")
+        if self.compact_boundaries and self.compact_boundaries[-1].warning:
+            lines.append(self.compact_boundaries[-1].warning)
 
         return "\n".join(lines)
 
@@ -849,7 +901,19 @@ def save_context_state(manager: ContextManager) -> None:
         "circuit_breaker": manager.circuit_breaker.to_dict(),
     }
 
-    state_path.write_text(json.dumps(state, indent=2, ensure_ascii=False), encoding="utf-8")
+    temporary = None
+    try:
+        with NamedTemporaryFile(
+            mode="w", encoding="utf-8", dir=state_path.parent, suffix=".tmp", delete=False
+        ) as stream:
+            temporary = stream.name
+            stream.write(json.dumps(state, indent=2, ensure_ascii=False))
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, state_path)
+    finally:
+        if temporary is not None:
+            Path(temporary).unlink(missing_ok=True)
 
 
 def load_context_state() -> ContextManager | None:
@@ -874,7 +938,7 @@ def load_context_state() -> ContextManager | None:
             recovery_state=RecoveryState.from_dict(state.get("recovery_state")),
             circuit_breaker=CompactCircuitBreaker.from_dict(state.get("circuit_breaker")),
         )
-    except (json.JSONDecodeError, KeyError):
+    except (OSError, ValueError, KeyError, TypeError, AttributeError):
         return None
 
 

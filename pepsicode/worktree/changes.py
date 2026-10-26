@@ -5,6 +5,8 @@ import os
 import subprocess
 from dataclasses import dataclass
 
+from pepsicode.execution import process as process_service
+
 log = logging.getLogger(__name__)
 
 GIT_ENV = {"GIT_TERMINAL_PROMPT": "0", "GIT_ASKPASS": ""}
@@ -14,7 +16,7 @@ def _run_git(args: list[str], cwd: str, timeout: int = 30) -> subprocess.Complet
     from pepsicode.subprocess_utils import hide_window_kwargs
 
     env = {**os.environ, **GIT_ENV}
-    return subprocess.run(
+    return process_service.run(
         ["git"] + args,
         cwd=cwd,
         capture_output=True,

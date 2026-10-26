@@ -189,7 +189,8 @@ def test_steering_after_final_response_continues_same_run(tmp_path, runner):
         cwd=str(tmp_path),
         input_queue=queue,
     )
-    assert model.requests[1][-1] == {"role": "user", "content": "also cover Windows"}
+    assert model.requests[1][-1]["content"] == "also cover Windows"
+    assert model.requests[1][-1]["source"]["kind"] == "steering"
     assert messages[-1]["content"] == "revised answer"
 
 
@@ -215,7 +216,7 @@ def test_follow_up_waits_until_failed_verification_is_fixed(tmp_path, monkeypatc
         runner=runner,
         model=object(),
         tools=ToolRegistry([]),
-        messages=[{"role": "user", "content": "implement"}],
+        messages=[{"role": "user", "content": "explain the first topic"}],
         cwd=str(tmp_path),
         input_queue=queue,
     )

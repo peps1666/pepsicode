@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 from typing import Any
 
+from pepsicode.execution.filesystem import FILES
 from pepsicode.tooling import ToolDefinition, ToolResult
 
 # ---------------------------------------------------------------------------
@@ -145,7 +146,7 @@ def _validate(input_data: dict) -> dict:
 
 def _run(input_data: dict, context) -> ToolResult:
     """Review Python code quality."""
-    target = Path(context.cwd) / input_data["path"]
+    target = FILES.checked_path(Path(context.cwd) / input_data["path"])
     checks_type = input_data["checks"]
 
     if not target.exists():
@@ -167,7 +168,7 @@ def _run(input_data: dict, context) -> ToolResult:
 
     for py_file in py_files:
         try:
-            content = py_file.read_text(encoding="utf-8")
+            content = FILES.read_text(py_file)
             tree = ast.parse(content, filename=str(py_file))
         except (SyntaxError, UnicodeDecodeError):
             continue

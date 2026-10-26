@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import tempfile
 from pathlib import Path
@@ -180,6 +181,21 @@ def load_runtime_config(cwd: str | Path | None = None) -> dict[str, Any]:
     if not isinstance(reasoning_effort, str) or not reasoning_effort or any(c.isspace() for c in reasoning_effort):
         raise ValueError("reasoningEffort must be a non-empty API effort level")
 
+    request_limit = effective.get("modelRequestLimit", 200)
+    if isinstance(request_limit, bool) or not isinstance(request_limit, int) or request_limit < 1:
+        raise ValueError("modelRequestLimit must be a positive integer")
+    task_timeout = effective.get("taskTimeout")
+    if task_timeout is not None and (
+        isinstance(task_timeout, bool)
+        or not isinstance(task_timeout, (int, float))
+        or not math.isfinite(task_timeout)
+        or task_timeout <= 0
+    ):
+        raise ValueError("taskTimeout must be a positive finite duration in seconds")
+    sandbox_mode = effective.get("processSandboxMode", "danger-full-access")
+    if sandbox_mode not in {"danger-full-access", "workspace-write", "read-only"}:
+        raise ValueError("processSandboxMode must be danger-full-access, workspace-write, or read-only")
+
     runtime = {
         "model": model,
         "modelSource": (
@@ -200,6 +216,10 @@ def load_runtime_config(cwd: str | Path | None = None) -> dict[str, Any]:
         "governance": bool(effective.get("governance", False)),
         "mcpServers": effective.get("mcpServers", {}),
         "budgetLimitUsd": budget_limit_usd,
+        "modelRequestLimit": request_limit,
+        "repeatToolThresholds": effective.get("repeatToolThresholds", [3, 5, 8]),
+        "taskTimeout": task_timeout,
+        "processSandboxMode": sandbox_mode,
         "maxIterations": max_iterations,
         "verifierEnabled": verifier_enabled,
         "verificationMode": effective.get(

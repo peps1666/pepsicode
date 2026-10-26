@@ -201,7 +201,10 @@ class HookEngine:
         return result
 
     def _submit_background(self, hook: HookDefinition, context: HookContext) -> None:
-        cancel_event = threading.Event()
+        from pepsicode.execution.runtime import CombinedCancellation, bind_scope, current_scope
+
+        parent = current_scope()
+        cancel_event = CombinedCancellation(parent.cancellation_event if parent else None)
         background_context = HookContext(
             event=context.event,
             cwd=context.cwd,
@@ -209,7 +212,13 @@ class HookEngine:
             metadata={**context.metadata, "_hook_cancel_event": cancel_event},
             timestamp=context.timestamp,
         )
-        future = self._executor.submit(self._execute_claimed, hook, background_context)
+
+        def execute():
+            scope = parent.child(cancellation_event=cancel_event) if parent else None
+            with bind_scope(scope):
+                return self._execute_claimed(hook, background_context)
+
+        future = self._executor.submit(execute)
         with self._lock:
             self._futures.add(future)
             self._cancel_events[future] = cancel_event

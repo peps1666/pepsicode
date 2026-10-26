@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 
+from pepsicode.execution.filesystem import FILES
 from pepsicode.tooling import ToolDefinition, ToolResult
 from pepsicode.workspace import resolve_tool_path
 
@@ -26,6 +27,7 @@ def _validate(input_data: dict) -> dict:
 
 def _run(input_data: dict, context) -> ToolResult:
     target = resolve_tool_path(context, input_data["path"], "write")
+    snapshot = FILES.snapshot(context, target, for_edit=True)
 
     new_cells = input_data["cells"]
 
@@ -33,7 +35,7 @@ def _run(input_data: dict, context) -> ToolResult:
     existing_cells = []
     if target.exists():
         try:
-            existing_nb = json.loads(target.read_text(encoding="utf-8"))
+            existing_nb = json.loads(snapshot.text)
             existing_cells = existing_nb.get("cells", [])
         except (json.JSONDecodeError, KeyError):
             pass
@@ -122,10 +124,11 @@ def _run(input_data: dict, context) -> ToolResult:
                 notebook["cells"].append(existing_cell)
 
     # Write notebook
-    target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text(
+    FILES.write_text(
+        context,
+        target,
         json.dumps(notebook, indent=1, ensure_ascii=False) + "\n",
-        encoding="utf-8",
+        expected=snapshot.version,
     )
 
     # Format output

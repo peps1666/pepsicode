@@ -235,7 +235,12 @@ class ClientSession:
         self.tools = create_default_tool_registry(
             self.cwd, runtime=self.runtime, cost_tracker=self.cost_tracker, trace_manager=self.trace_manager
         )
-        self.permissions = PermissionManager(self.cwd, prompt=None, mode=PermissionMode.AUTO)  # set later
+        self.permissions = PermissionManager(
+            self.cwd,
+            prompt=None,
+            mode=PermissionMode.AUTO,
+            process_sandbox_mode=(self.runtime or {}).get("processSandboxMode", "danger-full-access"),
+        )  # set later
         self.hook_engine = create_hook_engine(self.cwd, self.permissions)
         self.hook_engine.emit(
             HookEvent.STARTUP,
@@ -262,6 +267,7 @@ class ClientSession:
                 self.context_manager.summarizer = summarize
 
         self.session_data = create_new_session(self.cwd)
+        self.input_queue.bind_session(self.session_data)
         from pepsicode.context.memory import create_memory_manager
 
         self.memory_manager = create_memory_manager(self.cwd)
@@ -308,6 +314,9 @@ class ClientSession:
             "tree": view,
             "draft": draft,
             "verification": (self.runtime or {}).get("_lastVerification"),
+            "execution": self.session_data.execution_state,
+            "task": self.session_data.task_control.get("task"),
+            "pending_inputs": self.session_data.task_control.get("inbox", {}).get("pending", []),
         }
 
     def set_permission_handler(self, handler: RemotePermissionBridge) -> None:
@@ -321,8 +330,12 @@ class ClientSession:
             if self.tools is not None:
                 self.tools.dispose()
         finally:
-            if self.hook_engine is not None:
-                self.hook_engine.close()
+            try:
+                if self.hook_engine is not None:
+                    self.hook_engine.close()
+            finally:
+                if self.permissions is not None:
+                    self.permissions.close()
 
     def cost_snapshot(self) -> dict[str, Any]:
         tracker = self.cost_tracker
@@ -566,7 +579,14 @@ class PepsiCodeServer:
         except Exception as error:  # noqa: BLE001
             logger.exception("Error in turn/run")
             session.input_queue.close()
-            await emit("turn/end", {"status": "error", "error": str(error)})
+            await emit(
+                "turn/end",
+                {
+                    "status": "error",
+                    "error": str(error),
+                    "task": session.session_data.task_control.get("task") if session.session_data else None,
+                },
+            )
             response = protocol.make_response(req_id, error=protocol.make_error(protocol.ERR_INTERNAL, str(error)))
         finally:
             session.input_queue.close()
@@ -651,6 +671,7 @@ class PepsiCodeServer:
             session.initialize(force=session.tools is not None)
             session.set_permission_handler(bridge)
             session.session_data = loaded
+            session.input_queue.bind_session(loaded)
             session.messages = list(loaded.messages)
             restore_verification_state(session.tools, session.runtime, loaded.verification_state, loaded.messages)
             if loaded.model_settings and session.runtime and not isinstance(session.model, MockModelAdapter):
@@ -670,6 +691,8 @@ class PepsiCodeServer:
                 "history": protocol.serialize_session_history([node["message"] for node in branch_path(loaded)]),
                 "tree": tree_view(loaded),
                 "verification": (session.runtime or {}).get("_lastVerification"),
+                "pending_inputs": loaded.task_control.get("inbox", {}).get("pending", []),
+                "task": loaded.task_control.get("task"),
                 "workspace": session.cwd,
                 **session.model_settings(),
                 "permission_mode": session.permissions.mode.value if session.permissions else "default",
@@ -776,6 +799,8 @@ class PepsiCodeServer:
             return {"cancelled": False}
 
         if method == "turn/enqueue":
+            if session.session_data is None:
+                raise ValueError("Session is still initializing; input has not been accepted")
             if session._closing or session._cancellation_event.is_set():
                 raise ValueError("The task is stopping; keep this input for the next task")
             raw_input = params.get("input", "")
@@ -898,6 +923,15 @@ class PepsiCodeServer:
         loop: asyncio.AbstractEventLoop,
     ) -> dict[str, Any]:
         """Run an agent turn in a worker thread, streaming events back."""
+        if params.get("task_kind") is not None and params["task_kind"] not in {"answer", "change", "operation"}:
+            raise ValueError("task_kind must be answer, change, or operation")
+        if params.get("acceptance") is not None:
+            from pepsicode.core.task_acceptance import validate_criteria
+
+            validate_criteria(params["acceptance"])
+        answer_to = params.get("answer_to", [])
+        if not isinstance(answer_to, list) or not all(isinstance(item, str) and item for item in answer_to):
+            raise ValueError("answer_to must be an array of question IDs")
         if session.model is None:
             raise RuntimeError("Session not initialized. Call session/create first.")
 
@@ -957,6 +991,10 @@ class PepsiCodeServer:
                 return result
 
             session.messages.append(prompt_message or {"role": "user", "content": user_input})
+            if answer_to:
+                session.messages[-1].setdefault("source", {"kind": "human", "id": uuid.uuid4().hex})["answerTo"] = (
+                    answer_to
+                )
             if session.session_data:
                 record_messages(session.session_data, session.messages)
             if regeneration:
@@ -964,6 +1002,8 @@ class PepsiCodeServer:
                     session.runtime.pop("_lastVerification", None)
                 await emit("session/view", session.conversation_view())
             if not session.input_queue.accepting:
+                if session.session_data:
+                    session.input_queue.bind_session(session.session_data)
                 session.input_queue.start(
                     lambda update: asyncio.run_coroutine_threadsafe(emit("input/queue", update), loop)
                 )
@@ -1049,6 +1089,8 @@ class PepsiCodeServer:
                     with recording_session(session.session_data):
                         return run_verified_turn(
                             runtime=session.runtime,
+                            task_kind=params.get("task_kind"),
+                            acceptance=params.get("acceptance"),
                             runner=run_agent_turn_stream,
                             input_queue=session.input_queue,
                             cancellation_event=session._cancellation_event,
@@ -1115,10 +1157,23 @@ class PepsiCodeServer:
             if session.session_data:
                 await emit("session/view", session.conversation_view())
 
+            execution = (
+                (session.runtime or {}).get("_lastExecution")
+                or (session.session_data.execution_state if session.session_data else None)
+                or {}
+            )
+            turn_status = execution.get("state", "cancelled" if session._cancellation_event.is_set() else "completed")
+            if turn_status == "succeeded":
+                turn_status = "completed"
+            task = session.session_data.task_control.get("task") if session.session_data else None
+            if task and task["status"] not in {"complete", "answered", "active"}:
+                turn_status = task["status"]
             await emit(
                 "turn/end",
                 {
-                    "status": "cancelled" if session._cancellation_event.is_set() else "completed",
+                    "status": turn_status,
+                    "execution": execution,
+                    "task": task,
                     "messages": len(session.messages),
                     "verification": (session.runtime or {}).get("_lastVerification"),
                 },
@@ -1126,7 +1181,7 @@ class PepsiCodeServer:
 
             last_assistant = next((m for m in reversed(session.messages) if m.get("role") == "assistant"), None)
             return {
-                "status": "cancelled" if session._cancellation_event.is_set() else "completed",
+                "status": turn_status,
                 "messages": len(session.messages),
                 "last_message": last_assistant.get("content", "") if last_assistant else "",
             }
@@ -1140,6 +1195,7 @@ class PepsiCodeServer:
                 session.session_data, entry_id=params.get("entry_id"), clone=method == "session/clone"
             )
         session.messages = list(session.session_data.messages)
+        session.input_queue.bind_session(session.session_data)
         restore_verification_state(
             session.tools, session.runtime, session.session_data.verification_state, session.messages
         )

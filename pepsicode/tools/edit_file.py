@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from pepsicode.core.file_review import apply_reviewed_file_change, load_existing_file
+from pepsicode.core.file_review import apply_reviewed_file_change
+from pepsicode.execution.filesystem import FILES
 from pepsicode.tooling import ToolDefinition
 from pepsicode.workspace import resolve_tool_path
 
@@ -25,14 +26,17 @@ def _validate(input_data: dict) -> dict:
 
 def _run(input_data: dict, context):
     target = resolve_tool_path(context, input_data["path"], "write")
-    content = load_existing_file(target)
+    snapshot = FILES.snapshot(context, target, for_edit=True)
+    content = snapshot.text
     if input_data["search"] not in content:
         raise ValueError(f"Text not found in {input_data['path']}")
     if input_data["replace_all"]:
         next_content = input_data["replace"].join(content.split(input_data["search"]))
     else:
         next_content = content.replace(input_data["search"], input_data["replace"], 1)
-    return apply_reviewed_file_change(context, input_data["path"], target, next_content)
+    return apply_reviewed_file_change(
+        context, input_data["path"], target, next_content, expected_version=snapshot.version
+    )
 
 
 edit_file_tool = ToolDefinition(

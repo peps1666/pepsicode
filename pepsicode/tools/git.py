@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import subprocess
 
+from pepsicode.execution import process as process_service
 from pepsicode.tooling import ToolDefinition, ToolResult
 
 
@@ -51,7 +52,7 @@ def _run(input_data: dict, context) -> ToolResult:
 def _run_git(args: list[str], cwd: str) -> tuple[int, str, str]:
     from pepsicode.subprocess_utils import hide_window_kwargs
 
-    proc = subprocess.run(
+    proc = process_service.run(
         ["git"] + args,
         cwd=cwd,
         capture_output=True,

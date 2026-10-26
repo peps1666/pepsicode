@@ -35,7 +35,7 @@ const labels: Record<string, string> = {
   read_file: "读取文件", write_file: "写入文件", edit_file: "编辑文件",
   patch_file: "应用补丁", multi_edit: "批量编辑", run_command: "运行命令", search_files: "搜索文件", grep_files: "搜索内容",
   list_files: "列出文件", file_tree: "浏览目录", web_fetch: "读取网页", web_search: "搜索网页",
-  task: "运行子任务", load_skill: "加载技能", verification: "项目验证", test_runner: "运行测试",
+  task: "运行子任务", task_state: "任务验收条件", execution_status: "核对执行状态", load_skill: "加载技能", verification: "项目验证", test_runner: "运行测试",
 };
 
 export function describeTool(message: ChatMessage) {

@@ -3,6 +3,8 @@ from __future__ import annotations
 import urllib.error
 import urllib.request
 
+from pepsicode.cancellation import cancellable_response
+from pepsicode.execution.external import urlopen
 from pepsicode.tooling import ToolDefinition, ToolResult
 from pepsicode.version import VERSION
 
@@ -61,20 +63,7 @@ def _run(input_data: dict, context) -> ToolResult:
             },
         )
 
-        # Limit redirect count
-        class LimitedRedirectHandler(urllib.request.HTTPRedirectHandler):
-            def __init__(self):
-                self.redirect_count = 0
-
-            def redirect_request(self, req, fp, code, msg, headers, newurl):
-                self.redirect_count += 1
-                if self.redirect_count > MAX_REDIRECTS:
-                    raise urllib.error.HTTPError(req.full_url, code, f"Too many redirects (>{MAX_REDIRECTS})", msg, fp)
-                return urllib.request.HTTPRedirectHandler.redirect_request(self, req, fp, code, msg, headers, newurl)
-
-        opener = urllib.request.build_opener(LimitedRedirectHandler())
-
-        with opener.open(req, timeout=30) as response:
+        with cancellable_response(urlopen(req, context=context, timeout=30, validate_url=_is_safe_url)) as response:
             content_type = response.headers.get("Content-Type", "")
             charset = "utf-8"
 

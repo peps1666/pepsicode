@@ -245,7 +245,7 @@ class MemoryManager:
         self.store: MemoryStore = store if store is not None else FileMemoryStore(workspace)
         # File store is always kept around for mirroring / fallback, even when
         # the primary backend is PostgreSQL.
-        self._file_store = FileMemoryStore(workspace)
+        self._file_store = self.store if isinstance(self.store, FileMemoryStore) else FileMemoryStore(workspace)
         self._load_all()
 
     def _load_all(self) -> None:
@@ -275,7 +275,10 @@ class MemoryManager:
             try:
                 self._file_store.save_scope(scope, entries)
             except Exception:  # noqa: BLE001 - mirror is best-effort
-                pass
+                from pepsicode.execution.runtime import current_tool_context
+
+                if current_tool_context() is not None:
+                    raise
 
     def add_entry(
         self,

@@ -12,8 +12,12 @@ from tempfile import TemporaryDirectory
 from pepsicode.core.agent_loop import append_queued_inputs
 from pepsicode.core.input_queue import TurnInputQueue
 from pepsicode.core.loop_engine import VerificationResult, run_loop
+from pepsicode.core.session_tree import checkpoint_messages
+from pepsicode.core.task_control import begin_task, edit_control, snapshot
+from pepsicode.core.task_verification import TaskVerifier, settle_task, settle_task_failure
 from pepsicode.core.verification_discovery import Check as Check
 from pepsicode.core.verification_discovery import command_timeout, discover_checks
+from pepsicode.execution.runtime import scoped_turn
 from pepsicode.tooling import ToolContext, ToolRegistry
 from pepsicode.tools.run_command import run_command_tool
 from pepsicode.workspace import resolve_tool_path
@@ -121,20 +125,6 @@ class ProjectVerifier:
             )
             try:
                 target = resolve_tool_path(context, check.cwd, "command_cwd")
-                if permissions is not None:
-                    outcome = permissions.check_command(
-                        check.argv[0],
-                        check.argv[1:],
-                        str(target),
-                        force_prompt_reason="Run project verification scripts, which execute repository code",
-                    )
-                    if outcome.is_denied or outcome.is_unavailable:
-                        return VerificationResult(
-                            False,
-                            f"Verification requires approval: {check.name}",
-                            outcome.denial_message(scope=check.name),
-                            "blocked",
-                        )
                 argv = execution_argv(check.argv, windows=os.name == "nt")
                 data = {"command": argv[0], "args": argv[1:], "cwd": str(target), "timeout": check.timeout or timeout}
                 if self.on_tool_start:
@@ -184,17 +174,38 @@ class ProjectVerifier:
         return VerificationResult(True, f"{len(checks)} verification check(s) passed", "\n".join(reports), "passed")
 
 
+@scoped_turn
 def run_verified_turn(
-    *, runtime: dict | None, runner, input_queue: TurnInputQueue | None = None, on_verification=None, **options
+    *,
+    runtime: dict | None,
+    runner,
+    input_queue: TurnInputQueue | None = None,
+    on_verification=None,
+    task_kind=None,
+    acceptance=None,
+    **options,
 ):
     """Finish verification before admitting the next queued task."""
     runtime = runtime if runtime is not None else {}
     if input_queue is None:
-        return _run_verified_turn_once(runtime=runtime, runner=runner, on_verification=on_verification, **options)
+        return _run_verified_turn_once(
+            runtime=runtime,
+            runner=runner,
+            on_verification=on_verification,
+            task_kind=task_kind,
+            acceptance=acceptance,
+            **options,
+        )
     try:
         while True:
             messages = _run_verified_turn_once(
-                runtime=runtime, runner=runner, on_verification=on_verification, input_queue=input_queue, **options
+                runtime=runtime,
+                runner=runner,
+                on_verification=on_verification,
+                input_queue=input_queue,
+                task_kind=task_kind,
+                acceptance=acceptance,
+                **options,
             )
             event = options.get("cancellation_event")
             report = runtime.get("_lastVerification") or {}
@@ -216,13 +227,26 @@ def run_verified_turn(
                 agent_scope=options.get("agent_scope", "main"),
             )
             options["messages"] = messages
+            task_kind, acceptance = None, None
     finally:
         input_queue.close()
 
 
-def _run_verified_turn_once(*, runtime: dict | None, runner, on_verification=None, **options):
+@settle_task_failure
+def _run_verified_turn_once(
+    *, runtime: dict | None, runner, on_verification=None, task_kind=None, acceptance=None, **options
+):
     """Run the existing agent with optional streaming and a bounded verifier."""
     runtime = runtime if runtime is not None else {}
+    contract_options = {**runtime, **({"taskKind": task_kind} if task_kind is not None else {})}
+    task = begin_task(options.get("messages", []), contract_options)
+    configured = acceptance if acceptance is not None else runtime.get("taskAcceptance")
+    if task and configured is not None:
+        from pepsicode.core.task_acceptance import validate_criteria
+
+        with edit_control() as control:
+            control["task"]["criteria"] = validate_criteria(configured)
+            control["task"]["criteria_revision"] = control["task"]["revision"]
     runtime.pop("_lastVerification", None)
     event = options.get("cancellation_event")
     report = None
@@ -259,7 +283,7 @@ def _run_verified_turn_once(*, runtime: dict | None, runner, on_verification=Non
         runner=runner,
         turn_options=turn_options,
         cancellation_event=event,
-        verifier=verifier,
+        verifier=TaskVerifier(verifier, runtime),
         max_iterations=runtime.get("maxIterations", 3),
         no_progress_limit=runtime.get("verificationNoProgressLimit", 2),
         cost_limit_usd=options.get("cost_limit_usd", runtime.get("budgetLimitUsd")),
@@ -282,6 +306,21 @@ def _run_verified_turn_once(*, runtime: dict | None, runner, on_verification=Non
         callback = options.get("on_error_message") or options.get("on_assistant_message")
         if callback:
             callback(message)
+    if (
+        report
+        and report.get("reason_code") == "awaiting_user"
+        and not (result.messages and result.messages[-1].get("awaitingUser"))
+    ):
+        pending = [
+            q["question"]
+            for q in snapshot().get("questions", [])
+            if q["status"] == "pending" and q.get("required", True)
+        ]
+        result.messages.append(
+            {"role": "assistant", "content": "\n".join(pending) or "Waiting for your reply.", "awaitingUser": True}
+        )
+    checkpoint_messages(result.messages)
+    settle_task(result.messages, runtime, result.stop_reason)
     if report is not None:
         for message in reversed(result.messages):
             if message.get("role") == "assistant":

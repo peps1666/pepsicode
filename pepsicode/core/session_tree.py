@@ -15,6 +15,10 @@ if TYPE_CHECKING:
 _recording: ContextVar = ContextVar("session_recording", default=None)
 
 
+def current_session():
+    return _recording.get()
+
+
 def validate_tree(tree: dict) -> None:
     """Reject damaged graphs before they can replace a live session."""
     if tree == {}:
@@ -53,6 +57,9 @@ def record_messages(session: SessionData, messages: list[dict]) -> None:
                 continue
             entry_id = message.get("entryId")
             if entry_id in index:
+                for key in ("source", "task", "verification", "finishReason", "isError"):
+                    if key in message:
+                        index[entry_id]["message"][key] = copy.deepcopy(message[key])
                 parent = entry_id
                 continue
             entry_id = uuid.uuid4().hex
@@ -69,6 +76,22 @@ def checkpoint_messages(messages: list[dict]) -> None:
     session = _recording.get()
     if session is not None:
         record_messages(session, messages)
+
+
+def previous_execution(runtime: dict) -> dict | None:
+    session = _recording.get()
+    return session.execution_state if session is not None else runtime.get("_lastExecution")
+
+
+def checkpoint_execution(state: dict) -> None:
+    """Persist the journal pointer before effects, even before the first autosave."""
+    session = _recording.get()
+    if session is not None:
+        from pepsicode.core.session import save_session
+
+        with session._tree_lock:
+            session.execution_state = copy.deepcopy(state)
+            save_session(session)
 
 
 @contextmanager
@@ -117,7 +140,7 @@ def resolve_entry(session: SessionData, entry_id: str | None, *, user_only: bool
     return node
 
 
-def checkout_entry(session: SessionData, entry_id: str) -> str:
+def checkout_entry(session: SessionData, entry_id: str, *, preserve_task: bool = False) -> str:
     """User nodes return a draft and continue BEFORE that message, like Pi."""
     with session._tree_lock:
         record_messages(session, session.messages)
@@ -154,6 +177,11 @@ def checkout_entry(session: SessionData, entry_id: str) -> str:
         # Verification describes shared on-disk files, not a historical branch.
         if session.verification_state:
             session.verification_state = {**session.verification_state, "last_report": None}
+        # Historical text cannot grant a different branch the current goal's
+        # identity or completion evidence. Regeneration explicitly keeps the
+        # selected task and will recheck it before accepting a new answer.
+        if not preserve_task and session.task_control.get("task"):
+            session.task_control.setdefault("task_history", []).append(session.task_control.pop("task"))
         return draft
 
 
@@ -162,7 +190,9 @@ def prepare_regeneration(session: SessionData, entry_id: str | None = None) -> d
         record_messages(session, session.messages)
         node = resolve_entry(session, entry_id, user_only=True)
         prompt = copy.deepcopy(node["message"])
-        checkout_entry(session, node["id"])
+        task = session.task_control.get("task")
+        same_task = bool(task and prompt.get("source", {}).get("id") in task["inputs"])
+        checkout_entry(session, node["id"], preserve_task=same_task)
         prompt.pop("entryId", None)
         return prompt
 
@@ -181,6 +211,8 @@ def copy_session(session: SessionData, *, entry_id: str | None = None, clone: bo
             "mcp_servers",
             "model_settings",
             "verification_state",
+            "execution_state",
+            "task_control",
         ):
             setattr(child, name, copy.deepcopy(getattr(session, name)))
         child.access_mode, child.permission_mode, child.plan_file_path = (
@@ -191,6 +223,7 @@ def copy_session(session: SessionData, *, entry_id: str | None = None, clone: bo
         child.parent_session_id = session.session_id
         child.parent_entry_id = session.tree.get("leaf_id")
         child.tree = copy.deepcopy(session.tree)
+        child.task_control = {"todos": copy.deepcopy(session.task_control.get("todos", []))}
         draft = ""
         if not clone:
             node = resolve_entry(session, entry_id, user_only=True)

@@ -11,8 +11,8 @@ from typing import Any
 import pytest
 
 from pepsicode.mcp import (
-    MAX_TOOL_NAME_LENGTH,
     _MAX_LIST_PAGES,
+    MAX_TOOL_NAME_LENGTH,
     HttpMcpClient,
     StdioMcpClient,
     _create_client,
@@ -37,6 +37,7 @@ def test_create_mcp_backed_tools_supports_newline_json(tmp_path: Path) -> None:
                 "command": "python",
                 "args": [str(server_script)],
                 "protocol": "newline-json",
+                "readOnlyTools": ["echo"],
             }
         },
     )
@@ -462,7 +463,7 @@ def test_create_mcp_backed_tools_with_http_server(tmp_path: Path) -> None:
         mcp = create_mcp_backed_tools(
             cwd=str(tmp_path),
             mcp_servers={
-                "remote": {"url": server.url},
+                "remote": {"url": server.url, "readOnlyTools": ["echo"]},
             },
         )
         names = [tool.name for tool in mcp["tools"]]
@@ -612,7 +613,7 @@ def test_call_tool_restarts_a_dead_process_once() -> None:
     assert state["calls"] == 1
 
 
-def test_call_tool_returns_error_when_the_restarted_process_dies() -> None:
+def test_call_tool_never_replays_after_dispatched_request_loses_response() -> None:
     client = StdioMcpClient("fake", {"command": "python"}, ".")
     state = {"alive": True, "starts": 0, "calls": 0}
 
@@ -642,8 +643,10 @@ def test_call_tool_returns_error_when_the_restarted_process_dies() -> None:
     result = client.call_tool("echo", {})
 
     assert result.ok is False
-    assert "died-2" in result.output
-    assert state["starts"] == 1
+    assert "died-1" in result.output
+    assert result.status == "unknown"
+    assert state["starts"] == 0
+    assert state["calls"] == 1
 
 
 def test_http_parse_response_matches_request_id() -> None:

@@ -43,11 +43,20 @@ def _connect_to_db(conn_string: str, cwd: str) -> Any:
         if parsed.get("relative"):
             db_path = Path(cwd) / parsed["path"]
 
+        from pepsicode.execution.runtime import current_scope
+        from pepsicode.tooling import ToolContext
+        from pepsicode.workspace import resolve_tool_path
+
+        scope = current_scope()
+        db_path = resolve_tool_path(
+            ToolContext(cwd, permissions=scope.permissions if scope else None, execution=scope), str(db_path), "read"
+        )
+
         if not db_path.exists():
             return None, f"Database file not found: {db_path}"
 
         try:
-            conn = sqlite3.connect(str(db_path))
+            conn = sqlite3.connect(db_path.as_uri() + "?mode=ro", uri=True)
             conn.row_factory = sqlite3.Row
             return conn, None
         except Exception as e:

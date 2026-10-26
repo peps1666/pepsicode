@@ -177,6 +177,8 @@ class ApprovalStore:
         previous behaviour.
         """
         decision = outcome.decision
+        if decision == ApprovalDecision.ALLOW_ONCE:
+            return  # A single operation never creates a session-wide grant.
         if kind == ApprovalKind.PATH:
             self._record_path(scope, outcome)
         elif kind == ApprovalKind.COMMAND:

@@ -6,6 +6,8 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
+from pepsicode.execution import process as process_service
+from pepsicode.execution.filesystem import FILES
 from pepsicode.python_runtime import project_python
 from pepsicode.tooling import ToolDefinition, ToolResult
 
@@ -166,7 +168,7 @@ def _validate(input_data: dict) -> dict:
 
 def _run(input_data: dict, context) -> ToolResult:
     """Run tests with smart discovery and parsing."""
-    target = Path(context.cwd) / input_data["path"]
+    target = FILES.checked_path(Path(context.cwd) / input_data["path"])
     framework = input_data["framework"]
     verbose = input_data["verbose"]
     coverage = input_data["coverage"]
@@ -200,7 +202,7 @@ def _run(input_data: dict, context) -> ToolResult:
         try:
             from pepsicode.subprocess_utils import hide_window_kwargs
 
-            subprocess.run(
+            process_service.run(
                 [project_python(context.cwd), "-m", "pytest", "--version"],
                 capture_output=True,
                 timeout=5,
@@ -256,7 +258,7 @@ def _run(input_data: dict, context) -> ToolResult:
     try:
         from pepsicode.subprocess_utils import hide_window_kwargs
 
-        result = subprocess.run(
+        result = process_service.run(
             cmd,
             cwd=str(context.cwd),
             capture_output=True,

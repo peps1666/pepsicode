@@ -171,6 +171,7 @@ def serialize_session_history(messages: list[dict[str, Any]]) -> list[dict[str, 
                     "content": content,
                     "is_error": bool(message.get("isError", False)),
                     "entry_id": message.get("entryId"),
+                    **({"task": message["task"]} if isinstance(message.get("task"), dict) else {}),
                     **(
                         {"verification": message["verification"]}
                         if isinstance(message.get("verification"), dict)

@@ -6,6 +6,8 @@ import urllib.error
 import urllib.request
 from typing import Any
 
+from pepsicode.cancellation import cancellable_response
+from pepsicode.execution.external import urlopen
 from pepsicode.tooling import ToolDefinition, ToolResult
 
 # ---------------------------------------------------------------------------
@@ -186,10 +188,11 @@ def _run(input_data: dict, context) -> ToolResult:
     try:
         req = _build_request(method, url, headers.copy(), body, auth)
 
-        with urllib.request.urlopen(req, timeout=timeout) as response:
+        with cancellable_response(urlopen(req, context=context, timeout=timeout)) as response:
             status_code = response.status
             response_headers = dict(response.headers)
             response_body = response.read().decode("utf-8", errors="replace")
+            context.effect_state = "completed"
 
     except urllib.error.HTTPError as e:
         status_code = e.code

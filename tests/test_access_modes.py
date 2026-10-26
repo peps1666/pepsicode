@@ -33,14 +33,16 @@ def isolated_storage(tmp_path, monkeypatch):
 
 def test_auto_edits_multiple_files_without_prompt_but_checks_external_paths(tmp_path):
     seen = []
-    manager = PermissionManager(str(tmp_path), mode="auto", prompt=lambda req: seen.append(req) or {"decision": "allow_once"})
+    manager = PermissionManager(
+        str(tmp_path), mode="auto", prompt=lambda req: seen.append(req) or {"decision": "allow_once"}
+    )
     for name in ("a.py", "b.py"):
         assert manager.check_edit(str(tmp_path / name), "+ changed").is_allowed
     assert not seen
     external = str(tmp_path.parent / "outside.py")
     assert manager.check_edit(external, "+ changed").is_allowed
     assert manager.check_edit(external, "+ next change").is_allowed
-    assert [req["kind"] for req in seen] == ["path"]
+    assert [req["kind"] for req in seen] == ["path", "path"]
     assert manager.check_command("git", ["reset", "--hard"], str(tmp_path)).is_allowed
     assert seen[-1]["kind"] == "command"
     assert manager.check_mcp_tool("mcp__remote__write", {}).is_allowed
@@ -145,7 +147,9 @@ def test_permissions_menu_opens_from_slash_selection_and_marks_current(tmp_path,
 
     monkeypatch.setattr("pepsicode.tui.app.save_history_entries", lambda _history: None)
     manager = PermissionManager(str(tmp_path), mode="auto")
-    args = TtyAppArgs(runtime=None, tools=ToolRegistry([]), model=None, messages=[], cwd=str(tmp_path), permissions=manager)
+    args = TtyAppArgs(
+        runtime=None, tools=ToolRegistry([]), model=None, messages=[], cwd=str(tmp_path), permissions=manager
+    )
     state = ScreenState(session=create_new_session(str(tmp_path)), input="/perm")
     # Selecting the command opens the picker directly, without inserting args.
     _handle_normal_mode_return(args, state, find_matching_slash_commands("/perm"), lambda: None)

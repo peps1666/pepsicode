@@ -45,7 +45,7 @@ function buildTimeline(messages: ChatMessage[]): TimelineBlock[] {
 }
 
 export default function ChatView({ onSend, frameControls }: { onSend: (input: string, mode?: InputMode) => Promise<void>; frameControls: FrameControls }) {
-  const { messages, isRunning, cwd, modelUpdating, permissionUpdating, sessionId, planMode, verification, branchUpdating, branchError, setDraft } = useSessionStore();
+  const { messages, isRunning, cwd, modelUpdating, permissionUpdating, sessionId, planMode, verification, task, branchUpdating, branchError, setDraft } = useSessionStore();
   const [treeOpen, setTreeOpen] = useState(false);
   const [view, setView] = useState<"chat" | "trace">("chat");
   const [continuationError, setContinuationError] = useState("");
@@ -116,7 +116,7 @@ export default function ChatView({ onSend, frameControls }: { onSend: (input: st
       {branchError && !treeOpen && <p className={styles.branchError} role="alert">{branchError}</p>}
       {continuationError && <p className={styles.branchError} role="alert">{continuationError}</p>}
       {view === "trace" ? <div id="execution-content" role="tabpanel" aria-labelledby="trace-tab" className={styles.traceArea}>
-        <ExecutionTrace messages={messages} running={isRunning} verification={verification} canContinue={Boolean(sessionId) && !isRunning && !modelUpdating && !branchUpdating && !permissionUpdating} onContinue={continueFrom} />
+        <ExecutionTrace messages={messages} running={isRunning} verification={verification} taskReport={task} canContinue={Boolean(sessionId) && !isRunning && !modelUpdating && !branchUpdating && !permissionUpdating} onContinue={continueFrom} />
       </div> : <div id="conversation-content" role="tabpanel" aria-labelledby="chat-tab" className={styles.messageList} ref={scrollRef} onScroll={handleScroll}>
         {messages.length === 0 ? (
           <div className={styles.emptyState}>

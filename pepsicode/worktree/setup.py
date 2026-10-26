@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import fnmatch
 import logging
-import os
-import shutil
 import subprocess
 from pathlib import Path
+
+from pepsicode.execution import process as process_service
+from pepsicode.execution.filesystem import FILES
 
 log = logging.getLogger(__name__)
 
@@ -42,7 +43,7 @@ def _copy_local_configs(root: Path, wt: Path) -> None:
         if src.exists():
             dst = wt / name
             try:
-                shutil.copy2(str(src), str(dst))
+                FILES.copy(src, dst)
                 log.debug("Copied %s to worktree", name)
             except OSError as e:
                 log.warning("Failed to copy %s: %s", name, e)
@@ -66,7 +67,7 @@ def _setup_git_hooks(root: Path, wt: Path) -> None:
     try:
         from pepsicode.subprocess_utils import hide_window_kwargs
 
-        subprocess.run(
+        process_service.run(
             ["git", "config", "core.hooksPath", hooks_path],
             cwd=str(wt),
             capture_output=True,
@@ -92,7 +93,7 @@ def _create_symlinks(root: Path, wt: Path, directories: list[str]) -> None:
         if dst.exists() or dst.is_symlink():
             continue
         try:
-            os.symlink(str(src), str(dst))
+            FILES.symlink(src, dst)
             log.debug("Symlinked %s to worktree", dirname)
         except OSError as e:
             # Windows 上常见: OSError [WinError 1314]: 客户端没有所需的特权
@@ -123,7 +124,7 @@ def _copy_ignored_files(root: Path, wt: Path) -> None:
     try:
         from pepsicode.subprocess_utils import hide_window_kwargs
 
-        result = subprocess.run(
+        result = process_service.run(
             [
                 "git",
                 "ls-files",
@@ -152,8 +153,8 @@ def _copy_ignored_files(root: Path, wt: Path) -> None:
         if not src.is_file():
             continue
         try:
-            dst.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(str(src), str(dst))
+            FILES.mkdir(dst.parent)
+            FILES.copy(src, dst)
             log.debug("Copied ignored file %s to worktree", rel_path)
         except OSError as e:
             log.warning("Failed to copy ignored file %s: %s", rel_path, e)

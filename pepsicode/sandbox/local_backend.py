@@ -7,8 +7,8 @@ future backends can replace it.
 
 from __future__ import annotations
 
-from pepsicode.sandbox.backend import SandboxBackend
-from pepsicode.sandbox.types import ConfinedArgs, SandboxPolicy
+from pepsicode.sandbox.backend import SandboxBackend, SandboxUnavailableError
+from pepsicode.sandbox.types import ConfinedArgs, SandboxMode, SandboxPolicy
 
 
 class LocalSandboxBackend(SandboxBackend):
@@ -20,4 +20,8 @@ class LocalSandboxBackend(SandboxBackend):
     """
 
     def confine(self, argv: list[str], policy: SandboxPolicy) -> ConfinedArgs:  # noqa: ARG002
+        if policy.mode != SandboxMode.DANGER_FULL_ACCESS:
+            raise SandboxUnavailableError(
+                "The local backend provides no OS isolation; restrictive execution was refused"
+            )
         return ConfinedArgs(argv=list(argv), enforcement="none")

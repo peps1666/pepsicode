@@ -156,11 +156,13 @@ class MockModelAdapter:
             yield StreamToken(type="text", content=step.content)
         yield StreamToken(type="done")
 
-    def summarize(self, messages: list) -> str:
+    def summarize(self, messages: list | str) -> str:
         """Heuristic summarizer for the mock model.
 
         Used by :class:`ContextManager` during compaction.  Returns the last
         few messages' content joined so the mock path keeps working without a
         real LLM.
         """
+        if isinstance(messages, str):
+            return "Mock checkpoint (offline only); no semantic retention claim."
         return "\n".join(str(m.get("content", "")) for m in messages[-6:] if m.get("content"))

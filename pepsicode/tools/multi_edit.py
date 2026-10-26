@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from pathlib import Path
-
+from pepsicode.execution.filesystem import FILES
 from pepsicode.tooling import ToolDefinition, ToolResult
+from pepsicode.workspace import resolve_tool_path
 
 
 def _validate(input_data: dict) -> dict:
@@ -31,7 +31,6 @@ def _run(input_data: dict, context) -> ToolResult:
     """Execute multi-file edit."""
     changes = input_data["changes"]
     dry_run = input_data["dry_run"]
-    cwd = Path(context.cwd)
 
     results = []
     success_count = 0
@@ -39,7 +38,7 @@ def _run(input_data: dict, context) -> ToolResult:
     total_changes = 0
 
     for i, change in enumerate(changes):
-        file_path = cwd / change["file"]
+        file_path = resolve_tool_path(context, change["file"], "write" if not dry_run else "read")
         old_text = change["old"]
         new_text = change["new"]
 
@@ -56,7 +55,8 @@ def _run(input_data: dict, context) -> ToolResult:
             continue
 
         try:
-            content = file_path.read_text(encoding="utf-8")
+            snapshot = FILES.snapshot(context, file_path, for_edit=not dry_run)
+            content = snapshot.text
         except Exception as e:
             results.append(
                 {
@@ -99,7 +99,7 @@ def _run(input_data: dict, context) -> ToolResult:
         new_content = content.replace(old_text, new_text)
 
         try:
-            file_path.write_text(new_content, encoding="utf-8")
+            FILES.write_text(context, file_path, new_content, expected=snapshot.version)
             results.append(
                 {
                     "file": change["file"],

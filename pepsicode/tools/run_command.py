@@ -3,12 +3,12 @@ from __future__ import annotations
 import os
 import re
 import shlex
-import signal
 import subprocess
-import time
 from collections.abc import Sequence
 
+from pepsicode.cancellation import TurnCancelledError
 from pepsicode.core.background_tasks import register_background_shell_task
+from pepsicode.execution import process as process_service
 from pepsicode.tooling import ToolDefinition, ToolResult
 from pepsicode.workspace import resolve_tool_path
 
@@ -219,19 +219,6 @@ def _run(input_data: dict, context) -> ToolResult:
         else f"Unknown command '{normalized_command}' is not in the built-in read-only/development set"
     )
 
-    if context.permissions is not None:
-        if force_prompt_reason:
-            outcome = context.permissions.check_command(
-                command, args, effective_cwd, force_prompt_reason=force_prompt_reason
-            )
-        elif use_shell or not _is_read_only_command(normalized_command):
-            outcome = context.permissions.check_command(command, args, effective_cwd)
-        else:
-            outcome = None
-        if outcome is not None and (outcome.is_denied or outcome.is_unavailable):
-            signature = f"{command} {' '.join(args)}".strip()
-            return ToolResult(ok=False, output=outcome.denial_message(scope=signature), status="blocked")
-
     if use_shell and background_shell:
         from pepsicode.subprocess_utils import hide_window_kwargs
 
@@ -246,8 +233,11 @@ def _run(input_data: dict, context) -> ToolResult:
         # Merge in CREATE_NO_WINDOW + STARTUPINFO on Windows.
         popen_kwargs.update(hide_window_kwargs(popen_kwargs))
 
-        child = subprocess.Popen(  # noqa: S603
+        child = process_service.Popen(  # noqa: S603
             [command, *args],
+            context=context,
+            reason=force_prompt_reason,
+            persistent=True,
             cwd=effective_cwd,
             env=environment,
             stdout=subprocess.DEVNULL,
@@ -271,149 +261,34 @@ def _run(input_data: dict, context) -> ToolResult:
             ok=True,
             output=f"Background command started.\nTASK: {background_task.taskId}\nPID: {background_task.pid}",
             backgroundTask=background_task,
-        )
-
-    cancellation_event = getattr(context, "cancellation_event", None)
-    if cancellation_event is not None:
-        return _run_cancellable_command(
-            command,
-            args,
-            cwd=effective_cwd,
-            timeout=timeout,
-            cancellation_event=cancellation_event,
-            environment=environment,
-            display_command=f"{normalized_command} {' '.join(normalized_args)}".strip(),
+            status="running",
         )
 
     try:
-        from pepsicode.subprocess_utils import hide_window_kwargs
-
-        completed = subprocess.run(  # noqa: S603
+        completed = process_service.run(
             [command, *args],
+            context=context,
+            reason=force_prompt_reason,
             cwd=effective_cwd,
             env=environment,
             capture_output=True,
             text=True,
-            encoding="utf-8",  # explicitly specify UTF-8
-            errors="replace",  # replace undecodable characters instead of raising
-            check=False,
+            encoding="utf-8",
+            errors="replace",
             timeout=timeout,
-            **hide_window_kwargs(),
         )
         output = "\n".join(part for part in [completed.stdout.strip(), completed.stderr.strip()] if part).strip()
         return ToolResult(ok=completed.returncode == 0, output=output, exit_code=completed.returncode)
+    except PermissionError as error:
+        return ToolResult(False, str(error), status="blocked")
+    except TurnCancelledError as error:
+        return ToolResult(False, str(error), status="cancelled")
     except subprocess.TimeoutExpired:
         return ToolResult(
-            ok=False,
-            output=f"Command timed out after {timeout} seconds. Command: {normalized_command} {' '.join(normalized_args)}",
+            False,
+            f"Command timed out after {timeout} seconds; partial side effects may have occurred.",
             status="timed_out",
         )
-
-
-def _run_cancellable_command(
-    command: str,
-    args: list[str],
-    *,
-    cwd: str,
-    timeout: int,
-    cancellation_event,
-    display_command: str,
-    environment: dict[str, str] | None = None,
-) -> ToolResult:
-    from pepsicode.subprocess_utils import hide_window_kwargs
-
-    process = subprocess.Popen(  # noqa: S603
-        [command, *args],
-        cwd=cwd,
-        env=environment if environment is not None else os.environ.copy(),
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        stdin=subprocess.DEVNULL,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        **hide_window_kwargs(
-            {"creationflags": getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)}
-            if os.name == "nt"
-            else {"start_new_session": True}
-        ),
-    )
-    job = None
-    if os.name == "nt":
-        from pepsicode.subprocess_utils import WindowsProcessJob
-
-        try:
-            job = WindowsProcessJob(process)
-        except OSError:
-            # Some older Windows/job policies forbid nested jobs. In that
-            # case _stop_process falls back to taskkill for this PID's tree.
-            pass
-    deadline = time.monotonic() + timeout
-    try:
-        while True:
-            if cancellation_event.is_set():
-                _stop_process(process, job)
-                return ToolResult(ok=False, output=f"Command cancelled: {display_command}", status="cancelled")
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                _stop_process(process, job)
-                return ToolResult(
-                    ok=False,
-                    output=f"Command timed out after {timeout} seconds. Command: {display_command}",
-                    status="timed_out",
-                )
-            try:
-                stdout, stderr = process.communicate(timeout=min(0.1, remaining))
-                output = "\n".join(part for part in [stdout.strip(), stderr.strip()] if part).strip()
-                return ToolResult(ok=process.returncode == 0, output=output, exit_code=process.returncode)
-            except subprocess.TimeoutExpired:
-                continue
-    finally:
-        if job is not None:
-            job.close()
-
-
-def _stop_process(process: subprocess.Popen, job=None) -> None:
-    # Kill only the process group/tree created for this command. Killing the
-    # shell alone leaves its children running and holding the output pipes.
-    if os.name == "nt":
-        if job is not None:
-            try:
-                job.terminate()
-                process.communicate(timeout=1)
-                return
-            except (OSError, subprocess.TimeoutExpired):
-                pass
-        from pepsicode.subprocess_utils import hide_window_kwargs
-
-        try:
-            result = subprocess.run(
-                ["taskkill", "/PID", str(process.pid), "/T", "/F"],
-                capture_output=True,
-                timeout=2,
-                check=False,
-                **hide_window_kwargs(),
-            )
-            if result.returncode == 0:
-                process.communicate(timeout=1)
-                return
-        except (OSError, subprocess.TimeoutExpired):
-            pass
-    try:
-        if os.name == "nt":
-            process.terminate()
-        else:
-            os.killpg(process.pid, signal.SIGTERM)
-        process.communicate(timeout=1)
-    except (OSError, subprocess.TimeoutExpired):
-        if os.name == "nt":
-            process.kill()
-        else:
-            try:
-                os.killpg(process.pid, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
-        process.communicate(timeout=1)
 
 
 run_command_tool = ToolDefinition(

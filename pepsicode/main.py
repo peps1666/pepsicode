@@ -257,7 +257,12 @@ def main() -> None:
     tools = create_default_tool_registry(
         cwd, runtime=runtime, cost_tracker=cost_tracker, trace_manager=trace_manager
     )  # 创建工具注册表，传入当前工作目录和运行时配置，工具注册表负责管理可用的技能和 MCP 服务器
-    permissions = PermissionManager(cwd, prompt=prompt_handler, mode="auto")
+    permissions = PermissionManager(
+        cwd,
+        prompt=prompt_handler,
+        mode="auto",
+        process_sandbox_mode=(runtime or {}).get("processSandboxMode", "danger-full-access"),
+    )
     hook_engine = create_hook_engine(cwd, permissions)
     hook_engine.emit(
         HookEvent.STARTUP,
@@ -595,7 +600,10 @@ def main() -> None:
 
         # Dispose tools (closes MCP connections)
         try:
-            tools.dispose()
+            try:
+                tools.dispose()
+            finally:
+                permissions.close()
             logger.info("Tools disposed successfully")
         except Exception as e:
             logger.warning("Error disposing tools: %s", e)

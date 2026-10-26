@@ -4,6 +4,7 @@ import json
 import logging
 from pathlib import Path
 
+from pepsicode.execution.filesystem import FILES
 from pepsicode.worktree.models import WorktreeSession
 
 log = logging.getLogger(__name__)
@@ -18,9 +19,8 @@ def _session_path(pepsi_dir: Path) -> Path:
 def save_worktree_session(pepsi_dir: Path, session: WorktreeSession | None) -> None:
     """Persist the current worktree session (or clear it when ``session`` is None)."""
     path = _session_path(pepsi_dir)
-    path.parent.mkdir(parents=True, exist_ok=True)
     if session is None:
-        path.write_text("{}", encoding="utf-8")
+        FILES.write_text(FILES.context(path), path, "{}")
         return
     data = {
         "original_cwd": session.original_cwd,
@@ -30,7 +30,7 @@ def save_worktree_session(pepsi_dir: Path, session: WorktreeSession | None) -> N
         "original_head_commit": session.original_head_commit,
         "session_id": session.session_id,
     }
-    path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+    FILES.write_text(FILES.context(path), path, json.dumps(data, indent=2))
 
 
 def load_worktree_session(pepsi_dir: Path) -> WorktreeSession | None:

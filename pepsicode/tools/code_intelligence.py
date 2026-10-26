@@ -3,31 +3,22 @@
 from __future__ import annotations
 
 import json
-import os
 import re
-import shutil
-import tempfile
 from pathlib import Path
 from urllib.parse import urlsplit
 from urllib.request import url2pathname
 
 from pepsicode.core.file_review import build_unified_diff
+from pepsicode.execution.filesystem import FILES
+from pepsicode.execution.filesystem import version as file_version
 from pepsicode.intelligence import fallback
 from pepsicode.intelligence.lsp import LanguageServers, LspUnavailableError, document_key, offset
 from pepsicode.tooling import ToolCapability, ToolDefinition, ToolResult
 from pepsicode.workspace import resolve_tool_path
 
 
-def _replace_file(path: Path, content: bytes) -> None:
-    """Avoid truncating a source file if a write fails midway."""
-    descriptor, staging = tempfile.mkstemp(prefix=".pepsi-rename-", dir=path.parent)
-    try:
-        with os.fdopen(descriptor, "wb") as stream:
-            stream.write(content)
-        shutil.copymode(path, staging)
-        os.replace(staging, path)
-    finally:
-        Path(staging).unlink(missing_ok=True)
+def _replace_file(path: Path, content: bytes, *, expected=None) -> None:
+    FILES.write(FILES.context(path), path, content, expected=expected)
 
 
 def _validate(value: dict) -> dict:
@@ -73,7 +64,11 @@ def _apply_rename(edit: dict, manager: LanguageServers, context, client=None) ->
         path = resolve_tool_path(context, url2pathname(parsed.path), "write")
         # Require explicit approval before changing any file, including all
         # dependent files, and check every edit before committing any writes.
-        previous = path.read_bytes()
+        from pepsicode.execution.filesystem import FILES
+
+        previous = FILES.snapshot(context, path, for_edit=True).content
+        if previous is None:
+            raise FileNotFoundError(str(path))
         text = previous.decode("utf-8")
         for server in clients:
             document = server._documents.get(document_key(uri))
@@ -102,21 +97,21 @@ def _apply_rename(edit: dict, manager: LanguageServers, context, client=None) ->
                 raise PermissionError(outcome.denial_message(scope=str(path)))
         planned.append((path, previous, updated.encode("utf-8")))
     for path, previous, _ in planned:
-        if path.read_bytes() != previous:
+        if FILES.read_bytes(path) != previous:
             raise ValueError(f"File changed during rename approval: {path}")
     if context.cancellation_event is not None and context.cancellation_event.is_set():
         raise RuntimeError("Rename cancelled before writing")
     written = []
     try:
         for path, previous, updated in planned:
-            if path.read_bytes() != previous:
+            if FILES.read_bytes(path) != previous:
                 raise ValueError(f"File changed while applying rename: {path}")
-            _replace_file(path, updated)
+            _replace_file(path, updated, expected=file_version(previous))
             written.append((path, previous, updated))
     except (OSError, ValueError):
         for path, previous, updated in reversed(written):
-            if path.read_bytes() == updated:
-                _replace_file(path, previous)
+            if FILES.read_bytes(path) == updated:
+                _replace_file(path, previous, expected=file_version(updated))
         raise
     return {"changed_files": [str(path) for path, _, _ in planned]}
 
@@ -143,7 +138,7 @@ def create_code_intelligence_tools(manager: LanguageServers) -> list[ToolDefinit
             elif action == "symbols":
                 result = fallback.symbols(path)
             else:
-                text = path.read_text(encoding="utf-8")
+                text = FILES.read_text(path)
                 lines = text.splitlines()
                 if not 1 <= value["line"] <= len(lines):
                     raise ValueError("line is outside the document")

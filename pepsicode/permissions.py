@@ -20,8 +20,12 @@ Backward compatibility:
 
 from __future__ import annotations
 
+import json
+import threading
 import time
 import uuid
+from contextlib import contextmanager
+from contextvars import ContextVar
 from enum import Enum
 from pathlib import Path
 from typing import Any
@@ -119,10 +123,17 @@ class PermissionManager:
         approval: ApprovalBackend | None = None,
         sandbox: SandboxBackend | None = None,
         mode: PermissionMode | str = PermissionMode.DEFAULT,
+        process_sandbox_mode: str = "danger-full-access",
     ) -> None:
         self.workspace_root = _normalize_path(workspace_root)
         self.approval: ApprovalBackend = approval or LocalApprovalBackend(prompt)
         self.sandbox: SandboxBackend = sandbox or LocalSandboxBackend()
+        from pepsicode.sandbox.types import SandboxMode
+
+        self.process_sandbox_mode = SandboxMode(process_sandbox_mode)
+        self._operation_paths = ContextVar(f"permission_paths_{id(self)}", default=None)
+        self._process_lock = threading.RLock()
+        self._processes = set()
         self.store = ApprovalStore(workspace_root)
 
         # Plan-mode state
@@ -130,6 +141,37 @@ class PermissionManager:
         self.previous_mode = self.mode
         self.plan_file_path: str | None = None
         self._plan_followup: str | None = None
+
+    @contextmanager
+    def operation(self):
+        """Path approvals cover one tool operation and one access intent only."""
+        token = self._operation_paths.set(set())
+        try:
+            yield
+        finally:
+            self._operation_paths.reset(token)
+
+    def close(self):
+        """Drain every process owned by this permission/session instance."""
+        from pepsicode.execution.process import stop
+
+        with self._process_lock:
+            children = list(self._processes)
+            self._processes.clear()
+        failures = []
+        for process in children:
+            job = getattr(process, "_pepsi_job", None)
+            try:
+                with process._pepsi_stop_lock:
+                    try:
+                        stop(process, job)
+                    finally:
+                        if job is not None:
+                            job.close()
+            except Exception as error:
+                failures.append(error)
+        if failures:
+            raise failures[0]
 
     # ------------------------------------------------------------------ #
     # Backward-compatible prompt property (delegates to LocalApprovalBackend)
@@ -218,7 +260,11 @@ class PermissionManager:
         if self.mode == PermissionMode.READ_ONLY and not is_read_only:
             if tool_name == "ask_user":
                 return
-            if tool_name == "task" and isinstance(parsed, dict) and parsed.get("agent_type", "explore") in {"explore", "plan"}:
+            if (
+                tool_name == "task"
+                and isinstance(parsed, dict)
+                and parsed.get("agent_type", "explore") in {"explore", "plan"}
+            ):
                 return
             raise RuntimeError(f"Read-only mode denied tool '{tool_name}'. Switch to auto to make changes.")
 
@@ -226,14 +272,11 @@ class PermissionManager:
         if self.is_plan_mode and tool_name.startswith(MCP_TOOL_PREFIX) and not is_read_only:
             raise RuntimeError(f"Plan mode denied tool '{tool_name}'. Only read-only MCP tools are allowed.")
 
-        # MCP tools are supplied by third-party servers and can do anything the
-        # host process can.  Unless the server config declares a tool read-only
-        # (which also tags it READ_ONLY), require approval on first use in
-        # automatic and legacy default modes.
         if tool_name.startswith(MCP_TOOL_PREFIX) and not is_read_only:
             outcome = self.check_mcp_tool(tool_name, parsed)
-            if outcome.is_denied or outcome.is_unavailable:
-                raise RuntimeError(outcome.denial_message(scope=tool_name))
+            if not outcome.is_allowed:
+                raise PermissionError(outcome.denial_message(scope=tool_name))
+            return outcome
 
         if not self.is_plan_mode:
             return
@@ -262,7 +305,12 @@ class PermissionManager:
         """Block local slash-command side doors while Plan mode is active."""
         if self.mode == PermissionMode.READ_ONLY:
             parts = user_input.casefold().split()
-            if parts[:2] in (["/worktree", "create"], ["/worktree", "exit"], ["/worktree", "cleanup"], ["/hooks", "trust"]):
+            if parts[:2] in (
+                ["/worktree", "create"],
+                ["/worktree", "exit"],
+                ["/worktree", "cleanup"],
+                ["/hooks", "trust"],
+            ):
                 raise RuntimeError(f"Read-only mode denied local command: {user_input}")
         if not self.is_plan_mode:
             return
@@ -370,6 +418,13 @@ class PermissionManager:
         """Check whether a path can be accessed, returning a typed outcome."""
         normalized = _normalize_path(target_path)
 
+        if self.is_plan_mode and intent not in {"read", "list", "search"} and not self._is_exact_plan_file(normalized):
+            return ApprovalOutcome(ApprovalDecision.DENY_ONCE)
+        operation_paths = self._operation_paths.get()
+        if operation_paths is not None and (self.mode, normalized, intent) in operation_paths:
+            if self.mode != PermissionMode.READ_ONLY or intent in {"read", "list", "search"}:
+                return ApprovalOutcome(ApprovalDecision.ALLOW_ONCE)
+
         if self.mode == PermissionMode.READ_ONLY and intent not in {"read", "list", "search"}:
             return ApprovalOutcome(decision=ApprovalDecision.DENY_ONCE)
         if self.mode == PermissionMode.FULL_ACCESS:
@@ -407,6 +462,8 @@ class PermissionManager:
         )
         outcome = self.approval.request(req)
         self.store.record(ApprovalKind.PATH, normalized, outcome)
+        if operation_paths is not None and outcome.is_allowed:
+            operation_paths.add((self.mode, normalized, intent))
         return outcome
 
     def check_command(
@@ -433,7 +490,8 @@ class PermissionManager:
 
         # 3. Check cache
         signature = format_command_signature(command, args)
-        cached = self.store.lookup(ApprovalKind.COMMAND, signature)
+        grant_key = json.dumps([_normalize_path(command_cwd), command, args], ensure_ascii=False)
+        cached = self.store.lookup(ApprovalKind.COMMAND, grant_key)
         if cached is not None:
             return cached
 
@@ -460,7 +518,7 @@ class PermissionManager:
             metadata={"cwd": command_cwd, "reason": reason},
         )
         outcome = self.approval.request(req)
-        self.store.record(ApprovalKind.COMMAND, signature, outcome)
+        self.store.record(ApprovalKind.COMMAND, grant_key, outcome)
         return outcome
 
     def check_mcp_tool(self, tool_name: str, tool_input: Any) -> ApprovalOutcome:
@@ -510,6 +568,25 @@ class PermissionManager:
         outcome = self.approval.request(req)
         self.store.record(ApprovalKind.MCP, tool_name, outcome)
         return outcome
+
+    def check_external_action(self, operation: str, target: str) -> ApprovalOutcome:
+        """Authorize one exact external mutation; grants never change standing policy."""
+        if self.mode in {PermissionMode.READ_ONLY, PermissionMode.PLAN}:
+            return ApprovalOutcome(ApprovalDecision.DENY_ONCE)
+        if self.mode == PermissionMode.FULL_ACCESS:
+            return ApprovalOutcome(ApprovalDecision.ALLOW_ONCE)
+        return self.approval.request(
+            ApprovalRequest(
+                kind=ApprovalKind.MCP,
+                summary="pepsicode wants to change an external resource",
+                details=[f"operation: {operation}", f"target: {target}"],
+                scope=f"{operation} {target}",
+                choices=[
+                    {"key": "y", "label": "allow this action once", "decision": "allow_once"},
+                    {"key": "n", "label": "deny", "decision": "deny_once"},
+                ],
+            )
+        )
 
     def check_edit(self, target_path: str, diff_preview: str) -> ApprovalOutcome:
         """Check whether an edit can be applied, returning a typed outcome."""

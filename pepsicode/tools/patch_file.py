@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from pepsicode.core.file_review import apply_reviewed_file_change, load_existing_file
+from pepsicode.core.file_review import apply_reviewed_file_change
+from pepsicode.execution.filesystem import FILES
 from pepsicode.tooling import ToolDefinition, ToolResult
 from pepsicode.workspace import resolve_tool_path
 
@@ -38,7 +39,8 @@ def _validate(input_data: dict) -> dict:
 
 def _run(input_data: dict, context):
     target = resolve_tool_path(context, input_data["path"], "write")
-    content = load_existing_file(target)
+    snapshot = FILES.snapshot(context, target, for_edit=True)
+    content = snapshot.text
     applied: list[str] = []
     for index, replacement in enumerate(input_data["replacements"], start=1):
         if replacement["search"] not in content:
@@ -50,7 +52,7 @@ def _run(input_data: dict, context):
         else:
             content = content.replace(replacement["search"], replacement["replace"], 1)
             applied.append(f"#{index} replaceOnce")
-    result = apply_reviewed_file_change(context, input_data["path"], target, content)
+    result = apply_reviewed_file_change(context, input_data["path"], target, content, expected_version=snapshot.version)
     if not result.ok:
         return result
     return ToolResult(

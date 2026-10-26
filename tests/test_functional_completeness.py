@@ -19,6 +19,9 @@ from pathlib import Path
 
 import pytest
 
+from pepsicode.permissions import PermissionManager
+from pepsicode.tooling import ToolContext
+
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 
@@ -57,42 +60,6 @@ class TestStartupAndConfig:
 # ---------------------------------------------------------------------------
 
 
-class MockPermissions:
-    """Mock permission manager that allows everything."""
-
-    def ensure_path_access(self, *args):
-        pass
-
-    def ensure_command(self, *args, **kwargs):
-        pass
-
-    def ensure_edit(self, *args):
-        pass
-
-    def check_path_access(self, *args, **kwargs):
-        from pepsicode.approval import ApprovalDecision, ApprovalOutcome
-
-        return ApprovalOutcome(decision=ApprovalDecision.ALLOW_ONCE)
-
-    def check_command(self, *args, **kwargs):
-        from pepsicode.approval import ApprovalDecision, ApprovalOutcome
-
-        return ApprovalOutcome(decision=ApprovalDecision.ALLOW_ONCE)
-
-    def check_edit(self, *args, **kwargs):
-        from pepsicode.approval import ApprovalDecision, ApprovalOutcome
-
-        return ApprovalOutcome(decision=ApprovalDecision.ALLOW_ONCE)
-
-
-class MockContext:
-    """Mock tool context."""
-
-    def __init__(self, cwd: str):
-        self.cwd = cwd
-        self.permissions = MockPermissions()
-
-
 class TestToolExecution:
     """Module 2: Test tool execution."""
 
@@ -110,7 +77,9 @@ class TestToolExecution:
     @pytest.fixture
     def context(self, test_dir):
         """Create mock context for tool execution."""
-        return MockContext(cwd=str(test_dir))
+        permissions = PermissionManager(str(test_dir), mode="full_access")
+        yield ToolContext(cwd=str(test_dir), permissions=permissions)
+        permissions.close()
 
     def test_list_files_tool(self, context):
         """Test list_files_tool executes successfully."""
@@ -358,13 +327,9 @@ class TestErrorRecovery:
         """Test tool errors return useful messages."""
         from pepsicode.tools.read_file import read_file_tool
 
-        class MockCtx:
-            cwd = str(tmp_path)
-            permissions = None
-
         # Create a file to read
         (tmp_path / "test.txt").write_text("test", encoding="utf-8")
-        ctx = MockCtx()
+        ctx = ToolContext(str(tmp_path))
         result = read_file_tool.run({"path": "test.txt", "offset": 0, "limit": 100}, ctx)
         assert result.ok
         assert "test" in result.output

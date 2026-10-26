@@ -12,6 +12,7 @@ from pepsicode.context.context_artifacts import ContextArtifactStore, prepare_to
 from pepsicode.context.context_manager import ContextManager
 from pepsicode.core.input_queue import QueuedInput, TurnInputQueue
 from pepsicode.core.session_tree import checkpoint_messages
+from pepsicode.execution.runtime import ModelRequestLimitError, current_scope, scoped_turn
 from pepsicode.hooks import HookContext, HookEngine, HookEvent
 from pepsicode.llm.anthropic_adapter import ContextOverflowError
 from pepsicode.llm.assistant_text import AssistantTextStream, parse_assistant_text
@@ -151,6 +152,22 @@ def _should_treat_assistant_as_progress(*, kind: str | None, content: str, saw_t
     return False
 
 
+def _unfinished_step(reason, text, messages, hooks, cwd, permissions, agent_scope, callback=None):
+    if reason not in {"max_tokens", "stream_incomplete", "pause_turn", "refusal"}:
+        return None
+    message = (
+        f"Model step stopped with {reason}; the task is incomplete and no tools from this response were dispatched."
+    )
+    if text:
+        messages.append({"role": "assistant_progress", "content": text})
+    messages.append({"role": "assistant", "content": message, "isError": True, "finishReason": reason})
+    if callback:
+        callback(message)
+    return _finish_hook_turn(
+        messages, hooks, cwd=cwd, permissions=permissions, agent_scope=agent_scope, status="error", error=message
+    )
+
+
 def _is_concurrency_safe(tools: ToolRegistry, tool_name: str) -> bool:
     tool = tools.find(tool_name)
     return bool(tool and getattr(tool, "concurrency_safe", False))
@@ -164,6 +181,9 @@ def _record_cost_usage(model: ModelAdapter, cost_tracker: CostTracker | None) ->
     sync from a single source of truth.
     """
     if cost_tracker is None:
+        return
+    if getattr(model, "_usage_recorded", False):
+        model._usage_recorded = False
         return
     usage = getattr(model, "last_usage", None)
     if not isinstance(usage, dict):
@@ -233,6 +253,11 @@ def _emit_hook(
 
 
 def _messages_for_model(messages: list[ChatMessage], hook_engine: HookEngine | None) -> list[ChatMessage]:
+    from pepsicode.core.task_control import task_context
+
+    contract = task_context()
+    if contract:
+        messages = [*messages, contract]
     if hook_engine is None:
         return messages
     hook_context = hook_engine.drain_context_messages()
@@ -313,6 +338,15 @@ def append_queued_inputs(
                 "input_mode": item.mode,
             },
         )
+    if pending:
+        from pepsicode.core.task_control import admit_steering
+
+        admit_steering(pending)
+        checkpoint_messages(messages)
+        scope = current_scope()
+        queue = getattr(scope, "input_queue", None)
+        if queue is not None:
+            queue.acknowledge(pending)
     return bool(pending)
 
 
@@ -434,6 +468,7 @@ def _execute_calls_in_order(
     return results
 
 
+@scoped_turn
 @cancellable_turn
 def run_agent_turn(
     *,
@@ -529,7 +564,7 @@ def run_agent_turn(
             return _finish_cancelled_turn(
                 current_messages, hook_engine, cwd, permissions, agent_scope, on_assistant_message
             )
-        except KeyboardInterrupt:
+        except (KeyboardInterrupt, BudgetExceededError, ModelRequestLimitError):
             raise  # Let Ctrl-C propagate
         except ContextOverflowError as error:
             # API rejected the request as too large.  Compact and retry rather
@@ -648,6 +683,30 @@ def run_agent_turn(
         _record_cost_usage(model, cost_tracker)
         _notify_usage(model, on_usage)
 
+        diagnostics = next_step.diagnostics
+        reason = diagnostics.stopReason if diagnostics else None
+        recoverable_empty_thinking = _is_recoverable_thinking_stop(
+            is_empty=not next_step.content.strip() and not next_step.calls,
+            stop_reason=reason,
+            block_types=diagnostics.blockTypes if diagnostics else None,
+            ignored_block_types=diagnostics.ignoredBlockTypes if diagnostics else None,
+        )
+        unfinished = (
+            None
+            if recoverable_empty_thinking
+            else _unfinished_step(
+                reason,
+                next_step.content,
+                current_messages,
+                hook_engine,
+                cwd,
+                permissions,
+                agent_scope,
+                on_assistant_message,
+            )
+        )
+        if unfinished is not None:
+            return unfinished
         if next_step.type == "assistant":
             is_empty = _is_empty_assistant_response(next_step.content)
             if not is_empty and _should_treat_assistant_as_progress(
@@ -831,6 +890,7 @@ def run_agent_turn(
 
         context = ToolContext(
             cwd=cwd,
+            execution=current_scope(),
             permissions=permissions,
             hooks=hook_engine,
             agent_scope=agent_scope,
@@ -1006,6 +1066,7 @@ def _accumulate_stream_tokens(
     return text, tool_calls if tool_calls else None
 
 
+@scoped_turn
 @cancellable_turn
 def run_agent_turn_stream(
     *,
@@ -1114,6 +1175,7 @@ def run_agent_turn_stream(
         text_content: str = ""
         parsed_calls: list[dict] | None = None
         thinking_blocks: list[dict[str, Any]] = []
+        stream_stop_reason = None
         try:
             raise_if_cancelled()
             # For the first step we use next_stream(); retries of the same step
@@ -1121,7 +1183,10 @@ def run_agent_turn_stream(
             if step == 1 or True:  # always stream for now
 
                 def on_stream_token(token: StreamToken) -> None:
+                    nonlocal stream_stop_reason
                     raise_if_cancelled()
+                    if token.type == "done":
+                        stream_stop_reason = token.stop_reason
                     if token.type == "retry":
                         record = {
                             "role": "assistant_progress",
@@ -1162,7 +1227,7 @@ def run_agent_turn_stream(
             return _finish_cancelled_turn(
                 current_messages, hook_engine, cwd, permissions, agent_scope, on_progress_message
             )
-        except KeyboardInterrupt:
+        except (KeyboardInterrupt, BudgetExceededError, ModelRequestLimitError):
             raise
         except ContextOverflowError as error:
             if context_manager is not None and overflow_retry_count < 3:
@@ -1277,6 +1342,11 @@ def run_agent_turn_stream(
         _record_cost_usage(model, cost_tracker)
         _notify_usage(model, on_usage)
 
+        unfinished = _unfinished_step(
+            stream_stop_reason, text_content, current_messages, hook_engine, cwd, permissions, agent_scope, emit_error
+        )
+        if unfinished is not None:
+            return unfinished
         text_content, text_kind = parse_assistant_text(text_content)
 
         # ------ Handle empty responses ------
@@ -1331,6 +1401,7 @@ def run_agent_turn_stream(
 
             context = ToolContext(
                 cwd=cwd,
+                execution=current_scope(),
                 permissions=permissions,
                 hooks=hook_engine,
                 agent_scope=agent_scope,

@@ -16,6 +16,7 @@ from pepsicode.agents.loader import get_default_loader
 from pepsicode.agents.tool_filter import resolve_agent_tools
 from pepsicode.agents.trace import TraceManager
 from pepsicode.core.sub_agents import AgentDefinition, AgentType
+from pepsicode.execution.runtime import current_scope
 from pepsicode.tooling import ToolContext, ToolDefinition, ToolRegistry, ToolResult
 from pepsicode.tools.code_nav import find_references_tool, find_symbols_tool, get_ast_info_tool
 from pepsicode.tools.edit_file import edit_file_tool
@@ -203,6 +204,7 @@ def create_task_tool(
                 permissions=context.permissions,
                 max_steps=definition.max_turns,
                 cost_tracker=cost_tracker,
+                cost_limit_usd=current_scope().budget.limit if current_scope() and current_scope().budget else None,
                 on_usage=_record_trace_usage,
                 on_tool_start=_wrap_tool_start,
                 on_tool_result=_wrap_tool_result,
@@ -216,8 +218,11 @@ def create_task_tool(
                 trace_manager.complete(trace_node.trace_id, status="failed")
             return ToolResult(ok=False, output=f"Sub-agent ({definition.name}) failed: {error}")
 
+        last = result_messages[-1] if result_messages else {}
+        failed = bool(last.get("isError"))
+        waiting = bool(last.get("awaitingUser"))
         if trace_manager is not None and trace_node is not None:
-            trace_manager.complete(trace_node.trace_id, status="completed")
+            trace_manager.complete(trace_node.trace_id, status="failed" if failed else "completed")
 
         final = next(
             (m["content"] for m in reversed(result_messages) if m.get("role") == "assistant"),
@@ -228,7 +233,12 @@ def create_task_tool(
         if trace_manager is not None and trace_node is not None:
             summary += " " + trace_manager.format_summary(trace_node.trace_id)
         summary += f"\n\n{final}"
-        return ToolResult(ok=True, output=summary)
+        return ToolResult(
+            ok=not failed,
+            output=summary,
+            awaitUser=waiting,
+            status="failed" if failed else "awaiting_user" if waiting else "completed",
+        )
 
     return ToolDefinition(
         name="task",

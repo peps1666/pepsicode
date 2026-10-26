@@ -10,6 +10,8 @@ import ast
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from pepsicode.execution.filesystem import FILES
+
 # ---------------------------------------------------------------------------
 # Data structures
 # ---------------------------------------------------------------------------
@@ -88,7 +90,7 @@ def extract_imports(file_path: Path) -> list[tuple[str, bool]]:
         return []
 
     try:
-        content = file_path.read_text(encoding="utf-8")
+        content = FILES.read_text(file_path)
         tree = ast.parse(content, filename=str(file_path))
     except (SyntaxError, UnicodeDecodeError):
         return []

@@ -4,6 +4,7 @@ import difflib
 from pathlib import Path
 from typing import Any
 
+from pepsicode.execution.filesystem import FILES
 from pepsicode.tooling import ToolDefinition, ToolResult
 
 # ---------------------------------------------------------------------------
@@ -136,12 +137,12 @@ def _run(input_data: dict, context) -> ToolResult:
         # Load from file if not provided
         if old_content == "__file__":
             if file_path.exists():
-                old_content = file_path.read_text(encoding="utf-8")
+                old_content = FILES.read_text(file_path)
             else:
                 old_content = ""
         if new_content == "__file__":
             if file_path.exists():
-                new_content = file_path.read_text(encoding="utf-8")
+                new_content = FILES.read_text(file_path)
             else:
                 new_content = ""
 

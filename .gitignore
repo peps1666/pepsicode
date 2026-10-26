@@ -30,6 +30,8 @@ pepsicode-client/release/
 .pytest_cache/
 .pytest_tmp/
 .pytest_codex_tmp/
+.eval-work/
+.evals/
 .coverage
 htmlcov/
 
@@ -71,4 +73,5 @@ pepsicode/.pepsi-code/
 docs/superpowers/
 .pepsi-code/plans/
 .pepsi-code/tool-results/
+.pepsi-code/executions/
 .pepsi-code/hooks.local.json

@@ -250,6 +250,10 @@ def test_large_custom_commands_can_be_queued_in_terminal_and_desktop(project):
 
     async def scenario():
         client = ClientSession(str(project))
+        from pepsicode.core.session import create_new_session
+
+        client.session_data = create_new_session(str(project))
+        client.input_queue.bind_session(client.session_data)
         client.input_queue.start()
         result = await PepsiCodeServer()._dispatch(
             "turn/enqueue",

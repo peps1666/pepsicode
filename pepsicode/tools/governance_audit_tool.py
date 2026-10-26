@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from pepsicode.execution.filesystem import FILES
 from pepsicode.tooling import ToolDefinition, ToolResult
 from pepsicode.tools.governance_audit import (
     audit_dependency_directions,
@@ -19,7 +20,7 @@ def _validate(input_data: dict) -> dict:
 
 
 def _run(input_data: dict, context) -> ToolResult:
-    pkg_root = Path(context.cwd) / input_data["path"]
+    pkg_root = FILES.checked_path(Path(context.cwd) / input_data["path"])
     if not pkg_root.exists():
         return ToolResult(ok=False, output=f"Path not found: {pkg_root}")
 

@@ -23,7 +23,8 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from pepsicode.config import PEPSI_CODE_DIR
-from pepsicode.context.memory import MemoryEntry, MemoryFile, MemoryScope
+from pepsicode.execution.filesystem import FILES, version
+from pepsicode.execution.runtime import current_tool_context
 
 logger = logging.getLogger(__name__)
 
@@ -83,6 +84,11 @@ class MemoryStore(Protocol):
 # ---------------------------------------------------------------------------
 
 
+# Memory imports this protocol after defining its data types. Define the
+# protocol first so either module can also be imported independently.
+from pepsicode.context.memory import MemoryEntry, MemoryFile, MemoryScope  # noqa: E402
+
+
 class FileMemoryStore:
     """On-disk store: MEMORY.md + memory.json per scope directory."""
 
@@ -94,14 +100,12 @@ class FileMemoryStore:
             MemoryScope.PROJECT: workspace_path / ".pepsi-code-memory",
             MemoryScope.LOCAL: workspace_path / ".pepsi-code-memory-local",
         }
+        self._versions: dict[Path, str] = {}
 
     # -- path helpers ------------------------------------------------------
 
     def _get_scope_path(self, scope: MemoryScope) -> Path:
         return self.paths[scope]
-
-    def _ensure_scope_path(self, scope: MemoryScope) -> None:
-        self._get_scope_path(scope).mkdir(parents=True, exist_ok=True)
 
     # -- load --------------------------------------------------------------
 
@@ -109,6 +113,8 @@ class FileMemoryStore:
         path = self._get_scope_path(scope)
         memory_md = path / "MEMORY.md"
         memory_json = path / "memory.json"
+        for target in (memory_json, memory_md):
+            self._versions[target] = version(target.read_bytes() if target.exists() else None)
 
         if not memory_md.exists() and not memory_json.exists():
             return []
@@ -168,7 +174,6 @@ class FileMemoryStore:
     # -- save --------------------------------------------------------------
 
     def save_scope(self, scope: MemoryScope, entries: list[MemoryEntry]) -> None:
-        self._ensure_scope_path(scope)
         path = self._get_scope_path(scope)
 
         # Structured metadata.
@@ -178,15 +183,16 @@ class FileMemoryStore:
             "last_updated": time.time(),
             "entries": [e.to_dict() for e in entries],
         }
-        memory_json.write_text(
-            json.dumps(data, indent=2, ensure_ascii=False),
-            encoding="utf-8",
-        )
+        self._write(memory_json, json.dumps(data, indent=2, ensure_ascii=False))
 
         # Human-readable mirror.
         memory_md = path / "MEMORY.md"
         memory_file = MemoryFile(scope=scope, entries=entries)
-        memory_md.write_text(memory_file.format_as_markdown(), encoding="utf-8")
+        self._write(memory_md, memory_file.format_as_markdown())
+
+    def _write(self, path: Path, content: str):
+        FILES.write_text(FILES.context(path), path, content, expected=self._versions.get(path))
+        self._versions[path] = version(content.encode("utf-8"))
 
 
 # ---------------------------------------------------------------------------
@@ -326,6 +332,12 @@ class PostgresMemoryStore:
 
     def save_scope(self, scope: MemoryScope, entries: list[MemoryEntry]) -> None:
         workspace = self._scope_workspace(scope)
+        context = current_tool_context()
+        if context is not None:
+            from pepsicode.execution.external import authorize
+
+            authorize(context, "save memory scope", f"{self.describe()}/{workspace}/{scope.value}", mutating=True)
+            context.effect_state = "unknown"
         try:
             with self._conn.cursor() as cur:
                 cur.execute(
@@ -353,12 +365,16 @@ class PostgresMemoryStore:
                         ),
                     )
             self._conn.commit()
+            if context is not None:
+                context.effect_state = "completed"
         except Exception as error:  # noqa: BLE001 - never break writes
             logger.warning("PostgresMemoryStore.save_scope failed: %s", error)
             try:
                 self._conn.rollback()
             except Exception:  # noqa: BLE001
                 pass
+            if context is not None:
+                raise
 
     def close(self) -> None:
         if self._conn is not None:

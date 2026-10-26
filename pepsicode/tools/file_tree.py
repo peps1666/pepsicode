@@ -4,6 +4,7 @@ import time
 from datetime import datetime
 from pathlib import Path
 
+from pepsicode.execution.filesystem import FILES
 from pepsicode.tooling import ToolDefinition, ToolResult
 
 # ---------------------------------------------------------------------------
@@ -102,6 +103,7 @@ def _build_tree(
     lines = []
 
     try:
+        path = FILES.checked_path(path, "list")
         entries = sorted(path.iterdir(), key=lambda p: (not p.is_dir(), p.name.lower()))
     except PermissionError:
         return [f"{prefix}{'├── ' if is_last else '└── '}\U0001f512 Permission denied"]
@@ -176,7 +178,7 @@ def _validate(input_data: dict) -> dict:
 
 def _run(input_data: dict, context) -> ToolResult:
     """Display file tree."""
-    target = Path(context.cwd) / input_data["path"]
+    target = FILES.checked_path(Path(context.cwd) / input_data["path"], "list")
     max_depth = input_data["max_depth"]
     show_hidden = input_data["show_hidden"]
     pattern = input_data.get("pattern")
