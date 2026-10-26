@@ -21,6 +21,11 @@ def validate_criteria(criteria):
         if kind not in {"file_exists", "file_contains", "command"}:
             raise ValueError("criterion kind must be file_exists, file_contains, or command")
         normalized = {"id": key, "kind": kind}
+        for field in ("input_id", "purpose"):
+            if field in item:
+                if not isinstance(item[field], str) or not item[field].strip():
+                    raise ValueError(f"criterion {field} must be non-empty text")
+                normalized[field] = item[field]
         if kind.startswith("file_"):
             path = item.get("path")
             if (
@@ -45,7 +50,25 @@ def validate_criteria(criteria):
             ):
                 raise ValueError("command criterion needs a literal argv array")
             normalized["argv"] = argv
-        if set(item) - {"id", "kind", "path", "text", "argv"}:
+        if set(item) - {"id", "kind", "path", "text", "argv", "input_id", "purpose"}:
             raise ValueError("unknown criterion field")
         result.append(normalized)
     return result
+
+
+def validate_requirements(value):
+    if not isinstance(value, dict) or set(value) - {"artifacts", "behavior", "source"}:
+        raise ValueError("task_requirements supports artifacts and behavior")
+    if not isinstance(value.get("behavior", False), bool):
+        raise ValueError("behavior must be boolean")
+    artifacts = value.get("artifacts", [])
+    if value.get("source", "caller") not in {"caller", "user"}:
+        raise ValueError("structured requirements source must be caller or user")
+    if not isinstance(artifacts, list) or len(artifacts) > 32:
+        raise ValueError("artifacts must be an array of at most 32 relative paths")
+    validate_criteria([{"id": str(i), "kind": "file_exists", "path": path} for i, path in enumerate(artifacts)])
+    return {
+        "artifacts": list(dict.fromkeys(artifacts)),
+        "behavior": value.get("behavior", False),
+        "source": value.get("source", "caller"),
+    }

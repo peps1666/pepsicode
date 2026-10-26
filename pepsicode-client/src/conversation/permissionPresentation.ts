@@ -22,7 +22,8 @@ export function permissionPresentation(request: PermissionRequest) {
 export function permissionChoice(request: PermissionRequest, choice: PermissionRequest["choices"][number]) {
   const subject = request.kind === "command" ? "此命令" : request.kind === "path" ? "此目录" : request.kind === "edit" ? "此文件" : request.kind === "mcp" ? "此工具" : "此操作";
   const labels: Record<string, [string, string]> = {
-    allow_once: [request.kind === "plan" ? "批准计划" : "本次会话允许", request.kind === "plan" ? "批准这份执行计划" : "当前会话内记住相同请求的允许决定"],
+    allow_once: [request.kind === "plan" ? "批准计划" : "仅允许这一次", request.kind === "plan" ? "批准这份执行计划" : "只授权当前操作，不缓存为会话授权"],
+    allow_task: ["本任务允许此命令", "仅限当前任务、目录、参数和源码版本；任务结束或输入变化后失效"],
     deny_once: ["拒绝", "当前会话内记住相同请求的拒绝决定"],
     allow_always: [`始终允许${subject}`, "保存到允许列表，后续匹配的请求无需再次确认"],
     deny_always: [`始终拒绝${subject}`, "保存到拒绝列表，后续匹配的请求自动拒绝"],

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import sys
 import textwrap
 from dataclasses import dataclass
 from pathlib import Path
@@ -20,6 +21,10 @@ class Case:
     files: dict[str, str]
     grader: str
     scenario: str = "coding"
+    task_kind: str = "change"
+    acceptance: tuple[dict, ...] | None = None
+    unresolved_calls: tuple[str, ...] = ()
+    steering: str | None = None
 
 
 PAGINATION = Case(
@@ -176,7 +181,84 @@ SMOKE = Case(
     },
     "from calculation import add\nassert add(7, 9) == 16\nassert add(-3, 3) == 0\n",
 )
-CASES = {case.id: case for case in (PAGINATION, CROSS_FILE, COMPACTION, RESUME)}
+PAGINATION_ZH = Case(
+    "pagination_zh",
+    "自由中文行动请求",
+    "帮我支持正确的分页边界，修复 pagination.py；页码从 1 开始，页大小必须为正，超出范围返回空列表，不得修改 test_public.py。",
+    PAGINATION.files,
+    PAGINATION.grader,
+)
+MIXED = Case(
+    "mixed",
+    "先解释再修复的混合任务",
+    "先解释分页的边界问题，再修改 pagination.py：页码从 1 开始，保留输入，越界返回 []，非正参数抛 ValueError。不要修改 test_public.py。",
+    PAGINATION.files,
+    PAGINATION.grader,
+)
+DOCUMENT = Case(
+    "document",
+    "文档产物，无代码测试",
+    "创建 guide.md，用中文说明 CSV 导出应正确处理引号、逗号和换行。",
+    {"facts.txt": "CSV export documentation task\n"},
+    "from pathlib import Path\ntext = Path('guide.md').read_text(encoding='utf-8')\nassert all(word in text for word in ['CSV', '引号', '逗号', '换行'])\n",
+    "document",
+    acceptance=({"id": "guide", "kind": "file_contains", "path": "guide.md", "text": "CSV"},),
+)
+ANALYSIS = Case(
+    "analysis",
+    "纯分析不得被迫修改或运行项目",
+    "只解释 facts.txt 中分页公式的含义，不要修改任何文件。",
+    {"facts.txt": "Pages start at 1. Offset = (page - 1) * size.\n"},
+    "import json\nfrom pathlib import Path\ndata = json.loads((Path.cwd().parent / 'worker.json').read_text(encoding='utf-8'))\ntext = '\\n'.join(m.get('content', '') for m in data['messages'] if m['role'] == 'assistant')\nassert 'page' in text and 'size' in text\nassert Path('facts.txt').read_text() == 'Pages start at 1. Offset = (page - 1) * size.\\n'\n",
+    "analysis",
+    task_kind="answer",
+    acceptance=(),
+)
+NO_TESTS = Case(
+    "no_tests",
+    "无现有测试项目的针对性检查",
+    "修复 slug.py，让 slug(' Hello World ') 返回 'hello-world'；保留函数接口。",
+    {"slug.py": "def slug(value):\n    return value\n"},
+    "from slug import slug\nassert slug(' Hello World ') == 'hello-world'\nassert slug('A B') == 'a-b'\n",
+    "no_tests",
+    acceptance=(
+        {
+            "id": "slug-behavior",
+            "kind": "command",
+            "argv": [sys.executable, "-c", "from slug import slug; assert slug(' Hello World ') == 'hello-world'"],
+        },
+    ),
+)
+CASES = {
+    case.id: case
+    for case in (PAGINATION, CROSS_FILE, COMPACTION, RESUME, PAGINATION_ZH, MIXED, DOCUMENT, ANALYSIS, NO_TESTS)
+}
+
+INTERRUPTED = Case(
+    "interrupted_resume", "checkpoint 落盘后真实进程骤停并恢复", RESUME.prompt, MONEY, MONEY_GRADER, "interrupted"
+)
+UNKNOWN = Case(
+    "multiple_unknown",
+    "观察并逐项核对多个未知操作，不重放写入",
+    "receipt.txt 已包含两个写入的实际结果。先观察它，分别核对未决调用 seeded-first 和 seeded-second，确认已发生；不要重放写入，也不要修改 receipt.txt。",
+    {"receipt.txt": "first=committed\nsecond=committed\n"},
+    "import json\nfrom pathlib import Path\nassert Path('receipt.txt').read_text() == 'first=committed\\nsecond=committed\\n'\nworker = json.loads((Path.cwd().parent / 'worker.json').read_text(encoding='utf-8'))\nrows = [json.loads(s) for s in Path(worker['execution_state']['journal']).read_text(encoding='utf-8').splitlines()]\nresolved = [r for r in rows if r['event'] == 'tool/reconciled']\nassert {r['call_id'] for r in resolved} == {'seeded-first', 'seeded-second'}\nassert all(r['evidence']['outcome'] == 'occurred' and r['evidence']['observations'] for r in resolved)\n",
+    "unknown_recovery",
+    task_kind="operation",
+    acceptance=({"id": "receipt", "kind": "file_contains", "path": "receipt.txt", "text": "second=committed"},),
+    unresolved_calls=("seeded-first", "seeded-second"),
+)
+STEERING = Case(
+    "steering",
+    "执行中收到新目标后废除旧验收",
+    "把 goal.py 中的 value() 改成返回 42。",
+    {"goal.py": "def value():\n    return 0\n"},
+    "import json\nfrom pathlib import Path\nfrom goal import value\nassert value() == 43\ndata = json.loads((Path.cwd().parent / 'worker.json').read_text(encoding='utf-8'))\nassert any(m.get('source', {}).get('mode') == 'steer' and '43' in m.get('content', '') for m in data['messages'])\n",
+    "steering",
+    acceptance=({"id": "value", "kind": "file_contains", "path": "goal.py", "text": "return 42"},),
+    steering="目标改为让 value() 返回 43，请按新要求修改并重新验收。",
+)
+CASES.update({case.id: case for case in (INTERRUPTED, UNKNOWN, STEERING)})
 
 
 def materialize(case: Case, workspace: Path) -> None:
@@ -199,4 +281,13 @@ def protected_files_intact(case: Case, workspace: Path) -> bool:
 def case_digest(case: Case) -> str:
     import json
 
-    return hashlib.sha256(json.dumps(case.__dict__, sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest()
+    descriptor = dict(case.__dict__)
+    if descriptor.get("task_kind") == "change":
+        descriptor.pop("task_kind", None)
+    if descriptor.get("acceptance") is None:
+        descriptor.pop("acceptance", None)
+    if not descriptor.get("unresolved_calls"):
+        descriptor.pop("unresolved_calls", None)
+    if descriptor.get("steering") is None:
+        descriptor.pop("steering", None)
+    return hashlib.sha256(json.dumps(descriptor, sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest()

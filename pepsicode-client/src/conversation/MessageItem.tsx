@@ -2,6 +2,7 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { useSessionStore, type ChatMessage } from "../stores/session";
 import styles from "./MessageItem.module.css";
+import { taskOutcome } from "./taskOutcome";
 
 export default function MessageItem({ message }: { message: ChatMessage }) {
   const { isRunning, branchUpdating, forkSession, regenerate } = useSessionStore();
@@ -36,6 +37,7 @@ export default function MessageItem({ message }: { message: ChatMessage }) {
       <div className={styles.markdown}>
         <ReactMarkdown remarkPlugins={[remarkGfm]}>{message.content || (message.isStreaming ? "▋" : "")}</ReactMarkdown>
       </div>
+      {message.task && message.task.status !== "answered" && <p className={styles.taskOutcome} role="status">检查记录：{taskOutcome(message.task)}</p>}
     </div>
   );
 }

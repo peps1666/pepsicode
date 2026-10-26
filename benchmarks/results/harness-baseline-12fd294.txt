@@ -1,0 +1,72 @@
+FF.F..FF                                                                 [100%]
+================================== FAILURES ===================================
+_ test_colloquial_actions_are_not_answers[\u5e2e\u6211\u652f\u6301 CSV \u5bfc\u51fa] _
+
+prompt = '����֧�� CSV ����'
+
+    @pytest.mark.parametrize("prompt", ["����֧�� CSV ����", "�����ҳ������ɫ", "�Ƚ���ԭ�����޸���ҳ"])
+    def test_colloquial_actions_are_not_answers(prompt):
+>       assert infer_kind(prompt) == "change"
+E       AssertionError: assert 'answer' == 'change'
+E         - change
+E         + answer
+
+tests\test_harness_improvements.py:17: AssertionError
+_ test_colloquial_actions_are_not_answers[\u8bf7\u628a\u9996\u9875\u505a\u6210\u6df1\u8272] _
+
+prompt = '�����ҳ������ɫ'
+
+    @pytest.mark.parametrize("prompt", ["����֧�� CSV ����", "�����ҳ������ɫ", "�Ƚ���ԭ�����޸���ҳ"])
+    def test_colloquial_actions_are_not_answers(prompt):
+>       assert infer_kind(prompt) == "change"
+E       AssertionError: assert 'answer' == 'change'
+E         - change
+E         + answer
+
+tests\test_harness_improvements.py:17: AssertionError
+_ test_analysis_mentions_are_answers[\u89e3\u91ca\u600e\u4e48\u4fee\u590d\u8fd9\u4e2a\u95ee\u9898] _
+
+prompt = '������ô�޸��������'
+
+    @pytest.mark.parametrize("prompt", ["������ô�޸��������", "�����������", "���� CSV ������ԭ��"])
+    def test_analysis_mentions_are_answers(prompt):
+>       assert infer_kind(prompt) == "answer"
+E       AssertionError: assert 'change' == 'answer'
+E         - answer
+E         + change
+
+tests\test_harness_improvements.py:22: AssertionError
+___________ test_later_command_cannot_keep_a_previous_green_command ___________
+
+tmp_path = WindowsPath('E:/Code/pepsicode/.eval-work/improvement-baseline-1/test_later_command_cannot_keep0')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x0000023617A21D60>
+
+    def test_later_command_cannot_keep_a_previous_green_command(tmp_path, monkeypatch):
+        checks = [
+            {"id": "behavior", "kind": "command", "argv": [sys.executable, "-c", "from value import VALUE; assert VALUE == 42"]},
+            {"id": "mutation", "kind": "command", "argv": [sys.executable, "-c", "from pathlib import Path; Path('value.py').write_text('VALUE = 0\\n')"]},
+        ]
+        task, runtime = execute(tmp_path, monkeypatch, "Implement value.py", checks)
+>       assert task["status"] != "complete"
+E       AssertionError: assert 'complete' != 'complete'
+
+tests\test_harness_improvements.py:53: AssertionError
+______ test_unrelated_readme_cannot_accept_an_explicit_missing_artifact _______
+
+tmp_path = WindowsPath('E:/Code/pepsicode/.eval-work/improvement-baseline-1/test_unrelated_readme_cannot_a0')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x0000023617A20E30>
+
+    def test_unrelated_readme_cannot_accept_an_explicit_missing_artifact(tmp_path, monkeypatch):
+        task, _ = execute(tmp_path, monkeypatch, "Implement required_feature.py",
+                          [{"id": "unrelated", "kind": "file_exists", "path": "README.md"}])
+>       assert task["status"] != "complete"
+E       AssertionError: assert 'complete' != 'complete'
+
+tests\test_harness_improvements.py:60: AssertionError
+=========================== short test summary info ===========================
+FAILED tests/test_harness_improvements.py::test_colloquial_actions_are_not_answers[\u5e2e\u6211\u652f\u6301 CSV \u5bfc\u51fa]
+FAILED tests/test_harness_improvements.py::test_colloquial_actions_are_not_answers[\u8bf7\u628a\u9996\u9875\u505a\u6210\u6df1\u8272]
+FAILED tests/test_harness_improvements.py::test_analysis_mentions_are_answers[\u89e3\u91ca\u600e\u4e48\u4fee\u590d\u8fd9\u4e2a\u95ee\u9898]
+FAILED tests/test_harness_improvements.py::test_later_command_cannot_keep_a_previous_green_command
+FAILED tests/test_harness_improvements.py::test_unrelated_readme_cannot_accept_an_explicit_missing_artifact
+5 failed, 3 passed in 3.54s

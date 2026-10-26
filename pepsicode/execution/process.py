@@ -42,7 +42,7 @@ def _context(context, cwd):
     )
 
 
-def checked_argv(argv, *, context=None, cwd=None, reason=None):
+def checked_argv(argv, *, context=None, cwd=None, reason=None, environment=None):
     from pepsicode.workspace import resolve_tool_path
 
     if (
@@ -66,11 +66,9 @@ def checked_argv(argv, *, context=None, cwd=None, reason=None):
     if permissions is not None:
         mode = permissions.mode
         command = Path(actual[0]).name.lower()
-        force = reason or (
-            None
-            if command in {"echo", "pwd", "hostname", "whoami"}
-            else "Run a local program with the current user's process permissions"
-        )
+        # A program name is not an observation capability: PATH can resolve
+        # even "echo" or "pwd" to arbitrary user/project code.
+        force = reason or "Run a local program with the current user's process permissions"
         if command in {"docker", "docker.exe", "sed", "sed.exe", "rg", "rg.exe"}:
             force = force or "This command can execute code or affect external resources"
         if command in {"git", "git.exe"} and any(
@@ -78,7 +76,14 @@ def checked_argv(argv, *, context=None, cwd=None, reason=None):
             for arg in actual[1:]
         ):
             force = force or "This Git operation changes repository or external state"
-        outcome = permissions.check_command(actual[0], actual[1:], str(target), force_prompt_reason=force)
+        outcome = permissions.check_command(
+            actual[0],
+            actual[1:],
+            str(target),
+            force_prompt_reason=force,
+            environment=environment,
+            verification=context.for_verification,
+        )
         if outcome.is_denied or outcome.is_unavailable:
             raise PermissionError(outcome.denial_message(scope="process"))
         policy = SandboxPolicy(
@@ -107,7 +112,11 @@ def Popen(argv, *, context=None, reason=None, persistent=False, **kwargs):  # no
         raise ValueError("Process executable overrides and preexec hooks bypass reviewed argv")
     if kwargs.get("start_new_session") is False:
         raise ValueError("Processes must belong to an owned process group")
-    actual, cwd, context, enforcement = checked_argv(argv, context=context, cwd=kwargs.pop("cwd", None), reason=reason)
+    if kwargs.get("env") is None:
+        kwargs["env"] = dict(os.environ)
+    actual, cwd, context, enforcement = checked_argv(
+        argv, context=context, cwd=kwargs.pop("cwd", None), reason=reason, environment=kwargs["env"]
+    )
     scope = getattr(context, "execution", None) or current_scope()
     if scope:
         scope.record("process/prepared", argv=actual, cwd=cwd, enforcement=enforcement)

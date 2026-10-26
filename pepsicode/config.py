@@ -226,6 +226,8 @@ def load_runtime_config(cwd: str | Path | None = None) -> dict[str, Any]:
             "verificationMode", "always" if verifier_enabled else "off" if "verifierEnabled" in effective else "auto"
         ),
         "verificationCommands": effective.get("verificationCommands"),
+        "verificationPreparationCommands": effective.get("verificationPreparationCommands"),
+        "modelRecoveryLimit": effective.get("modelRecoveryLimit", 1),
         "verificationDiscovery": effective.get("verificationDiscovery"),
         "verificationNoProgressLimit": effective.get("verificationNoProgressLimit", 2),
         "verificationTimeout": effective.get("verificationTimeout", 120),

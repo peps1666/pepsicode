@@ -427,7 +427,8 @@ def test_acceptance_rejects_evidence_that_changed_during_command(session, change
         if change == "human":
             assert snapshot()["task"]["evidence"] == []
         else:
-            assert snapshot()["task"]["evidence"][0]["status"] == "unknown"
+            assert snapshot()["task"]["evidence"] == []
+            assert report.reason_code == "verification_state_changed"
 
 
 def test_branch_checkout_cannot_resume_a_different_branch_task(session):

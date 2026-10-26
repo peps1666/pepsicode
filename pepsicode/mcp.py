@@ -1185,6 +1185,7 @@ def create_mcp_backed_tools(*, cwd: str, mcp_servers: dict[str, dict[str, Any]])
                         validator=_validator,
                         run=_run,
                         capabilities=capabilities,
+                        observation_trust="external_declaration" if declared_read_only else "unreviewed",
                     )
                 )
                 server_tool_names.append(wrapped_name)

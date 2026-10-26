@@ -132,6 +132,19 @@ class RequestBudget:
 
     @contextmanager
     def request(self, scope: ExecutionScope, body: dict):
+        if self.limit is None:
+            # With no money cap there is no in-flight balance to reserve.
+            # Allocate the request slot atomically, then release for transport.
+            while not self._lock.acquire(timeout=0.05):
+                scope.check_cancelled()
+            try:
+                scope.check_cancelled()
+                self.check()
+                self.requests += 1
+            finally:
+                self._lock.release()
+            yield
+            return
         # Serialize priced requests, including children and summaries, so no
         # sibling can spend against an unaccounted in-flight response.
         while not self._lock.acquire(timeout=0.05):
@@ -155,6 +168,10 @@ class RequestBudget:
             self._lock.release()
 
     def record(self, model: str, usage: dict | None):
+        with self._lock:
+            self._record(model, usage)
+
+    def _record(self, model: str, usage: dict | None):
         if not isinstance(usage, dict) or not all(
             isinstance(usage.get(key), int) and not isinstance(usage.get(key), bool) and usage[key] >= 0
             for key in ("input_tokens", "output_tokens")
@@ -185,27 +202,39 @@ class ExecutionScope:
     control: dict = field(default_factory=dict)
     repetitions: dict = field(default_factory=dict)
     repeat_thresholds: tuple = (3, 5, 8)
+    observations: dict = field(default_factory=dict)
+    recovery_version: list = field(default_factory=lambda: [0])
+    _recovery_lock: Any = field(default_factory=threading.RLock, repr=False)
 
     @property
     def has_unknown(self):
-        return bool(self.unresolved)
+        with self._recovery_lock:
+            return bool(self.unresolved)
 
     def mark_unknown(self, call_id, **details):
-        self.unresolved[call_id] = {"call_id": call_id, **details, "state": "unknown"}
-        self.state = "unknown"
+        with self._recovery_lock:
+            self.unresolved[call_id] = {"call_id": call_id, **details, "state": "unknown"}
+            self.recovery_version[0] += 1
+            self.state = "unknown"
 
-    def reconcile(self, evidence: str):
+    def reconcile(self, call_id: str, revision: int, evidence: dict, outcome: str):
         self.check_cancelled()
-        for call_id in list(self.unresolved):
-            self.record("tool/reconciled", call_id=call_id, evidence=evidence)
-            self.unresolved.pop(call_id)
-        self.state = "running"
+        with self._recovery_lock:
+            if revision != self.recovery_version[0] or call_id not in self.unresolved:
+                raise PermissionError("Unknown operation set changed; inspect execution_status again")
+            if outcome != "unknown":
+                self.record("tool/reconciled", call_id=call_id, evidence=evidence)
+                self.unresolved.pop(call_id)
+                self.recovery_version[0] += 1
+            self.state = "unknown" if self.has_unknown else "running"
 
     def snapshot(self):
         return {
             "task_id": self.task_id,
             "state": "unknown" if self.has_unknown else self.state,
             "journal": str(self.journal.path) if self.journal else None,
+            "recovery_revision": self.recovery_version[0],
+            "usage_uncertain": bool(self.budget and self.budget.unmetered),
         }
 
     def check_cancelled(self):
@@ -233,6 +262,9 @@ class ExecutionScope:
             deadline=self.deadline,
             unresolved=self.unresolved,
             repeat_thresholds=self.repeat_thresholds,
+            observations=self.observations,
+            recovery_version=self.recovery_version,
+            _recovery_lock=self._recovery_lock,
         )
 
 
@@ -263,6 +295,8 @@ def bind_scope(scope: ExecutionScope | None):
 
 
 def _recover(scope, previous):
+    if isinstance(previous, dict) and previous.get("usage_uncertain") and scope.budget:
+        scope.budget.unmetered = True
     if not isinstance(previous, dict) or not previous.get("journal"):
         return
     path = Path(previous["journal"]).resolve()

@@ -1,0 +1,26 @@
+........................................................................ [  6%]
+........................................................................ [ 13%]
+........................................................................ [ 20%]
+.................s...................................................... [ 27%]
+......................................................................ss [ 34%]
+........................................................................ [ 41%]
+........................................................................ [ 48%]
+........................................................................ [ 55%]
+.........................s.............................................. [ 62%]
+........................................................................ [ 69%]
+........................................................................ [ 76%]
+........................................................................ [ 83%]
+........................................................................ [ 90%]
+........................................................................ [ 97%]
+..........................                                               [100%]
+============================== warnings summary ===============================
+tests/test_chinese_input.py::test_chinese_input
+  E:\software\anconda\Lib\site-packages\_pytest\python.py:198: PytestReturnNotNoneWarning: Expected None, but tests/test_chinese_input.py::test_chinese_input returned False, which will be an error in a future version of pytest.  Did you mean to use `assert` instead of `return`?
+    warnings.warn(
+
+tests/test_chinese_input.py::test_mixed_input
+  E:\software\anconda\Lib\site-packages\_pytest\python.py:198: PytestReturnNotNoneWarning: Expected None, but tests/test_chinese_input.py::test_mixed_input returned True, which will be an error in a future version of pytest.  Did you mean to use `assert` instead of `return`?
+    warnings.warn(
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+1030 passed, 4 skipped, 2 warnings in 192.89s (0:03:12)

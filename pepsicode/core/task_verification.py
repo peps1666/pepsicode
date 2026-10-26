@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import hashlib
 import json
+import uuid
 from dataclasses import asdict
 from functools import wraps
 from tempfile import TemporaryDirectory
 
 from pepsicode.core.loop_engine import VerificationResult
 from pepsicode.core.task_control import edit_control, snapshot
+from pepsicode.core.workspace_state import digest, summary, task_paths, workspace_state
 from pepsicode.execution.filesystem import FILES
 from pepsicode.execution.runtime import current_scope
 from pepsicode.tooling import ToolContext
@@ -22,6 +24,9 @@ def settle_task_failure(function):
         try:
             return function(*args, **kwargs)
         except BaseException as error:
+            permissions = kwargs.get("permissions")
+            if permissions and hasattr(permissions, "clear_task_grants"):
+                permissions.clear_task_grants()
             from pepsicode.cancellation import TurnCancelledError
             from pepsicode.execution.runtime import ModelRequestLimitError
             from pepsicode.llm.cost_tracker import BudgetExceededError
@@ -53,8 +58,144 @@ class TaskVerifier:
 
     def verify(self, *, messages, tools, cwd, permissions):
         task = snapshot().get("task")
+        mode = self.runtime.get("verificationMode", "always" if self.runtime.get("verifierEnabled") else "auto")
+        plain_answer = (
+            task
+            and task["kind"] == "answer"
+            and not task["criteria"]
+            and not task.get("required_artifacts")
+            and not task.get("requirements", {}).get("behavior")
+        )
+        if plain_answer and (
+            task.get("classification", {}).get("read_only_request")
+            or mode == "off"
+            or (mode == "auto" and tools.mutation_count <= self.project.start_count)
+        ):
+            # An explanation makes no workspace-behavior claim. Do not scan a
+            # large or partially unreadable repository merely to answer it.
+            return self._verify(messages=messages, tools=tools, cwd=cwd, permissions=permissions)
+        try:
+            preparation = self.runtime.get("verificationPreparationCommands")
+            if preparation:
+                from pepsicode.core.verification import ProjectVerifier
+
+                prepared = ProjectVerifier(
+                    {**self.runtime, "verificationMode": "always", "verificationCommands": preparation},
+                    tools,
+                    self.project.cancellation_event,
+                    hook_engine=self.project.hook_engine,
+                ).verify(messages=messages, tools=tools, cwd=cwd, permissions=permissions)
+                if not prepared.ok:
+                    return prepared
+            before = workspace_state(cwd, include_paths=task_paths(task or {}))
+        except (OSError, ValueError) as error:
+            return VerificationResult(
+                False, str(error), status="blocked", reason_code="verification_snapshot_unavailable"
+            )
+        run = {
+            "acceptance_run_id": uuid.uuid4().hex,
+            "task_id": task["id"] if task else None,
+            "task_revision": task["revision"] if task else None,
+            "criteria_digest": digest(task["criteria"] if task else []),
+            "requirements_digest": digest([task.get("required_artifacts", []), task.get("requirements", {})])
+            if task
+            else digest([]),
+            "workspace": summary(before),
+        }
+        report = self._verify(messages=messages, tools=tools, cwd=cwd, permissions=permissions)
+        with edit_control() as control:
+            latest = control.get("task")
+            try:
+                after = workspace_state(cwd, include_paths=task_paths(task or {}))
+                changed = before["digest"] != after["digest"]
+            except (OSError, ValueError):
+                changed = True
+            if (
+                task
+                and latest
+                and (
+                    (latest["id"], latest["revision"]) != (task["id"], task["revision"])
+                    or digest(latest["criteria"]) != run["criteria_digest"]
+                    or digest([latest.get("required_artifacts", []), latest.get("requirements", {})])
+                    != run["requirements_digest"]
+                )
+            ):
+                changed = True
+            if changed:
+                if latest:
+                    latest.update(status="active", evidence=[], acceptance=None)
+                report = VerificationResult(
+                    False,
+                    "Verification inputs changed; previous evidence is invalid",
+                    "Move generators and fixture setup to verificationPreparationCommands, then verify a stable state.",
+                    status="failed",
+                    reason_code="verification_state_changed",
+                )
+            if latest and task and latest["id"] == task["id"]:
+                if report.ok:
+                    pending = any(
+                        q.get("task_id") == task["id"] and q.get("required", True) and q["status"] == "pending"
+                        for q in control.get("questions", [])
+                    )
+                    todos = any(
+                        t.get("task_id") == task["id"] and t.get("required", True) and t["status"] != "completed"
+                        for t in control.get("todos", [])
+                    )
+                    scope = current_scope()
+                    if (
+                        pending
+                        or todos
+                        or (
+                            scope
+                            and (scope.has_unknown or (scope.cancellation_event and scope.cancellation_event.is_set()))
+                        )
+                    ):
+                        latest.update(status="active", evidence=[])
+                        report = VerificationResult(
+                            False,
+                            "Task prerequisites changed during acceptance",
+                            status="blocked",
+                            reason_code="acceptance_prerequisite_changed",
+                        )
+                    else:
+                        latest["status"] = "complete"
+                latest["acceptance"] = {**run, "valid": report.ok, "reason_code": report.reason_code}
+                for item in latest.get("evidence", []):
+                    item.update(acceptance_run_id=run["acceptance_run_id"], workspace_digest=before["digest"])
+        report.state = run
+        # Only requested artifacts and satisfied behavior checks count as
+        # progress. Logs, Todo wording and unrelated file churn do not.
+        latest = snapshot().get("task") or {}
+        relevant = {item["path"] for item in latest.get("required_artifacts", [])}
+        relevant.update(c["path"] for c in latest.get("criteria", []) if "path" in c)
+        report.progress = digest(
+            [
+                run["task_revision"],
+                {p: before["entries"].get(p) for p in sorted(relevant)},
+                sorted(e["criterion_id"] for e in latest.get("evidence", []) if e["status"] == "satisfied"),
+            ]
+        )
+        if not task:
+            report.progress = ""  # Legacy verifier-only callers have no task relevance map.
+        self.runtime["_lastProjectVerification"] = {
+            **self.runtime.get("_lastProjectVerification", {}),
+            "state": run,
+            **({"ok": False, "status": "failed", "reason_code": report.reason_code} if changed else {}),
+        }
+        return report
+
+    def _verify(self, *, messages, tools, cwd, permissions):
+        task = snapshot().get("task")
         ref = (task["id"], task["revision"]) if task else None
-        report = self.project.verify(messages=messages, tools=tools, cwd=cwd, permissions=permissions)
+        if task and task["kind"] == "answer" and task.get("classification", {}).get("read_only_request"):
+            report = VerificationResult(
+                False,
+                "Explanation-only request; no project programs executed",
+                status="not_run",
+                reason_code="explanation_only",
+            )
+        else:
+            report = self.project.verify(messages=messages, tools=tools, cwd=cwd, permissions=permissions)
         self.runtime["_lastProjectVerification"] = asdict(report)
         if not task:
             return report
@@ -86,7 +227,12 @@ class TaskVerifier:
             return VerificationResult(
                 False, "Required user question remains unanswered", status="blocked", reason_code="awaiting_user"
             )
-        if task["kind"] == "answer" and not task["criteria"]:
+        if (
+            task["kind"] == "answer"
+            and not task["criteria"]
+            and not task.get("required_artifacts")
+            and not task.get("requirements", {}).get("behavior")
+        ):
             with edit_control() as state:
                 latest = state["task"]
                 if (latest["id"], latest["revision"]) != ref or latest.get("admitted_revision") != latest["revision"]:
@@ -98,7 +244,10 @@ class TaskVerifier:
                     )
                 state["task"]["status"] = "answered"
             return report
-        if any(item.get("task_id") == task["id"] and item["status"] != "completed" for item in state.get("todos", [])):
+        if any(
+            item.get("task_id") == task["id"] and item.get("required", True) and item["status"] != "completed"
+            for item in state.get("todos", [])
+        ):
             return VerificationResult(
                 False,
                 "The current task still has unfinished todos",
@@ -114,6 +263,17 @@ class TaskVerifier:
                 status="failed",
                 reason_code="task_incomplete",
             )
+        for artifact in task.get("required_artifacts", []):
+            path = artifact["path"]
+            context = ToolContext(cwd, permissions=permissions, execution=scope)
+            if FILES.snapshot(context, path, observe=False).content is None:
+                return VerificationResult(
+                    False,
+                    f"Required artifact is absent: {path}",
+                    "Create and inspect the requested artifact; unrelated existing files cannot substitute.",
+                    status="failed",
+                    reason_code="missing_required_artifact",
+                )
         if task.get("criteria_revision") != task["revision"]:
             return VerificationResult(
                 False,
@@ -122,8 +282,20 @@ class TaskVerifier:
                 status="failed",
                 reason_code="stale_acceptance",
             )
+        if task.get("requirements", {}).get("behavior") and not any(c["kind"] == "command" for c in task["criteria"]):
+            return VerificationResult(
+                False,
+                "Behavior still lacks a targeted check",
+                "Add a behavior command; static artifacts cannot prove this structured requirement.",
+                status="failed",
+                reason_code="behavior_unverified",
+            )
         context = ToolContext(
-            cwd, permissions=permissions, execution=scope, cancellation_event=self.project.cancellation_event
+            cwd,
+            permissions=permissions,
+            execution=scope,
+            cancellation_event=self.project.cancellation_event,
+            for_verification=True,
         )
         evidence = []
         for criterion in task["criteria"]:
@@ -190,7 +362,10 @@ class TaskVerifier:
                 )
             latest["evidence"] = evidence
             passed = all(item["status"] == "satisfied" for item in evidence)
-            latest["status"] = "complete" if passed else "active"
+            latest["status"] = "active"
+            latest["assurance"] = (
+                "behavior_checked" if any(c["kind"] == "command" for c in task["criteria"]) else "artifact_checked"
+            )
         if not passed:
             return VerificationResult(
                 False,
@@ -201,7 +376,9 @@ class TaskVerifier:
             )
         return VerificationResult(
             True,
-            "Task acceptance conditions passed",
+            "Targeted behavior checks passed; coverage is limited to the declared checks"
+            if any(c["kind"] == "command" for c in task["criteria"])
+            else "Artifacts checked; behavior has not been verified",
             json.dumps({"acceptance": evidence, "project": asdict(report)}, ensure_ascii=False),
             status="passed",
             reason_code="task_acceptance",
@@ -225,6 +402,18 @@ def settle_task(messages, runtime, stop_reason):
             task["status"] = "incomplete"
         elif task["status"] not in {"complete", "answered"}:
             task["status"] = "blocked" if stop_reason == "blocked" else "incomplete"
+        task["recovery"] = {
+            "reason_code": last.get("finishReason")
+            or (runtime.get("_lastVerification") or {}).get("reason_code")
+            or stop_reason,
+            "next_action": "observe_and_reconcile"
+            if task["status"] == "unknown"
+            else "answer_question"
+            if task["status"] == "waiting_user"
+            else "resume_and_recheck"
+            if task["status"] not in {"complete", "answered"}
+            else "none",
+        }
         runtime["_lastTask"] = json.loads(json.dumps(task))
         for message in reversed(messages):
             if message.get("role") == "assistant":

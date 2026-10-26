@@ -80,5 +80,7 @@ grep_files_tool = ToolDefinition(
     },
     validator=_validate,
     run=_run,
+    affects_workspace=False,
+    observation_trust="host_filesystem",
     concurrency_safe=True,
 )

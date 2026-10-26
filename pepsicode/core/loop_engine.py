@@ -58,6 +58,8 @@ class VerificationResult:
     details: str = ""
     status: str = ""  # passed | failed | not_run | blocked | cancelled
     reason_code: str = ""
+    state: dict | None = None
+    progress: str = ""
 
     @property
     def fingerprint(self) -> str:
@@ -189,6 +191,7 @@ def run_loop(
     runner: Callable | None = None,
     turn_options: dict | None = None,
     cancellation_event: Any | None = None,
+    model_recovery_limit: int = 0,
 ) -> LoopResult:
     """Drive an agent toward a verifiable goal with bounded retries.
 
@@ -201,12 +204,15 @@ def run_loop(
     for name, value in (("max_iterations", max_iterations), ("no_progress_limit", no_progress_limit)):
         if isinstance(value, bool) or not isinstance(value, int) or value < 1:
             raise ValueError(f"{name} must be a positive integer")
+    if isinstance(model_recovery_limit, bool) or not isinstance(model_recovery_limit, int) or model_recovery_limit < 0:
+        raise ValueError("model_recovery_limit must be a non-negative integer")
     messages = list(messages)
     task = task if task is not None else Task(id="1", description="loop task")
     task.start()
 
     last_reason: str | None = None
     repeated_failures = 0
+    model_recoveries = 0
     last_verification: VerificationResult | None = None
 
     for iteration in range(1, max_iterations + 1):
@@ -241,6 +247,29 @@ def run_loop(
             task.cancel()
             return LoopResult(False, iteration, messages, stop_reason="cancelled")
         if messages and messages[-1].get("isError"):
+            reason = messages[-1].get("finishReason")
+            if (
+                reason in {"max_tokens", "pause_turn", "stream_incomplete", "model_transport_failure"}
+                and model_recoveries < model_recovery_limit
+                and iteration < max_iterations
+            ):
+                from pepsicode.execution.runtime import current_scope
+
+                scope = current_scope()
+                if scope and scope.has_unknown:
+                    task.fail("Reconcile unknown outcomes before model recovery")
+                    return LoopResult(False, iteration, messages, stop_reason="unknown_outcome")
+                if scope and scope.budget:
+                    scope.budget.check()
+                model_recoveries += 1
+                messages.append(
+                    {
+                        "role": "user",
+                        "internal": True,
+                        "content": f"Harness bounded recovery ({reason}). The previous response was incomplete; none of its tools were dispatched. Rebuild the next request from current state. Do not concatenate or replay incomplete tool arguments.",
+                    }
+                )
+                continue
             task.fail(messages[-1].get("content", "Agent turn failed"))
             return LoopResult(False, iteration, messages, stop_reason="agent_error")
 
@@ -296,7 +325,12 @@ def run_loop(
             )
 
         # Convergence: same failure as last iteration -> stop spinning.
-        repeated_failures = repeated_failures + 1 if last_verification.fingerprint == last_reason else 1
+        failure_key = (
+            (last_verification.reason_code or last_verification.reason) + "\n" + last_verification.progress
+            if last_verification.progress
+            else last_verification.fingerprint
+        )
+        repeated_failures = repeated_failures + 1 if failure_key == last_reason else 1
         if repeated_failures >= no_progress_limit:
             task.fail(f"no progress: {last_verification.reason}")
             return LoopResult(
@@ -307,7 +341,7 @@ def run_loop(
                 task=task,
                 stop_reason="no_progress",
             )
-        last_reason = last_verification.fingerprint
+        last_reason = failure_key
 
         if on_iteration is not None:
             on_iteration(iteration, last_verification)
@@ -316,6 +350,13 @@ def run_loop(
 
         # Feed the failure back to the agent as a user nudge for the next turn.
         nudge = IterationStrategy.nudge(task.retry_count, last_verification.reason)
+        if last_verification.reason_code in {"task_incomplete", "stale_acceptance", "missing_artifact_acceptance"}:
+            nudge = (
+                "Inspect task_state and define or review concrete acceptance for the current user objective. "
+                + last_verification.reason
+            )
+        elif last_verification.reason_code == "verification_state_changed":
+            nudge = "Verification changed its inputs. Separate preparation from checking, then verify a stable state within the remaining budget."
         if last_verification.details:
             nudge += "\nVerification output:\n" + last_verification.details[:12000]
         if iteration < max_iterations:

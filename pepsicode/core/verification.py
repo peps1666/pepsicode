@@ -122,6 +122,7 @@ class ProjectVerifier:
                 cancellation_event=self.cancellation_event,
                 hooks=self.hook_engine,
                 command_is_argv=True,
+                for_verification=True,
             )
             try:
                 target = resolve_tool_path(context, check.cwd, "command_cwd")
@@ -183,6 +184,7 @@ def run_verified_turn(
     on_verification=None,
     task_kind=None,
     acceptance=None,
+    task_requirements=None,
     **options,
 ):
     """Finish verification before admitting the next queued task."""
@@ -194,6 +196,7 @@ def run_verified_turn(
             on_verification=on_verification,
             task_kind=task_kind,
             acceptance=acceptance,
+            task_requirements=task_requirements,
             **options,
         )
     try:
@@ -205,6 +208,7 @@ def run_verified_turn(
                 input_queue=input_queue,
                 task_kind=task_kind,
                 acceptance=acceptance,
+                task_requirements=task_requirements,
                 **options,
             )
             event = options.get("cancellation_event")
@@ -228,18 +232,52 @@ def run_verified_turn(
             )
             options["messages"] = messages
             task_kind, acceptance = None, None
+            task_requirements = None
     finally:
         input_queue.close()
 
 
 @settle_task_failure
 def _run_verified_turn_once(
-    *, runtime: dict | None, runner, on_verification=None, task_kind=None, acceptance=None, **options
+    *,
+    runtime: dict | None,
+    runner,
+    on_verification=None,
+    task_kind=None,
+    acceptance=None,
+    task_requirements=None,
+    **options,
 ):
     """Run the existing agent with optional streaming and a bounded verifier."""
     runtime = runtime if runtime is not None else {}
     contract_options = {**runtime, **({"taskKind": task_kind} if task_kind is not None else {})}
     task = begin_task(options.get("messages", []), contract_options)
+    if task and task_requirements is not None:
+        from pepsicode.core.task_acceptance import validate_requirements
+
+        requirements = validate_requirements(task_requirements)
+        with edit_control() as control:
+            control["task"]["requirements"] = requirements
+            control["task"]["required_artifacts"] = [
+                {"path": path, "source": requirements["source"]} for path in requirements.get("artifacts", [])
+            ]
+            if requirements["artifacts"] and not control["task"]["criteria"]:
+                control["task"]["criteria"] = [
+                    {"id": f"required-{i}", "kind": "file_exists", "path": path}
+                    for i, path in enumerate(requirements["artifacts"])
+                ]
+                control["task"]["criteria_revision"] = control["task"]["revision"]
+            for condition in control["task"]["criteria"]:
+                if condition.get("path") in requirements["artifacts"]:
+                    control["task"].setdefault("criterion_sources", {})[condition["id"]] = {
+                        "source": requirements["source"],
+                        "input_id": task["inputs"][-1],
+                        "purpose": "Verify an explicitly required artifact",
+                    }
+            if requirements["behavior"] or requirements["artifacts"]:
+                control["task"]["classification"] = {"source": "caller", "locked": True, "kind": "change"}
+            if (requirements.get("behavior") or requirements["artifacts"]) and control["task"]["kind"] == "answer":
+                control["task"]["kind"] = "change"
     configured = acceptance if acceptance is not None else runtime.get("taskAcceptance")
     if task and configured is not None:
         from pepsicode.core.task_acceptance import validate_criteria
@@ -247,6 +285,9 @@ def _run_verified_turn_once(
         with edit_control() as control:
             control["task"]["criteria"] = validate_criteria(configured)
             control["task"]["criteria_revision"] = control["task"]["revision"]
+            control["task"]["criterion_sources"] = {
+                c["id"]: {"source": "caller", "input_id": task["inputs"][-1]} for c in control["task"]["criteria"]
+            }
     runtime.pop("_lastVerification", None)
     event = options.get("cancellation_event")
     report = None
@@ -288,6 +329,7 @@ def _run_verified_turn_once(
         no_progress_limit=runtime.get("verificationNoProgressLimit", 2),
         cost_limit_usd=options.get("cost_limit_usd", runtime.get("budgetLimitUsd")),
         on_verify=verified,
+        model_recovery_limit=runtime.get("modelRecoveryLimit", 1),
     )
     if report is None:
         verified(
@@ -321,6 +363,9 @@ def _run_verified_turn_once(
         )
     checkpoint_messages(result.messages)
     settle_task(result.messages, runtime, result.stop_reason)
+    permissions = options.get("permissions")
+    if permissions and hasattr(permissions, "clear_task_grants"):
+        permissions.clear_task_grants()
     if report is not None:
         for message in reversed(result.messages):
             if message.get("role") == "assistant":

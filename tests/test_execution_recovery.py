@@ -59,10 +59,22 @@ def test_child_unknown_outcome_blocks_parent_and_reconciliation_requires_approva
         FILES.write_text(ToolContext(str(tmp_path), execution=root), tmp_path / "blocked", "no")
     context = ToolContext(str(tmp_path), execution=root, permissions=permissions)
     evidence = "Read the remote record: the update committed once"
-    result = registry.execute("execution_status", {"action": "reconcile", "evidence": evidence}, context)
+    (tmp_path / "record").write_text("committed once", encoding="utf-8")
+    import json
+
+    observed = json.loads(registry.execute("execution_status", {"action": "observe", "path": "record"}, context).output)
+    reconcile = {
+        "action": "reconcile",
+        "evidence": evidence,
+        "call_id": next(iter(root.unresolved)),
+        "revision": observed["recovery_revision"],
+        "observation_ids": [observed["id"]],
+        "outcome": "occurred",
+    }
+    result = registry.execute("execution_status", reconcile, context)
     assert not result.ok and root.has_unknown
     permissions.prompt = lambda request: decisions.append(request) or {"decision": "allow_once"}
-    result = registry.execute("execution_status", {"action": "reconcile", "evidence": evidence}, context)
+    result = registry.execute("execution_status", reconcile, context)
     assert result.ok and not root.has_unknown
     assert len(decisions) == 2
     assert evidence in decisions[-1]["details"][-1]

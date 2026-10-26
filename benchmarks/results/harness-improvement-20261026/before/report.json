@@ -1,0 +1,95 @@
+{
+  "protocol_sha256": "8c3e6fa626735a0da7a74f9d4e17bcefc667e14233714ef103734a418dc3c3c0",
+  "mode": "smoke",
+  "summary": {
+    "planned_runs": 1,
+    "finished_runs": 1,
+    "cohort_complete": true,
+    "passed": 1,
+    "failed": 0,
+    "unscored": 0,
+    "success_rate": null,
+    "smoke_passed": true,
+    "duration_seconds": 3.641,
+    "model_requests": 0,
+    "usage_complete": false,
+    "input_tokens": null,
+    "output_tokens": null,
+    "estimated_cost_usd": null,
+    "human_interventions": 0
+  },
+  "runs": [
+    {
+      "case": "smoke",
+      "run": 1,
+      "case_sha256": "d95789f89c8a3d239e8564a8954cfcfbfecef3e30461d67150621bb3f159652c",
+      "success": true,
+      "status": "passed",
+      "failure_reason": null,
+      "estimated_cost_usd": null,
+      "baseline": {
+        "status": "exited",
+        "exit_code": 1,
+        "output": "Traceback (most recent call last):\n  File \"E:\\Code\\pepsicode\\.eval-work\\task-flow-smoke-final\\smoke-001\\baseline_grader.py\", line 5, in <module>\n    assert add(7, 9) == 16\n           ^^^^^^^^^^^^^^^\nAssertionError\n",
+        "passed": false
+      },
+      "duration_seconds": 3.641,
+      "requests": [],
+      "budget_spend_estimate_usd": null,
+      "verification": [
+        {
+          "ok": true,
+          "reason": "Task acceptance conditions passed",
+          "details": "{\"acceptance\": [{\"criterion_id\": \"public-behavior\", \"task_revision\": 1, \"status\": \"satisfied\", \"argv\": [\"E:\\\\software\\\\anconda\\\\python.exe\", \"-B\", \"test_public.py\"], \"exit_code\": 0, \"output\": \".\\n----------------------------------------------------------------------\\nRan 1 test in 0.000s\\n\\nOK\", \"output_sha256\": \"3e95e64f9afe0dce4b12d9ec1374c75ab7e118c81ce0620e893102943876aac5\"}], \"project\": {\"ok\": true, \"reason\": \"1 verification check(s) passed\", \"details\": \"public unittest: passed\\n.\\n----------------------------------------------------------------------\\nRan 1 test in 0.000s\\n\\nOK\", \"status\": \"passed\", \"reason_code\": \"\"}}",
+          "status": "passed",
+          "reason_code": "task_acceptance"
+        }
+      ],
+      "approvals": [
+        {
+          "kind": "command",
+          "allowed": true
+        },
+        {
+          "kind": "command",
+          "allowed": true
+        },
+        {
+          "kind": "command",
+          "allowed": true
+        }
+      ],
+      "human_interventions": 0,
+      "compactions": [],
+      "resume_process_reopened": false,
+      "tool_calls": 2,
+      "tool_errors": 0,
+      "hidden_checks": {
+        "status": "exited",
+        "exit_code": 0,
+        "output": "EVAL_COMPLETE\n",
+        "passed": true
+      },
+      "protected_files_intact": true
+    }
+  ],
+  "cases": {
+    "smoke": {
+      "planned_runs": 1,
+      "finished_runs": 1,
+      "cohort_complete": true,
+      "passed": 1,
+      "failed": 0,
+      "unscored": 0,
+      "success_rate": null,
+      "smoke_passed": true,
+      "duration_seconds": 3.641,
+      "model_requests": 0,
+      "usage_complete": false,
+      "input_tokens": null,
+      "output_tokens": null,
+      "estimated_cost_usd": null,
+      "human_interventions": 0
+    }
+  }
+}

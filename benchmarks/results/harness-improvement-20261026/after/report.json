@@ -1,0 +1,157 @@
+{
+  "protocol_sha256": "b91756f0a2f4446b960ea4510ca469b6ca1668917066fccc9001d7d871edb335",
+  "mode": "smoke",
+  "evaluation_kind": "offline_smoke",
+  "summary": {
+    "planned_runs": 1,
+    "finished_runs": 1,
+    "cohort_complete": true,
+    "passed": 1,
+    "failed": 0,
+    "unscored": 0,
+    "success_rate": null,
+    "behavior_success_rate": 1.0,
+    "smoke_passed": true,
+    "duration_seconds": 1.937,
+    "model_requests": 0,
+    "usage_complete": false,
+    "input_tokens": null,
+    "output_tokens": null,
+    "estimated_cost_usd": null,
+    "clarification_waits": 0,
+    "approval_requests": 3,
+    "approval_decisions": 3,
+    "approval_wait_seconds": 0.0,
+    "claimed_complete_scored_runs": 1,
+    "false_completions": 0,
+    "false_completion_rate": 0.0,
+    "answer_blocked_rate": null,
+    "answer_scored_runs": 0,
+    "recovery_scored_runs": 0,
+    "recovery_success_rate": null,
+    "externally_passed_but_internal_unfinished": 0,
+    "infrastructure_errors": 0,
+    "infrastructure_error_reasons": [],
+    "task_failure_rate": 0.0
+  },
+  "runs": [
+    {
+      "case": "smoke",
+      "run": 1,
+      "case_sha256": "d95789f89c8a3d239e8564a8954cfcfbfecef3e30461d67150621bb3f159652c",
+      "scenario": "coding",
+      "success": true,
+      "status": "passed",
+      "failure_reason": null,
+      "estimated_cost_usd": null,
+      "baseline": {
+        "status": "exited",
+        "exit_code": 1,
+        "output": "Traceback (most recent call last):\n  File \"E:\\Code\\pepsicode\\.eval-work\\checklist-smoke-delivery\\smoke-001\\baseline_grader.py\", line 5, in <module>\n    assert add(7, 9) == 16\n           ^^^^^^^^^^^^^^^\nAssertionError\n",
+        "passed": false
+      },
+      "duration_seconds": 1.937,
+      "requests": [],
+      "budget_spend_estimate_usd": null,
+      "verification": [
+        {
+          "ok": true,
+          "reason": "Targeted behavior checks passed; coverage is limited to the declared checks",
+          "details": "{\"acceptance\": [{\"criterion_id\": \"public-behavior\", \"task_revision\": 1, \"status\": \"satisfied\", \"argv\": [\"E:\\\\software\\\\anconda\\\\python.exe\", \"-B\", \"test_public.py\"], \"exit_code\": 0, \"output\": \".\\n----------------------------------------------------------------------\\nRan 1 test in 0.000s\\n\\nOK\", \"output_sha256\": \"3e95e64f9afe0dce4b12d9ec1374c75ab7e118c81ce0620e893102943876aac5\"}], \"project\": {\"ok\": true, \"reason\": \"1 verification check(s) passed\", \"details\": \"public unittest: passed\\n.\\n----------------------------------------------------------------------\\nRan 1 test in 0.000s\\n\\nOK\", \"status\": \"passed\", \"reason_code\": \"\", \"state\": null, \"progress\": \"\"}}",
+          "status": "passed",
+          "reason_code": "task_acceptance",
+          "state": {
+            "acceptance_run_id": "2d992bf39fcf49d38f3408f6c83fb99b",
+            "task_id": "19b428120cc84f18aba0c43e33deea5b",
+            "task_revision": 1,
+            "criteria_digest": "71151589505e30bcc0cfbd088da83a3c876aa32df8de9d7b91029e7df23af6f8",
+            "requirements_digest": "5eed25f9aa1c68139fe47d7ea93769c16d4ddd46c01693921e0b40d9aaa39beb",
+            "workspace": {
+              "version": 1,
+              "digest": "a7447d9cce4dec9f83f9535a0fe175971adb1f16e81725f38e80c2d71007e04d",
+              "files": 2,
+              "bytes": 220,
+              "duration_ms": 0.0
+            }
+          },
+          "progress": "3c840ee05b68243538ed25e30d49e28a6ef87cec59adf14b250763fb65ff694c"
+        }
+      ],
+      "approvals": [
+        {
+          "kind": "command",
+          "allowed": true
+        },
+        {
+          "kind": "command",
+          "allowed": true
+        },
+        {
+          "kind": "command",
+          "allowed": true
+        }
+      ],
+      "clarification_waits": 0,
+      "approval_metrics": {
+        "requests": 3,
+        "decisions": 3,
+        "wait_seconds": 0.0
+      },
+      "internal_claimed_complete": true,
+      "acceptance_track": "preset",
+      "execution_state": {
+        "task_id": "840a048a3578496a9105185c54c234d2",
+        "state": "succeeded",
+        "journal": "E:\\Code\\pepsicode\\.eval-work\\checklist-smoke-delivery\\smoke-001\\workspace\\.pepsi-code\\executions\\840a048a3578496a9105185c54c234d2.jsonl",
+        "recovery_revision": 0,
+        "usage_uncertain": false
+      },
+      "recovery_attempts": 0,
+      "compactions": [],
+      "resume_process_reopened": false,
+      "tool_calls": 2,
+      "tool_errors": 0,
+      "hidden_checks": {
+        "status": "exited",
+        "exit_code": 0,
+        "output": "EVAL_COMPLETE\n",
+        "passed": true
+      },
+      "protected_files_intact": true
+    }
+  ],
+  "cases": {
+    "smoke": {
+      "planned_runs": 1,
+      "finished_runs": 1,
+      "cohort_complete": true,
+      "passed": 1,
+      "failed": 0,
+      "unscored": 0,
+      "success_rate": null,
+      "behavior_success_rate": 1.0,
+      "smoke_passed": true,
+      "duration_seconds": 1.937,
+      "model_requests": 0,
+      "usage_complete": false,
+      "input_tokens": null,
+      "output_tokens": null,
+      "estimated_cost_usd": null,
+      "clarification_waits": 0,
+      "approval_requests": 3,
+      "approval_decisions": 3,
+      "approval_wait_seconds": 0.0,
+      "claimed_complete_scored_runs": 1,
+      "false_completions": 0,
+      "false_completion_rate": 0.0,
+      "answer_blocked_rate": null,
+      "answer_scored_runs": 0,
+      "recovery_scored_runs": 0,
+      "recovery_success_rate": null,
+      "externally_passed_but_internal_unfinished": 0,
+      "infrastructure_errors": 0,
+      "infrastructure_error_reasons": [],
+      "task_failure_rate": 0.0
+    }
+  }
+}

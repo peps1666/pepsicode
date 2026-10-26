@@ -259,6 +259,27 @@ def load_session(session_id: str) -> SessionData | None:
 
         validate_tree(data.get("tree", {}))
         validate_control(data.get("task_control", {}))
+        control = data.get("task_control", {})
+        task = control.get("task")
+        current_proof = False
+        if task and task.get("status") == "complete":
+            from pepsicode.core.workspace_state import digest, task_paths, workspace_state
+
+            proof = task.get("acceptance") or {}
+            try:
+                current_proof = (
+                    proof.get("valid")
+                    and proof.get("task_revision") == task["revision"]
+                    and proof.get("criteria_digest") == digest(task["criteria"])
+                    and proof.get("workspace", {}).get("digest")
+                    == workspace_state(data["workspace"], include_paths=task_paths(task))["digest"]
+                )
+            except (OSError, ValueError):
+                current_proof = False
+        if task and task.get("status") == "complete" and not current_proof:
+            # Retain archived evidence verbatim; it has no proof for the current workspace.
+            task["legacy_evidence"] = task.get("evidence", [])
+            task.update(status="incomplete", evidence=[], assurance="needs_recheck")
         return SessionData(
             session_id=data["session_id"],
             created_at=data["created_at"],
@@ -276,7 +297,7 @@ def load_session(session_id: str) -> SessionData | None:
             model_settings=data.get("model_settings", {}),
             verification_state=data.get("verification_state"),
             execution_state=data.get("execution_state"),
-            task_control=data.get("task_control", {}),
+            task_control=control,
             tree=data.get("tree", {}),
             parent_session_id=data.get("parent_session_id"),
             parent_entry_id=data.get("parent_entry_id"),

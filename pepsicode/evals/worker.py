@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import sys
 import time
+from contextlib import nullcontext
 from pathlib import Path
 
 from pepsicode.context.context_manager import ContextManager, load_context_state, save_context_state
@@ -20,6 +22,7 @@ from pepsicode.sandbox import format_command_signature
 from pepsicode.tooling import ToolCapability, ToolContext, ToolDefinition, ToolRegistry
 from pepsicode.tools.ask_user import ask_user_tool
 from pepsicode.tools.edit_file import edit_file_tool
+from pepsicode.tools.execution_status import execution_status_tool
 from pepsicode.tools.grep_files import grep_files_tool
 from pepsicode.tools.list_files import list_files_tool
 from pepsicode.tools.patch_file import patch_file_tool
@@ -163,6 +166,7 @@ def evaluation_tools(workspace: str, permissions: PermissionManager) -> ToolRegi
             patch_file_tool,
             todo_write_tool,
             task_state_tool,
+            execution_status_tool,
             ask_user_tool,
             test_tool,
         ]
@@ -192,13 +196,44 @@ def run_worker(payload: dict) -> dict:
         # Fixture checkpoint: persisted by one process, reopened by another.
         manager = seed_context(workspace, constraints=MONEY_REQUIREMENTS)
         save_context_state(manager)
+        if case.scenario == "interrupted":
+            Path(payload["checkpoint_ready"]).write_text("checkpoint_saved", encoding="utf-8")
+            os._exit(75)  # Deliberately bypass cleanup after the durable checkpoint.
         return {"status": "prepared"}
 
     signature = format_command_signature(test_command()[0], test_command()[1:])
+    permitted_checks = {
+        signature,
+        *(
+            format_command_signature(c["argv"][0], c["argv"][1:])
+            for c in (case.acceptance or ())
+            if c["kind"] == "command"
+        ),
+    }
     decisions = []
 
     def approve(request):
-        allow = request.get("kind") == "command" and request.get("scope") == signature
+        allow = request.get("kind") == "command" and request.get("scope") in permitted_checks
+        if case.unresolved_calls and request.get("kind") == "mcp":
+            target = next(
+                (line.removeprefix("target: ") for line in request.get("details", []) if line.startswith("target: ")),
+                "",
+            )
+            try:
+                value = json.loads(target)
+                observations = value.get("observations", [])
+                allow = (
+                    value.get("call_id") in case.unresolved_calls
+                    and value.get("outcome") == "occurred"
+                    and bool(observations)
+                    and all(
+                        o.get("path") == str(Path(workspace) / "receipt.txt")
+                        and o.get("version") == hashlib.sha256(case.files["receipt.txt"].encode()).hexdigest()
+                        for o in observations
+                    )
+                )
+            except (ValueError, TypeError):
+                allow = False
         decisions.append({"kind": request.get("kind"), "allowed": allow})
         return {"decision": "allow_once" if allow else "deny_once"}
 
@@ -211,9 +246,25 @@ def run_worker(payload: dict) -> dict:
             "verificationMode": "always",
             "maxIterations": 3,
             "verificationCommands": [{"name": "public unittest", "command": argv, "timeout": 30}],
-            "taskAcceptance": [{"id": "public-behavior", "kind": "command", "argv": argv}],
         }
     )
+    if payload.get("acceptance_track", "preset") == "preset":
+        runtime["taskAcceptance"] = (
+            list(case.acceptance)
+            if case.acceptance is not None
+            else [{"id": "public-behavior", "kind": "command", "argv": argv}]
+        )
+    if "test_public.py" not in case.files:
+        runtime.update(verificationMode="off", verificationCommands=[])
+    if case.unresolved_calls:
+        from pepsicode.execution.runtime import ExecutionJournal
+
+        journal = ExecutionJournal(Path(workspace) / ".pepsi-code/executions/seeded.jsonl")
+        for call in case.unresolved_calls:
+            journal.append(
+                "tool/started", call_id=call, tool="fixture external write", arguments={"path": "receipt.txt"}
+            )
+        runtime["_lastExecution"] = {"task_id": "seeded", "state": "unknown", "journal": str(journal.path)}
     smoke = payload["mode"] == "smoke"
     model = (
         SmokeModel()
@@ -226,7 +277,7 @@ def run_worker(payload: dict) -> dict:
             pricing=payload.get("pricing"),
         )
     )
-    restored = case.scenario == "resume"
+    restored = case.scenario in {"resume", "interrupted"}
     if restored:
         manager = load_context_state()
         if manager is None or manager.recovery_state.workspace != workspace:
@@ -266,19 +317,47 @@ def run_worker(payload: dict) -> dict:
                 }
     manager.messages.append({"role": "user", "content": case.prompt})
     reports = []
+    queue = None
+    session = None
+    if case.steering:
+        from pepsicode.core.input_queue import TurnInputQueue
+        from pepsicode.core.session import create_new_session
+
+        session = create_new_session(workspace)
+        queue = TurnInputQueue()
+        queue.bind_session(session)
+        queue.start()
+    steered = False
+
+    def deliver_steering(name, output, is_error):
+        nonlocal steered
+        if queue and not steered and name == "write_file" and not is_error:
+            queue.enqueue(case.steering, "steer")
+            steered = True
+
     started = time.monotonic()
-    messages = run_verified_turn(
-        runtime=runtime,
-        runner=run_agent_turn,
-        model=model,
-        tools=tools,
-        messages=manager.messages,
-        cwd=workspace,
-        permissions=permissions,
-        context_manager=manager,
-        max_steps=payload["max_steps"],
-        on_verification=reports.append,
-    )
+    try:
+        from pepsicode.core.session_tree import recording_session
+
+        with recording_session(session) if session else nullcontext():
+            messages = run_verified_turn(
+                runtime=runtime,
+                task_kind=case.task_kind,
+                runner=run_agent_turn,
+                model=model,
+                tools=tools,
+                messages=manager.messages,
+                cwd=workspace,
+                permissions=permissions,
+                context_manager=manager,
+                max_steps=payload["max_steps"],
+                on_verification=reports.append,
+                input_queue=queue,
+                on_tool_result=deliver_steering if queue else None,
+            )
+    except BudgetExceededError:
+        model.limit_reason = "budget_limit"
+        messages = [*manager.messages, {"role": "assistant", "content": "Evaluation budget exhausted", "isError": True}]
     last = messages[-1] if messages else {}
     status = "completed"
     if last.get("awaitingUser"):
@@ -291,7 +370,7 @@ def run_worker(payload: dict) -> dict:
             if reports and reports[-1].get("status") == "failed"
             else "step_limit"
             if "maximum tool step limit" in last.get("content", "")
-            else "error"
+            else "model_error"
         )
     result = {
         "status": status,
@@ -304,7 +383,14 @@ def run_worker(payload: dict) -> dict:
         "budget_spend_estimate_usd": None if smoke else model.costs.total_cost_usd,
         "verification": reports,
         "approvals": decisions,
-        "human_interventions": int(status == "awaiting_user"),
+        "clarification_waits": int(status == "awaiting_user"),
+        "approval_metrics": permissions.approval_metrics,
+        "internal_claimed_complete": (runtime.get("_lastTask") or {}).get("status") in {"complete", "answered"},
+        "acceptance_track": payload.get("acceptance_track", "preset"),
+        "execution_state": runtime.get("_lastExecution"),
+        "recovery_attempts": sum(
+            m.get("internal", False) and m.get("content", "").startswith("Harness bounded recovery") for m in messages
+        ),
         "compactions": [boundary.to_dict() for boundary in manager.compact_boundaries],
         "resume_process_reopened": restored,
         "tool_calls": sum(message.get("role") == "assistant_tool_call" for message in messages),

@@ -20,6 +20,10 @@ def _validate(input_data: dict) -> dict:
         if not isinstance(todo["content"], str) or not todo["content"].strip():
             raise ValueError("todo content must contain text")
         status = todo.get("status", "pending")
+        if not isinstance(todo.get("required", True), bool):
+            raise ValueError("todo required must be boolean")
+        if todo.get("required") is False and not isinstance(todo.get("reason", ""), str):
+            raise ValueError("optional todo reason must be text")
         if status not in ("pending", "in_progress", "completed"):
             raise ValueError(f"todo[{i}] status must be 'pending', 'in_progress', or 'completed'")
     if len({todo["content"].strip() for todo in todos}) != len(todos):
@@ -41,6 +45,8 @@ def _run(input_data: dict, context) -> ToolResult:
                 "created_at": time.time(),
             }
             task["status"] = todo.get("status", "pending")
+            task["required"] = todo.get("required", True)
+            task["reason"] = todo.get("reason", "")
             task["task_id"] = task_id
             task["completed_at"] = (task.get("completed_at") or time.time()) if task["status"] == "completed" else None
             tasks.append(task)
@@ -89,6 +95,11 @@ todo_write_tool = ToolDefinition(
                     "type": "object",
                     "properties": {
                         "content": {"type": "string", "description": "Task description"},
+                        "required": {
+                            "type": "boolean",
+                            "description": "False only for optional model-suggested work, never explicit user requirements.",
+                        },
+                        "reason": {"type": "string", "description": "Reason optional work is deferred."},
                         "status": {
                             "type": "string",
                             "enum": ["pending", "in_progress", "completed"],

@@ -20,7 +20,10 @@ Backward compatibility:
 
 from __future__ import annotations
 
+import hashlib
 import json
+import os
+import shutil
 import threading
 import time
 import uuid
@@ -135,6 +138,9 @@ class PermissionManager:
         self._process_lock = threading.RLock()
         self._processes = set()
         self.store = ApprovalStore(workspace_root)
+        self._task_command_grants = set()
+        self.approval_metrics = {"requests": 0, "decisions": 0, "wait_seconds": 0.0}
+        self._approval_metrics_lock = threading.Lock()
 
         # Plan-mode state
         self.mode = PermissionMode(mode)
@@ -206,6 +212,7 @@ class PermissionManager:
         return self.previous_mode if self.is_plan_mode else self.mode
 
     def set_access_mode(self, mode: str) -> None:
+        self._task_command_grants.clear()
         candidate = PermissionMode(mode)
         if candidate not in {PermissionMode.READ_ONLY, PermissionMode.AUTO, PermissionMode.FULL_ACCESS}:
             raise ValueError("Choose read_only, auto, or full_access")
@@ -221,6 +228,7 @@ class PermissionManager:
     def enter_plan_mode(self) -> str:
         """Enter plan mode and return the sole writable plan path."""
         if not self.is_plan_mode:
+            self._task_command_grants.clear()
             self.previous_mode = self.mode
             stamp = time.strftime("%Y%m%d-%H%M%S")
             suffix = uuid.uuid4().hex[:8]
@@ -366,7 +374,7 @@ class PermissionManager:
                 {"key": "3", "label": "keep planning", "decision": "deny_once"},
             ],
         )
-        outcome = self.approval.request(req)
+        outcome = self._request_approval(req)
 
         if outcome.is_unavailable:
             return {
@@ -394,10 +402,63 @@ class PermissionManager:
     # ------------------------------------------------------------------ #
 
     def begin_turn(self) -> None:
+        self._task_command_grants.clear()
         self.store.begin_turn()
 
     def end_turn(self) -> None:
+        self._task_command_grants.clear()
         self.store.end_turn()
+
+    def clear_task_grants(self):
+        self._task_command_grants.clear()
+
+    def _request_approval(self, request):
+        started = time.monotonic()
+        with self._approval_metrics_lock:
+            self.approval_metrics["requests"] += 1
+        try:
+            outcome = self.approval.request(request)
+            if not outcome.is_unavailable:
+                with self._approval_metrics_lock:
+                    self.approval_metrics["decisions"] += 1
+            return outcome
+        finally:
+            with self._approval_metrics_lock:
+                self.approval_metrics["wait_seconds"] += time.monotonic() - started
+
+    def _task_command_key(self, command, args, cwd, environment=None, verification=False):
+        from pepsicode.core.task_control import snapshot
+        from pepsicode.core.workspace_state import digest, task_paths, workspace_state
+        from pepsicode.execution.runtime import current_scope
+
+        scope = current_scope()
+        task = snapshot().get("task")
+        if not scope or scope.parent_task_id is not None or not task or task["status"] != "active":
+            return None
+        state = workspace_state(self.workspace_root, include_paths=task_paths(task))
+        environment = dict(os.environ if environment is None else environment)
+        executable = shutil.which(command, path=environment.get("PATH"))
+        if executable is None:
+            return None
+        executable = str(Path(executable).resolve())
+        executable_version = hashlib.sha256(Path(executable).read_bytes()).hexdigest()
+        if verification:
+            environment.pop("PYTHONPYCACHEPREFIX", None)
+        return digest(
+            [
+                task["id"],
+                task["revision"],
+                self.mode.value,
+                self.workspace_root,
+                _normalize_path(cwd),
+                command,
+                args,
+                state["digest"],
+                executable,
+                executable_version,
+                environment,
+            ]
+        )
 
     # ------------------------------------------------------------------ #
     # Summary
@@ -408,6 +469,9 @@ class PermissionManager:
         if self.plan_file_path:
             summary.append(f"plan: {self.plan_file_path}")
         summary.extend(self.store.get_summary_lines())
+        summary.append(
+            f"approval requests: {self.approval_metrics['requests']}; decisions: {self.approval_metrics['decisions']}; backend wait: {self.approval_metrics['wait_seconds']:.3f}s"
+        )
         return summary
 
     # ------------------------------------------------------------------ #
@@ -460,7 +524,7 @@ class PermissionManager:
             ],
             metadata={"intent": intent, "target": normalized},
         )
-        outcome = self.approval.request(req)
+        outcome = self._request_approval(req)
         self.store.record(ApprovalKind.PATH, normalized, outcome)
         if operation_paths is not None and outcome.is_allowed:
             operation_paths.add((self.mode, normalized, intent))
@@ -472,6 +536,8 @@ class PermissionManager:
         args: list[str],
         command_cwd: str,
         force_prompt_reason: str | None = None,
+        environment=None,
+        verification=False,
     ) -> ApprovalOutcome:
         """Check whether a command can run, returning a typed outcome."""
         if self.mode == PermissionMode.READ_ONLY or self.is_plan_mode:
@@ -491,7 +557,15 @@ class PermissionManager:
         # 3. Check cache
         signature = format_command_signature(command, args)
         grant_key = json.dumps([_normalize_path(command_cwd), command, args], ensure_ascii=False)
+        try:
+            task_key = self._task_command_key(command, args, command_cwd, environment, verification)
+        except (OSError, ValueError):
+            task_key = None
         cached = self.store.lookup(ApprovalKind.COMMAND, grant_key)
+        if cached is not None and cached.is_denied:
+            return cached
+        if task_key and task_key in self._task_command_grants:
+            return ApprovalOutcome(ApprovalDecision.ALLOW_TASK)
         if cached is not None:
             return cached
 
@@ -511,13 +585,31 @@ class PermissionManager:
             scope=signature,
             choices=[
                 {"key": "y", "label": "allow once", "decision": "allow_once"},
+                *(
+                    [
+                        {
+                            "key": "t",
+                            "label": "allow this exact command for this task and current inputs",
+                            "decision": "allow_task",
+                        }
+                    ]
+                    if task_key
+                    else []
+                ),
                 {"key": "a", "label": "always allow this command", "decision": "allow_always"},
                 {"key": "n", "label": "deny once", "decision": "deny_once"},
                 {"key": "d", "label": "always deny this command", "decision": "deny_always"},
             ],
             metadata={"cwd": command_cwd, "reason": reason},
         )
-        outcome = self.approval.request(req)
+        outcome = self._request_approval(req)
+        if outcome.decision == ApprovalDecision.ALLOW_TASK:
+            if (
+                task_key is None
+                or self._task_command_key(command, args, command_cwd, environment, verification) != task_key
+            ):
+                return ApprovalOutcome(ApprovalDecision.DENY_ONCE)
+            self._task_command_grants.add(task_key)
         self.store.record(ApprovalKind.COMMAND, grant_key, outcome)
         return outcome
 
@@ -565,7 +657,7 @@ class PermissionManager:
             ],
             metadata={"tool": tool_name},
         )
-        outcome = self.approval.request(req)
+        outcome = self._request_approval(req)
         self.store.record(ApprovalKind.MCP, tool_name, outcome)
         return outcome
 
@@ -575,7 +667,7 @@ class PermissionManager:
             return ApprovalOutcome(ApprovalDecision.DENY_ONCE)
         if self.mode == PermissionMode.FULL_ACCESS:
             return ApprovalOutcome(ApprovalDecision.ALLOW_ONCE)
-        return self.approval.request(
+        return self._request_approval(
             ApprovalRequest(
                 kind=ApprovalKind.MCP,
                 summary="pepsicode wants to change an external resource",
@@ -630,7 +722,7 @@ class PermissionManager:
             ],
             metadata={"target": normalized},
         )
-        outcome = self.approval.request(req)
+        outcome = self._request_approval(req)
         self.store.record(ApprovalKind.EDIT, normalized, outcome)
         return outcome
 

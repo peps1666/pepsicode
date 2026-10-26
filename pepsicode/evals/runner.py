@@ -21,6 +21,19 @@ from pepsicode.version import VERSION
 SOURCE_ROOT = Path(__file__).resolve().parents[2]
 
 
+def harness_source_digest():
+    hasher = hashlib.sha256()
+    package = SOURCE_ROOT / "pepsicode"
+    for path in sorted(package.rglob("*")):
+        relative = path.relative_to(package)
+        if path.suffix not in {".py", ".md", ".json"} or any(
+            part in {"__pycache__", ".pepsi-code", "evals"} for part in relative.parts
+        ):
+            continue
+        hasher.update(relative.as_posix().encode() + b"\0" + path.read_bytes() + b"\0")
+    return hasher.hexdigest()
+
+
 def isolated_environment(home: Path) -> dict[str, str]:
     home.mkdir(parents=True, exist_ok=True)
     for directory in ("temp", "appdata", "localappdata"):
@@ -108,10 +121,19 @@ def grade(case: Case, workspace: Path, run_dir: Path, env: dict, *, label: str) 
     return result
 
 
-def aggregate(records: list[dict], *, mode: str, expected: int) -> dict:
+def aggregate(records: list[dict], *, mode: str, expected: int, evaluation_kind: str = "provider") -> dict:
     complete = len(records) == expected and all(record.get("success") is not None for record in records)
     requests = [request for record in records for request in record.get("requests", [])]
     usage_complete = complete and bool(requests) and all(request.get("usage") is not None for request in requests)
+    scored = [r for r in records if r.get("success") is not None]
+    claims = [r for r in scored if r.get("internal_claimed_complete")]
+    false_claims = sum(not r["success"] for r in claims)
+    answers = [r for r in scored if r.get("scenario") == "analysis"]
+    recoveries = [
+        r
+        for r in scored
+        if r.get("recovery_attempts", 0) or r.get("scenario") in {"resume", "interrupted", "unknown_recovery"}
+    ]
     return {
         "planned_runs": expected,
         "finished_runs": len(records),
@@ -120,8 +142,9 @@ def aggregate(records: list[dict], *, mode: str, expected: int) -> dict:
         "failed": sum(record.get("success") is False for record in records),
         "unscored": expected - sum(record.get("success") is not None for record in records),
         "success_rate": sum(record["success"] for record in records) / expected
-        if mode == "real" and complete
+        if mode == "real" and complete and evaluation_kind == "provider"
         else None,
+        "behavior_success_rate": sum(record["success"] for record in records) / expected if complete else None,
         "smoke_passed": complete and all(record["success"] for record in records) if mode == "smoke" else None,
         "duration_seconds": round(sum(record.get("duration_seconds", 0) for record in records), 3),
         "model_requests": len(requests),
@@ -135,7 +158,27 @@ def aggregate(records: list[dict], *, mode: str, expected: int) -> dict:
         "estimated_cost_usd": sum(record["estimated_cost_usd"] for record in records)
         if complete and usage_complete and all(record.get("estimated_cost_usd") is not None for record in records)
         else None,
-        "human_interventions": sum(record.get("human_interventions", 0) for record in records),
+        "clarification_waits": sum(
+            record.get("clarification_waits", record.get("human_interventions", 0)) for record in records
+        ),
+        "approval_requests": sum(record.get("approval_metrics", {}).get("requests", 0) for record in records),
+        "approval_decisions": sum(record.get("approval_metrics", {}).get("decisions", 0) for record in records),
+        "approval_wait_seconds": sum(record.get("approval_metrics", {}).get("wait_seconds", 0) for record in records),
+        "claimed_complete_scored_runs": len(claims),
+        "false_completions": false_claims,
+        "false_completion_rate": false_claims / len(claims) if claims else None,
+        "answer_blocked_rate": sum(not r.get("internal_claimed_complete") for r in answers) / len(answers)
+        if answers
+        else None,
+        "answer_scored_runs": len(answers),
+        "recovery_scored_runs": len(recoveries),
+        "recovery_success_rate": sum(r["success"] for r in recoveries) / len(recoveries) if recoveries else None,
+        "externally_passed_but_internal_unfinished": sum(
+            r["success"] and not r.get("internal_claimed_complete") for r in scored
+        ),
+        "infrastructure_errors": sum(record.get("success") is None for record in records),
+        "infrastructure_error_reasons": [r.get("failure_reason") for r in records if r.get("success") is None],
+        "task_failure_rate": sum(not r["success"] for r in scored) / len(scored) if scored else None,
     }
 
 
@@ -151,9 +194,11 @@ def evaluate(
     max_requests: int = 50,
     budget: float = 1.0,
     pricing: dict | None = None,
+    acceptance_track: str = "preset",
 ) -> dict:
     if (
         mode not in {"real", "smoke"}
+        or acceptance_track not in {"preset", "model"}
         or runs < 1
         or not math.isfinite(timeout)
         or timeout <= 0
@@ -195,12 +240,24 @@ def evaluate(
         for case in selected
         for number in range(1, runs + 1)
     ]
+    evaluation_kind = (
+        "offline_smoke"
+        if mode == "smoke"
+        else "scripted_service"
+        if (runtime or {}).get("_evaluationSource") == "scripted_service"
+        else "provider"
+    )
     protocol = {
         "version": 1,
+        "evaluation_kind": evaluation_kind,
+        "acceptance_track": acceptance_track,
+        "approval_policy": "automated allow-once for exact public test command; all others denied; wait times are simulated backend time",
         "pepsicode_version": VERSION,
-        "harness_sha256": hashlib.sha256(
+        "evaluator_sha256": hashlib.sha256(
             b"".join(path.read_bytes() for path in sorted(Path(__file__).parent.glob("*.py")))
         ).hexdigest(),
+        "harness_sha256": harness_source_digest(),
+        "harness_digest_scope": "production Python and bundled agent data, excluding evaluator/runtime artifacts",
         "pricing": pricing,
         "mode": mode,
         "model": (runtime or {}).get("model"),
@@ -228,7 +285,14 @@ def evaluate(
         materialize(case, workspace)
         env = isolated_environment(run_dir / "home")
         started = time.monotonic()
-        record = {**planned, "success": None, "status": "error", "failure_reason": None, "estimated_cost_usd": None}
+        record = {
+            **planned,
+            "scenario": case.scenario,
+            "success": None,
+            "status": "error",
+            "failure_reason": None,
+            "estimated_cost_usd": None,
+        }
         try:
             baseline = grade(case, workspace, run_dir, env, label="baseline")
             record["baseline"] = baseline
@@ -243,9 +307,11 @@ def evaluate(
                 "max_requests": max_requests,
                 "budget": budget,
                 "pricing": pricing,
+                "acceptance_track": acceptance_track,
+                "checkpoint_ready": str(run_dir / "checkpoint-ready"),
                 "result_path": str(run_dir / "worker.json"),
             }
-            phases = ("prepare", "run") if case.scenario == "resume" else ("run",)
+            phases = ("prepare", "run") if case.scenario in {"resume", "interrupted"} else ("run",)
             for phase in phases:
                 payload["phase"] = phase
                 remaining = timeout - (time.monotonic() - started)
@@ -263,6 +329,14 @@ def evaluate(
                     record.update(status="timeout", failure_reason="timeout", success=False)
                     break
                 result_path = Path(payload["result_path"])
+                if (
+                    phase == "prepare"
+                    and case.scenario == "interrupted"
+                    and process["exit_code"] == 75
+                    and Path(payload["checkpoint_ready"]).is_file()
+                ):
+                    record["checkpoint_process_interrupted"] = True
+                    continue
                 if process["exit_code"] != 0 or not result_path.is_file():
                     raise RuntimeError("Worker exited without a result")
                 worker = json.loads(result_path.read_text(encoding="utf-8"))
@@ -281,7 +355,11 @@ def evaluate(
                 verified = bool(worker.get("verification")) and worker["verification"][-1].get("status") == "passed"
                 scenario_ok = case.scenario != "compaction" or len(worker.get("compactions", [])) >= 2
                 success = (
-                    hidden["passed"] and protected and verified and scenario_ok and worker.get("status") == "completed"
+                    hidden["passed"]
+                    and protected
+                    and scenario_ok
+                    and worker.get("status")
+                    not in {"budget_limit", "request_limit", "awaiting_user", "step_limit", "cancelled"}
                 )
                 reason = (
                     None
@@ -301,6 +379,7 @@ def evaluate(
                     status="passed" if success else "failed",
                     failure_reason=reason,
                     protected_files_intact=protected,
+                    internal_claimed_complete=worker.get("internal_claimed_complete", False),
                 )
         except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as error:
             record.update(status="error", failure_reason=f"harness_{type(error).__name__}", success=None)
@@ -312,10 +391,16 @@ def evaluate(
     report = {
         "protocol_sha256": protocol["sha256"],
         "mode": mode,
-        "summary": aggregate(records, mode=mode, expected=len(cohort)),
+        "evaluation_kind": evaluation_kind,
+        "summary": aggregate(records, mode=mode, expected=len(cohort), evaluation_kind=evaluation_kind),
         "runs": records,
         "cases": {
-            case.id: aggregate([record for record in records if record["case"] == case.id], mode=mode, expected=runs)
+            case.id: aggregate(
+                [record for record in records if record["case"] == case.id],
+                mode=mode,
+                expected=runs,
+                evaluation_kind=evaluation_kind,
+            )
             for case in selected
         },
     }
@@ -323,7 +408,7 @@ def evaluate(
     summary = report["summary"]
     rate = f"{summary['success_rate']:.1%}" if summary["success_rate"] is not None else "unavailable"
     (output / "report.md").write_text(
-        f"# Pepsicode task evaluation\n\nMode: {mode}\n\nModel success rate: {rate}\n\n"
+        f"# Pepsicode task evaluation\n\nMode: {mode}\n\nEvaluation source: {evaluation_kind}\n\nModel success rate: {rate}\n\n"
         f"Planned: {len(cohort)}; passed: {summary['passed']}; failed: {summary['failed']}; unscored: {summary['unscored']}.\n\n"
         "Smoke uses a scripted agent and does not measure model quality. Missing telemetry is null. "
         "Cost is an estimate; per-run budgets use the existing approximate price table. "

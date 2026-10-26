@@ -157,6 +157,7 @@ class ToolContext:
     external_grant: tuple[str, str] | None = None
     effect_state: str = "none"
     control: dict = field(default_factory=dict)
+    for_verification: bool = False
 
 
 Validator = Callable[[Any], Any]
@@ -182,6 +183,7 @@ class ToolDefinition:
     always_loaded: bool = False
     tags: list[str] = field(default_factory=list)
     aliases: list[str] = field(default_factory=list)
+    observation_trust: str = "unreviewed"
 
     def __post_init__(self):
         original = self.run
@@ -489,6 +491,29 @@ class ToolRegistry:
         dispatched = False
         try:
             parsed = tool.validator(input_data)
+            from pepsicode.core.task_control import artifact_requirements, edit_control, snapshot
+
+            task = snapshot(context).get("task")
+            if task and not context.for_verification and tool.modifies_workspace(parsed):
+                if task.get("classification", {}).get("read_only_request"):
+                    return ToolResult(
+                        False, "User requested explanation only; mutation was not executed", status="blocked"
+                    )
+                if (
+                    task["kind"] == "answer"
+                    and not (context.permissions and context.permissions.is_plan_mode)
+                    and not tool_name.startswith("mcp__")
+                    and tool_name not in {"save_memory", "enter_plan_mode", "exit_plan_mode"}
+                ):
+                    with edit_control(context) as control:
+                        current = control["task"]
+                        current.update(kind="change", status="active", evidence=[])
+                        current["revision"] += 1
+                        current["admitted_revision"] = current["revision"]
+                        current["required_artifacts"] = artifact_requirements(current["objective"])
+                        current.setdefault("classification_history", []).append(
+                            {"source": "host_tool_effect", "tool": tool_name, "revision": current["revision"]}
+                        )
             if context.hooks is not None and not context.suppress_hooks:
                 from pepsicode.hooks import HookContext, HookEvent
 

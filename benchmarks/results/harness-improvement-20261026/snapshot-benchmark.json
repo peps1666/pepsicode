@@ -1,0 +1,55 @@
+{
+  "kind": "local_content_hash_microbenchmark_not_model_quality",
+  "workspace": {
+    "samples": [
+      {
+        "version": 1,
+        "digest": "000bcea6ca4baf9eb10627c4fb5e8a47697c603fffce9c817eb1365743cc997c",
+        "files": 389,
+        "bytes": 3519087,
+        "duration_ms": 516.0
+      },
+      {
+        "version": 1,
+        "digest": "000bcea6ca4baf9eb10627c4fb5e8a47697c603fffce9c817eb1365743cc997c",
+        "files": 389,
+        "bytes": 3519087,
+        "duration_ms": 343.0
+      },
+      {
+        "version": 1,
+        "digest": "000bcea6ca4baf9eb10627c4fb5e8a47697c603fffce9c817eb1365743cc997c",
+        "files": 389,
+        "bytes": 3519087,
+        "duration_ms": 360.0
+      }
+    ],
+    "median_ms": 360.0
+  },
+  "synthetic_10000_files": {
+    "samples": [
+      {
+        "version": 1,
+        "digest": "fd578273846a97adf226b67b3ba1fbed0ca72e3dcf16bcb6942204e4bd96631a",
+        "files": 10000,
+        "bytes": 2880000,
+        "duration_ms": 10172.0
+      },
+      {
+        "version": 1,
+        "digest": "fd578273846a97adf226b67b3ba1fbed0ca72e3dcf16bcb6942204e4bd96631a",
+        "files": 10000,
+        "bytes": 2880000,
+        "duration_ms": 10937.0
+      },
+      {
+        "version": 1,
+        "digest": "fd578273846a97adf226b67b3ba1fbed0ca72e3dcf16bcb6942204e4bd96631a",
+        "files": 10000,
+        "bytes": 2880000,
+        "duration_ms": 10016.0
+      }
+    ],
+    "median_ms": 10172.0
+  }
+}

@@ -27,8 +27,11 @@ export interface ChatMessage {
 
 export interface TaskReport {
   id: string; revision: number; objective: string; status: string;
-  criteria: Array<{ id: string; kind: string }>;
-  evidence: Array<{ criterion_id: string; status: string }>;
+  criteria: Array<{ id: string; kind: string; path?: string; argv?: string[]; text?: string; purpose?: string }>;
+  instructions?: string[];
+  evidence: Array<{ criterion_id: string; status: string; task_revision?: number; acceptance_run_id?: string; workspace_digest?: string }>;
+  assurance?: string;
+  acceptance?: { valid: boolean; task_revision: number; acceptance_run_id: string; workspace: { digest: string }; reason_code?: string } | null;
 }
 
 export interface VerificationReport {

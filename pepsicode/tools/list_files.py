@@ -32,5 +32,7 @@ list_files_tool = ToolDefinition(
     input_schema={"type": "object", "properties": {"path": {"type": "string"}}},
     validator=_validate,
     run=_run,
+    affects_workspace=False,
+    observation_trust="host_filesystem",
     concurrency_safe=True,
 )

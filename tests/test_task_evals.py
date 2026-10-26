@@ -42,13 +42,96 @@ def faux_endpoint():
                 stop = "end_turn"
             else:
                 history = body["messages"]
+                case = next(name for name in CASES if f"{name}-001" in body["system"])
                 used = any(block.get("type") == "tool_use" for message in history for block in message["content"])
-                if used:
+                if case == "multiple_unknown":
+                    calls = [b for m in history for b in m["content"] if b.get("type") == "tool_use"]
+                    reconciled = sum(c["input"].get("action") == "reconcile" for c in calls)
+                    if reconciled == 2:
+                        content, stop = [{"type": "text", "text": "Both calls reconciled without replay"}], "end_turn"
+                    else:
+                        value = {"action": "observe", "path": "receipt.txt"}
+                        if calls and calls[-1]["input"].get("action") == "observe":
+                            outputs = [b for m in history for b in m["content"] if b.get("type") == "tool_result"]
+                            raw = outputs[-1]["content"]
+                            text = raw if isinstance(raw, str) else "".join(b.get("text", "") for b in raw)
+                            observed = None
+                            for index, char in enumerate(text):
+                                if char != "{":
+                                    continue
+                                try:
+                                    value_json, _ = json.JSONDecoder().raw_decode(text[index:])
+                                    if "recovery_revision" in value_json and "id" in value_json:
+                                        observed = value_json
+                                        break
+                                except (ValueError, TypeError):
+                                    continue
+                            assert observed, text
+                            value = {
+                                "action": "reconcile",
+                                "call_id": ("seeded-first", "seeded-second")[reconciled],
+                                "revision": observed["recovery_revision"],
+                                "observation_ids": [observed["id"]],
+                                "outcome": "occurred",
+                                "evidence": "receipt shows committed result",
+                            }
+                        content = [
+                            {
+                                "type": "tool_use",
+                                "id": f"recover-{len(calls)}",
+                                "name": "execution_status",
+                                "input": value,
+                            }
+                        ]
+                        stop = "tool_use"
+                elif case == "steering" and used:
+                    calls = [b for m in history for b in m["content"] if b.get("type") == "tool_use"]
+                    if any(c.get("name") == "task_state" for c in calls):
+                        content, stop = [{"type": "text", "text": "Updated and rechecked 43"}], "end_turn"
+                    else:
+                        contract, _ = json.JSONDecoder().raw_decode(
+                            body["system"].split("Current task contract: ", 1)[1]
+                        )
+                        content = [
+                            {
+                                "type": "tool_use",
+                                "id": "changed-goal",
+                                "name": "write_file",
+                                "input": {"path": "goal.py", "content": "def value():\n    return 43\n"},
+                            },
+                            {
+                                "type": "tool_use",
+                                "id": "revise-goal",
+                                "name": "task_state",
+                                "input": {
+                                    "action": "revise",
+                                    "task_id": contract["id"],
+                                    "revision": contract["revision"],
+                                    "instruction_id": contract["inputs"][-1],
+                                    "reason": "human changed the target to 43",
+                                    "criteria": [
+                                        {"id": "value", "kind": "file_contains", "path": "goal.py", "text": "return 43"}
+                                    ],
+                                },
+                            },
+                        ]
+                        stop = "tool_use"
+                elif case == "analysis":
+                    content = [{"type": "text", "text": "Pages start at 1. (page - 1) * size is the offset."}]
+                    stop = "end_turn"
+                elif used:
                     content = [{"type": "text", "text": "<final>Implemented and tested.</final>"}]
                     stop = "end_turn"
                 else:
-                    case = next(name for name in CASES if f"{name}-001" in body["system"])
                     files = SOLUTIONS.get(case, {"pricing.py": MONEY_SOLUTION})
+                    if case in {"pagination_zh", "mixed"}:
+                        files = SOLUTIONS["pagination"]
+                    elif case == "document":
+                        files = {"guide.md": "# CSV 导出\n正确处理引号、逗号和换行。\n"}
+                    elif case == "no_tests":
+                        files = {"slug.py": "def slug(value):\n    return value.strip().lower().replace(' ', '-')\n"}
+                    elif case == "steering":
+                        files = {"goal.py": "def value():\n    return 42\n"}
                     content = [
                         {
                             "type": "tool_use",
@@ -58,7 +141,8 @@ def faux_endpoint():
                         }
                         for index, (path, text) in enumerate(files.items())
                     ]
-                    content.append({"type": "tool_use", "id": "test", "name": "test_runner", "input": {}})
+                    if case != "steering":
+                        content.append({"type": "tool_use", "id": "test", "name": "test_runner", "input": {}})
                     stop = "tool_use"
             data = json.dumps(
                 {"content": content, "stop_reason": stop, "usage": {"input_tokens": 100, "output_tokens": 20}}
@@ -76,6 +160,7 @@ def faux_endpoint():
         yield (
             {
                 "model": "faux-eval",
+                "_evaluationSource": "scripted_service",
                 "baseUrl": f"http://127.0.0.1:{server.server_port}/v1",
                 "apiKey": "eval-test-secret",
             },
@@ -93,7 +178,9 @@ def test_complete_cohort_uses_actual_agent_http_checks_compaction_and_process_re
 
     summary = report["summary"]
     assert summary["cohort_complete"], [(run["case"], run["failure_reason"]) for run in report["runs"]]
-    assert summary["success_rate"] == 1.0
+    assert summary["success_rate"] is None
+    assert summary["behavior_success_rate"] == 1.0
+    assert report["evaluation_kind"] == "scripted_service"
     assert summary["usage_complete"]
     assert summary["input_tokens"] == len(bodies) * 100
     assert summary["output_tokens"] == len(bodies) * 20
@@ -103,6 +190,8 @@ def test_complete_cohort_uses_actual_agent_http_checks_compaction_and_process_re
     assert len(compaction["compactions"]) >= 2
     assert any(len(body["messages"][0]["content"][0]["text"]) > 1_000 for body in bodies if not body.get("tools"))
     assert next(run for run in report["runs"] if run["case"] == "resume")["resume_process_reopened"]
+    assert next(run for run in report["runs"] if run["case"] == "interrupted_resume")["checkpoint_process_interrupted"]
+    assert next(run for run in report["runs"] if run["case"] == "multiple_unknown")["internal_claimed_complete"]
     assert "eval-test-secret" not in (tmp_path / "cohort" / "protocol.json").read_text(encoding="utf-8")
     for path in (tmp_path / "cohort").rglob("*.json"):
         assert "eval-test-secret" not in path.read_text(encoding="utf-8")
@@ -141,6 +230,64 @@ def test_incomplete_cohort_and_missing_telemetry_do_not_become_zero_cost():
     assert summary["input_tokens"] is None
     assert summary["estimated_cost_usd"] is None
     assert summary["unscored"] == 1
+
+
+def test_false_completion_and_answer_blocking_have_separate_denominators():
+    records = [
+        {"success": False, "internal_claimed_complete": True},
+        {"success": True, "internal_claimed_complete": True},
+        {"success": True, "internal_claimed_complete": False, "scenario": "analysis"},
+    ]
+    summary = aggregate(records, mode="real", expected=3)
+    assert summary["false_completion_rate"] == 0.5
+    assert summary["claimed_complete_scored_runs"] == 2
+    assert summary["answer_blocked_rate"] == 1
+    assert summary["task_failure_rate"] == pytest.approx(1 / 3)
+
+
+def test_model_acceptance_track_is_not_given_preset_public_test_criteria(tmp_path, faux_endpoint):
+    runtime, _ = faux_endpoint
+    report = evaluate(
+        tmp_path / "model-track",
+        mode="real",
+        cases=["pagination"],
+        runtime=runtime,
+        acceptance_track="model",
+        timeout=40,
+    )
+    # The scripted provider never defines criteria. Independent behavior can
+    # still pass; internal completion must remain false rather than injecting criteria.
+    assert report["summary"]["behavior_success_rate"] == 1
+    assert report["summary"]["success_rate"] is None
+    assert report["runs"][0]["internal_claimed_complete"] is False
+    assert report["summary"]["externally_passed_but_internal_unfinished"] == 1
+
+
+def test_comparison_rejects_changed_protocol_and_keeps_each_pair(tmp_path):
+    from pepsicode.evals.comparison import compare_reports
+
+    for name, success in (("before", False), ("after", True)):
+        folder = tmp_path / name
+        folder.mkdir()
+        (folder / "protocol.json").write_text(
+            json.dumps({"mode": "real", "cohort": ["same"], "limits": {"requests": 4}}), encoding="utf-8"
+        )
+        (folder / "report.json").write_text(
+            json.dumps(
+                {
+                    "summary": {"cohort_complete": True},
+                    "runs": [{"case": "case", "run": 1, "case_sha256": "fixed", "success": success}],
+                }
+            ),
+            encoding="utf-8",
+        )
+    result = compare_reports(tmp_path / "before/report.json", tmp_path / "after/report.json")
+    assert result["success_rate_delta"] == 1 and len(result["pairs"]) == 1
+    (tmp_path / "after/protocol.json").write_text(
+        '{"mode":"real","limits":{"requests":5},"cohort":["same"]}', encoding="utf-8"
+    )
+    with pytest.raises(ValueError, match="protocol"):
+        compare_reports(tmp_path / "before/report.json", tmp_path / "after/report.json")
 
 
 def test_fixtures_cannot_pass_by_changing_public_tests_or_exiting_grader_early(tmp_path):

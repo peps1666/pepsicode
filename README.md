@@ -805,6 +805,8 @@ python -m pepsicode.evals --mode real --runs 3
 
 用户任务另有独立的状态、修订号与验收证据：实现类任务需要具体验收条件，运行中的需求变更会使旧证据失效；输入队列、Todo 和澄清问题随会话保存。处理流程及限制见[任务生命周期与验收](docs/task-orchestration.md)。
 
+后续修改按[Harness 修改清单](docs/harness-improvement-plan.md)持续跟踪：完成项以 `[x]` 标记，记录实现和回归证据；待真实评测及平台验证的项目保持未完成。
+
 Hooks v2 专项测试：
 
 ```bash

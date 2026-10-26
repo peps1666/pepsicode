@@ -355,6 +355,7 @@ class ClientSession:
             "total_calls": tracker.get_total_calls() if tracker else 0,
             "total_errors": tracker.get_total_errors() if tracker else 0,
             "entries": entries,
+            "approval_metrics": dict(self.permissions.approval_metrics) if self.permissions else {},
         }
 
     def model_settings(self, provider: str | None = None) -> dict[str, Any]:
@@ -930,6 +931,10 @@ class PepsiCodeServer:
 
             validate_criteria(params["acceptance"])
         answer_to = params.get("answer_to", [])
+        if params.get("task_requirements") is not None:
+            from pepsicode.core.task_acceptance import validate_requirements
+
+            validate_requirements(params["task_requirements"])
         if not isinstance(answer_to, list) or not all(isinstance(item, str) and item for item in answer_to):
             raise ValueError("answer_to must be an array of question IDs")
         if session.model is None:
@@ -1091,6 +1096,7 @@ class PepsiCodeServer:
                             runtime=session.runtime,
                             task_kind=params.get("task_kind"),
                             acceptance=params.get("acceptance"),
+                            task_requirements=params.get("task_requirements"),
                             runner=run_agent_turn_stream,
                             input_queue=session.input_queue,
                             cancellation_event=session._cancellation_event,

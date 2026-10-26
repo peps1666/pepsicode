@@ -30,6 +30,7 @@ class ApprovalDecision(str, Enum):
     """
 
     ALLOW_ONCE = "allow_once"
+    ALLOW_TASK = "allow_task"
     ALLOW_ALWAYS = "allow_always"
     ALLOW_TURN = "allow_turn"
     ALLOW_ALL_TURN = "allow_all_turn"

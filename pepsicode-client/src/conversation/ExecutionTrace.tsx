@@ -4,6 +4,7 @@ import { buildTrajectory, formatDuration, traceStatusLabels, type TraceRow } fro
 import Icon from "../components/Icon";
 import Button from "../components/Button";
 import styles from "./ExecutionTrace.module.css";
+import { hasCurrentAcceptance, satisfiedCount, taskOutcome } from "./taskOutcome";
 
 export default function ExecutionTrace({ messages, running, verification, taskReport, canContinue, onContinue }: {
   messages: ChatMessage[]; running: boolean; verification: VerificationReport | null;
@@ -20,7 +21,7 @@ export default function ExecutionTrace({ messages, running, verification, taskRe
   const follow = useRef(true);
   const task = taskReport !== undefined ? taskReport : [...messages].reverse().find(message => message.task)?.task;
   const latestUser = [...messages].reverse().find(message => message.role === "user");
-  const taskLabels: Record<string, string> = { complete: "已完成", answered: "已回答", active: "处理中", incomplete: "未完成", blocked: "需要处理阻碍", waiting_user: "等待回复", cancelled: "已停止", unknown: "待核对", budget_exhausted: "预算已用尽" };
+  const validAcceptance = task ? hasCurrentAcceptance(task) : false;
   const failures = rows.filter(row => row.status === "failed" || row.status === "blocked").length;
   const needle = query.trim().toLocaleLowerCase();
   const filtered = rows.filter(row => (!errorsOnly || ["failed", "blocked", "retry", "cancelled"].includes(row.status)) &&
@@ -32,7 +33,16 @@ export default function ExecutionTrace({ messages, running, verification, taskRe
   }, [rows.length]);
 
   return <section className={styles.root} aria-label="执行轨迹">
-    {(task || (running && latestUser)) && <div className={styles.taskStatus} role="status"><strong>任务：{running ? "处理中" : taskLabels[task?.status || ""] || "待验收"}</strong><span>{(running ? latestUser?.content : task?.objective)?.slice(0, 300)}</span>{!running && task && task.criteria.length > 0 && <small>验收 {task.evidence.filter(item => item.status === "satisfied").length}/{task.criteria.length}</small>}</div>}
+    {(task || (running && latestUser)) && <div className={styles.taskStatus} role="status">
+      <strong>任务：{running ? "处理中" : task ? taskOutcome(task) : "待验收"}</strong>
+      <span>{(running ? latestUser?.content : task?.objective)?.slice(0, 300)}</span>
+      {!running && task?.instructions?.length ? <small>最新补充：{task.instructions.at(-1)?.slice(0, 300)}</small> : null}
+      {!running && task && task.criteria.length > 0 && <small>验收 {satisfiedCount(task)}/{task.criteria.length}{!validAcceptance && " · 待复核"}</small>}
+      {!running && task?.acceptance && <details><summary>检查依据</summary>
+        <small>任务版本 {task.revision} · 状态 {task.acceptance.workspace?.digest?.slice(0, 12) || "未记录"} · 验收 {task.acceptance.acceptance_run_id?.slice(0, 12) || "未记录"}</small>
+        <ul>{task.criteria.map(criterion => <li key={criterion.id}>{criterion.purpose || criterion.id}：{criterion.kind === "command" ? "执行检查" : criterion.kind === "file_contains" ? "文本匹配" : "文件存在"} · {(criterion.path || criterion.argv?.join(" ") || "").slice(0, 1000)}</li>)}</ul>
+      </details>}
+    </div>}
     <div className={styles.toolbar}>
       <div><strong>执行轨迹</strong><span>{rows.filter(row => row.kind === "tool").length} 次工具调用{failures > 0 ? ` · ${failures} 条异常` : ""}</span></div>
       <div className={styles.filters}>

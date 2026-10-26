@@ -119,24 +119,71 @@ def snapshot(context=None):
         return copy.deepcopy(control)
 
 
-def infer_kind(text):
+def classify_intent(text):
     # This is a scheduling hint, never an authorization decision. A caller can
     # supply taskKind; the model can strengthen the contract with task_state.
-    if re.search(
-        r"^(?:如何|怎么|为什么|what\b|why\b|how\b)",
-        text.strip(),
-        re.I,
-    ):
-        return "answer"
-    return (
-        "change"
-        if re.search(
-            r"实现|修复|修改|改一下|改一改|添加|新增|编写|部署|执行|运行|完成|\b(?:implement|fix|create|add|build|update|change|deploy|execute|run)\b",
+    only = bool(
+        re.search(
+            r"只(?:需|要)?(?:解释|分析|审查)|仅(?:解释|分析)|不要(?:改|写)(?:动)?(?:任何)?(?:代码|文件)|do not (?:edit|modify)(?: any)? (?:files|code)|explain only",
             text,
             re.I,
         )
-        else "answer"
     )
+    mixed = bool(
+        re.search(
+            r"(?:再|并|然后|接着).*(?:改|实现|做|添加|修复)|\b(?:and|then)\s+(?:fix|implement|change|create)",
+            text,
+            re.I,
+        )
+    )
+    normalized = re.sub(r"^(?:请你|请|帮我|帮忙|麻烦你)[，,\s]*", "", text.strip())
+    question = bool(
+        re.search(
+            r"^(?:如何|怎么|为什么|解释|分析|审查|对比|what\b|why\b|how\b|explain\b|review\b|compare\b)",
+            normalized,
+            re.I,
+        )
+    )
+    action = bool(
+        re.search(
+            r"实现|修复|修改|改一下|改一改|添加|新增|编写|部署|执行|运行|完成|帮我|帮忙|请把|做成|\b(?:implement|fix|create|add|build|update|change|deploy|execute|run|support)\b",
+            text,
+            re.I,
+        )
+    )
+    kind = "answer" if only or (question and not mixed) else "change" if action or mixed else "answer"
+    explicit_action = bool(
+        re.search(
+            r"^(?:实现|修复|修改|添加|新增|支持|做成|把|implement\b|fix\b|create\b|add\b|support\b)|请把|\bcan you\s+(?:fix|implement|create)",
+            normalized,
+            re.I,
+        )
+    )
+    return {
+        "kind": kind,
+        "source": "rule",
+        "locked": only or (kind == "change" and (explicit_action or mixed)),
+        "read_only_request": only,
+    }
+
+
+def infer_kind(text):
+    return classify_intent(text)["kind"]
+
+
+def is_continuation(text):
+    return bool(
+        re.fullmatch(r"\s*(?:继续|继续执行|接着做|continue|resume)[.!。！\s]*", text, re.I)
+        or re.match(r"\s*继续(?:处理|完成|执行|推进)(?:当前|这个|之前)任务", text)
+    )
+
+
+def artifact_requirements(text):
+    # Explicit filename mentions are inferred, never represented as user-supplied structured requirements.
+    paths = re.findall(
+        r"(?<![\w/])([\w./-]+\.(?:py|tsx?|jsx?|md|txt|csv|json|ya?ml|html|css|png|svg|pdf|docx))\b", text
+    )
+    return [{"path": path, "source": "inferred"} for path in dict.fromkeys(paths) if not path.startswith(("/", "../"))]
 
 
 def begin_task(messages, runtime):
@@ -155,10 +202,7 @@ def begin_task(messages, runtime):
         resume = (
             task
             and source.get("mode") != "follow_up"
-            and (
-                task["status"] == "waiting_user"
-                or re.fullmatch(r"\s*(?:继续|继续执行|接着做|continue|resume)[.!。！\s]*", human["content"], re.I)
-            )
+            and (task["status"] == "waiting_user" or is_continuation(human["content"]))
             and task["status"] not in {"complete", "answered"}
         )
         if resume:
@@ -191,8 +235,25 @@ def begin_task(messages, runtime):
                 "criteria": [],
                 "criteria_revision": 0,
                 "evidence": [],
+                "classification": {
+                    **classify_intent(human["content"]),
+                    **({"kind": kind, "source": "caller", "locked": True} if runtime.get("taskKind") else {}),
+                },
+                "required_artifacts": artifact_requirements(human["content"]) if kind != "answer" else [],
+                "request_sources": [{"id": input_id, "text": human["content"], "source": "human"}],
             }
             control["task"] = task
+            artifacts = task["required_artifacts"]
+            if len(artifacts) == 1 and re.search(r"\.(?:md|txt|png|svg|pdf|docx|csv)$", artifacts[0]["path"], re.I):
+                task["criteria"] = [{"id": "requested-artifact", "kind": "file_exists", "path": artifacts[0]["path"]}]
+                task["criteria_revision"] = task["revision"]
+                task["criterion_sources"] = {
+                    "requested-artifact": {
+                        "source": "inferred",
+                        "input_id": input_id,
+                        "purpose": "Check the requested artifact exists",
+                    }
+                }
         task["admitted_revision"] = task["revision"]
         return copy.deepcopy(task)
 
@@ -219,7 +280,7 @@ def admit_steering(items):
 def task_context():
     state = snapshot()
     task = state.get("task")
-    if not task or task["kind"] == "answer":
+    if not task:
         return None
     import json
 
@@ -228,7 +289,7 @@ def task_context():
         {key: value for key, value in item.items() if key not in {"output", "argv"}} for item in task["evidence"]
     ]
     return {
-        "role": "user",
+        "role": "system",
         "internal": True,
         "source": {"kind": "task-policy"},
         "content": "Current task contract: "
@@ -236,7 +297,10 @@ def task_context():
         + "\nFor change/operation tasks use task_state to define concrete acceptance criteria before claiming completion. "
         "Use file_contains for expected content, file_exists for required artifacts, or command for a targeted behavior check. "
         "Project tests alone do not prove this objective. Read the current task id/revision before updating. "
-        "Do not downgrade the task to an answer or discard existing requirements. When a human changes requirements, "
+        "Do not downgrade explicit actionable requests or discard existing requirements; classify may correct uncertain rule inference with a reason. When a human changes requirements, "
         "task_state revise must cite the latest inputs ID and explain the changes. Reconfirm acceptance for the current revision. "
-        "Required unanswered questions block completion.",
+        "Required unanswered questions block completion. Classification is a scheduling hint, never permission. "
+        "Use task_state classify with a reason to correct an uncertain rule inference during this normal request. "
+        "For behavior changes prefer a targeted command check; static file checks only demonstrate artifacts. "
+        "Do not request user approval for routine acceptance definitions or uncertain wording; investigate first.",
     }

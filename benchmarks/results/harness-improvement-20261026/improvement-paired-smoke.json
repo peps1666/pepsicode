@@ -1,0 +1,22 @@
+{
+  "version": 1,
+  "mode": "smoke",
+  "pairs": [
+    {
+      "case": "smoke",
+      "run": 1,
+      "before": true,
+      "after": true,
+      "before_reason": null,
+      "after_reason": null
+    }
+  ],
+  "evaluation_kind": "offline_smoke",
+  "success_rate_delta": null,
+  "exploratory_paired_bootstrap_95": null,
+  "limitations": [
+    "Fixed small fixtures; repetitions are not proof of independence or generalization.",
+    "Approval policy and worker/tool capabilities must also be reviewed; matching metadata is not proof of equivalent authority.",
+    "Smoke or scripted services do not establish real-model quality."
+  ]
+}

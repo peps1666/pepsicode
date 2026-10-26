@@ -1,0 +1,26 @@
+{
+  "version": 1,
+  "pepsicode_version": "2.0.6",
+  "harness_sha256": "a23d4bcec5f52b21898891b4ceab3ec43d90d570b45bd262c8a4fa55a5abbe8d",
+  "pricing": {},
+  "mode": "smoke",
+  "model": null,
+  "provider": null,
+  "reasoning_effort": "default",
+  "limits": {
+    "timeout_seconds": 180,
+    "max_steps_per_iteration": 40,
+    "max_requests": 50,
+    "estimated_budget_usd": 1.0
+  },
+  "cohort": [
+    {
+      "case": "smoke",
+      "run": 1,
+      "case_sha256": "d95789f89c8a3d239e8564a8954cfcfbfecef3e30461d67150621bb3f159652c"
+    }
+  ],
+  "cost_basis": "CostTracker approximate price table; unknown models use its default for budget enforcement only",
+  "isolation": "Fresh process/home/workspace; restricted tool set; not an OS security sandbox",
+  "sha256": "8c3e6fa626735a0da7a74f9d4e17bcefc667e14233714ef103734a418dc3c3c0"
+}

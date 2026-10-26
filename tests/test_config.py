@@ -38,3 +38,20 @@ def test_validate_config_accepts_remote_http_mcp(monkeypatch) -> None:
 
     assert valid
     assert messages == []
+
+
+def test_harness_recovery_and_preparation_settings_reach_the_shared_runtime(monkeypatch):
+    preparation = [{"command": ["python", "prepare.py"]}]
+    monkeypatch.setattr(
+        config_module,
+        "load_effective_settings",
+        lambda cwd=None: {
+            "model": "test",
+            "env": {"ANTHROPIC_API_KEY": "test-only"},
+            "modelRecoveryLimit": 2,
+            "verificationPreparationCommands": preparation,
+        },
+    )
+    runtime = config_module.load_runtime_config()
+    assert runtime["modelRecoveryLimit"] == 2
+    assert runtime["verificationPreparationCommands"] == preparation

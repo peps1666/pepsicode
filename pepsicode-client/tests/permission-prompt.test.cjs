@@ -29,13 +29,13 @@ test("only a deliberate click approves; duplicate clicks are locked and failed s
   const renderer=await render({approve:()=>{calls++;return new Promise((resolve,no)=>{reject=no;});}});
   assert.equal(calls,0);
   assert.equal(renderer.root.findByType("section").props["aria-modal"],undefined);
-  await act(async()=>{button(renderer,"本次会话允许").props.onClick();button(renderer,"本次会话允许").props.onClick();});
+  await act(async()=>{button(renderer,"仅允许这一次").props.onClick();button(renderer,"仅允许这一次").props.onClick();});
   assert.equal(calls,1);
   assert.equal(button(renderer,"拒绝").props.disabled,true);
   await act(async()=>{reject(new Error("Connection closed"));});
   assert.ok(text(renderer.root.findByProps({role:"alert"})).includes("Connection closed"));
-  assert.equal(button(renderer,"本次会话允许").props.disabled,false);
-  await act(async()=>{button(renderer,"本次会话允许").props.onClick();});
+  assert.equal(button(renderer,"仅允许这一次").props.disabled,false);
+  await act(async()=>{button(renderer,"仅允许这一次").props.onClick();});
   assert.equal(calls,2);
   await act(async()=>{reject(new Error("offline"));});
   act(()=>renderer.unmount());

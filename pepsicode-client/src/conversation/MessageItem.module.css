@@ -156,3 +156,4 @@
 .branchActions button:disabled {
   opacity: .4;
 }
+.taskOutcome { margin: 12px 0 0; color: var(--dsw-alias-label-secondary); font-size: 12px; }

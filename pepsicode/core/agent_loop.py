@@ -257,7 +257,7 @@ def _messages_for_model(messages: list[ChatMessage], hook_engine: HookEngine | N
 
     contract = task_context()
     if contract:
-        messages = [*messages, contract]
+        messages = [contract, *messages]
     if hook_engine is None:
         return messages
     hook_context = hook_engine.drain_context_messages()
@@ -278,6 +278,8 @@ def _finish_hook_turn(
 ) -> list[ChatMessage]:
     if status in {"error", "max_steps"} and messages and messages[-1].get("role") == "assistant":
         messages[-1]["isError"] = True
+        if error.startswith(("Network error", "Model API timeout")):
+            messages[-1]["finishReason"] = "model_transport_failure"
     checkpoint_messages(messages)
     assistant_output = next(
         (str(message.get("content", "")) for message in reversed(messages) if message.get("role") == "assistant"),

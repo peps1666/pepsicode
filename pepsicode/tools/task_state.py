@@ -2,16 +2,17 @@
 
 from __future__ import annotations
 
+import copy
 import json
 
 from pepsicode.core.task_acceptance import validate_criteria
-from pepsicode.core.task_control import edit_control, snapshot
+from pepsicode.core.task_control import edit_control, is_continuation, snapshot
 from pepsicode.tooling import ToolDefinition, ToolResult
 
 
 def _validate(value):
     action = value.get("action", "inspect")
-    if action not in {"inspect", "define", "revise"}:
+    if action not in {"inspect", "define", "revise", "classify"}:
         raise ValueError("action must be inspect, define, or revise")
     if action == "inspect":
         return {"action": action}
@@ -21,8 +22,8 @@ def _validate(value):
     kind = value.get("kind")
     if kind is not None and kind not in {"answer", "change", "operation"}:
         raise ValueError("kind must be answer, change, or operation")
-    if action == "revise" and (
-        not isinstance(value.get("instruction_id"), str)
+    if action in {"revise", "classify"} and (
+        (action == "revise" and not isinstance(value.get("instruction_id"), str))
         or not isinstance(value.get("reason"), str)
         or not value["reason"].strip()
     ):
@@ -39,16 +40,34 @@ def _validate(value):
 
 
 def _run(value, context):
-    if value["action"] in {"define", "revise"}:
+    if value["action"] in {"define", "revise", "classify"}:
         with edit_control(context) as control:
             task = control.get("task")
             if not task or (value["task_id"], value["revision"]) != (task["id"], task["revision"]):
                 raise PermissionError("Stale task identity; inspect task_state before defining acceptance")
+            classification = task.get("classification", {"locked": True})
             if value["kind"] == "answer" and task["kind"] != "answer":
-                raise PermissionError("The current actionable task cannot be downgraded to an answer")
+                if value["action"] != "classify" or classification.get("locked", True) or task["criteria"]:
+                    raise PermissionError("The current actionable task cannot be downgraded to an answer")
+            if value["kind"] not in {None, "answer"} and classification.get("read_only_request"):
+                raise PermissionError("The user's explain-only restriction cannot be expanded by classification")
             previous_kind = task["kind"]
             if value["kind"]:
                 task["kind"] = value["kind"]
+                if previous_kind != value["kind"]:
+                    if value["kind"] == "answer":
+                        task["required_artifacts"] = [
+                            a for a in task.get("required_artifacts", []) if a["source"] != "inferred"
+                        ]
+                    task.setdefault("classification_history", []).append(
+                        {"before": classification, "reason": value.get("reason"), "revision": task["revision"]}
+                    )
+                    task["classification"] = {
+                        **classification,
+                        "source": "model",
+                        "kind": value["kind"],
+                        "reason": value.get("reason"),
+                    }
             existing = {item["id"]: item for item in task["criteria"]}
             if value["action"] == "revise":
                 if (
@@ -59,27 +78,31 @@ def _run(value, context):
                     raise PermissionError(
                         "Only a new accepted human instruction authorizes replacing acceptance conditions"
                     )
-                if task["instructions"][-1].strip().casefold().rstrip(".!。！") in {
-                    "继续",
-                    "继续执行",
-                    "接着做",
-                    "continue",
-                    "resume",
-                }:
+                if is_continuation(task["instructions"][-1]):
                     raise PermissionError("A request to continue does not authorize discarding requirements")
                 task.setdefault("acceptance_changes", []).append(
                     {
                         "instruction_id": value["instruction_id"],
                         "instruction": task["instructions"][-1],
                         "before": task["criteria"],
+                        "before_sources": copy.deepcopy(task.get("criterion_sources", {})),
                         "reason": value["reason"],
                     }
                 )
                 existing = {}
             for criterion in value["criteria"]:
+                already_defined = criterion["id"] in existing
+                if criterion.get("input_id", task["inputs"][-1]) not in task["inputs"]:
+                    raise PermissionError("Criterion input_id must refer to an accepted task input")
                 if criterion["id"] in existing and existing[criterion["id"]] != criterion:
                     raise PermissionError("Existing acceptance conditions cannot be silently replaced")
                 existing[criterion["id"]] = criterion
+                if not already_defined:
+                    task.setdefault("criterion_sources", {})[criterion["id"]] = {
+                        "source": "model",
+                        "input_id": criterion.get("input_id", task["inputs"][-1]),
+                        "purpose": criterion.get("purpose", criterion["id"]),
+                    }
             if previous_kind != task["kind"] or task["criteria"] != list(existing.values()):
                 task["revision"] += 1
                 task["admitted_revision"] = task["revision"]
@@ -103,11 +126,11 @@ def _run(value, context):
 
 task_state_tool = ToolDefinition(
     name="task_state",
-    description="Inspect the task or define acceptance using exact id/revision. Definitions add conditions. Only a new accepted human instruction permits revise: provide its instruction_id, replacement criteria, and a reason. Never downgrade an actionable task or discard requirements on your own.",
+    description="Inspect task and classification. classify can correct an uncertain rule inference with a reason using exact id/revision, never downgrade a locked explicit action or expand explain-only restrictions. define adds acceptance. Only a new accepted human instruction permits revise with instruction_id and reason. Never discard requirements on your own.",
     input_schema={
         "type": "object",
         "properties": {
-            "action": {"type": "string", "enum": ["inspect", "define", "revise"]},
+            "action": {"type": "string", "enum": ["inspect", "define", "revise", "classify"]},
             "instruction_id": {"type": "string"},
             "reason": {"type": "string"},
             "task_id": {"type": "string"},
@@ -122,6 +145,11 @@ task_state_tool = ToolDefinition(
                         "kind": {"type": "string", "enum": ["file_exists", "file_contains", "command"]},
                         "path": {"type": "string"},
                         "text": {"type": "string"},
+                        "input_id": {"type": "string", "description": "Accepted user input this condition addresses"},
+                        "purpose": {
+                            "type": "string",
+                            "description": "What this check can establish about the requested work",
+                        },
                         "argv": {"type": "array", "items": {"type": "string"}},
                     },
                     "required": ["id", "kind"],
