@@ -326,8 +326,22 @@ def _finish_cancelled_turn(messages, hooks, cwd, permissions, scope, notify):
 def append_queued_inputs(
     messages, pending: list[QueuedInput], *, cwd, permissions=None, hook_engine=None, agent_scope="main"
 ) -> bool:
+    if not pending:
+        return False
+    import copy
+
+    from pepsicode.core.task_control import admit_steering
+
+    before = copy.deepcopy(messages)
+    messages.extend(item.message() for item in pending)
+    try:
+        # Persist message delivery and intent in the same session commit before
+        # hooks/model execution can observe a widened task contract.
+        admit_steering(pending, messages=messages)
+    except BaseException:
+        messages[:] = before
+        raise
     for item in pending:
-        messages.append(item.message())
         _emit_hook(
             hook_engine,
             HookEvent.USER_INPUT,
@@ -340,16 +354,11 @@ def append_queued_inputs(
                 "input_mode": item.mode,
             },
         )
-    if pending:
-        from pepsicode.core.task_control import admit_steering
-
-        admit_steering(pending)
-        checkpoint_messages(messages)
-        scope = current_scope()
-        queue = getattr(scope, "input_queue", None)
-        if queue is not None:
-            queue.acknowledge(pending)
-    return bool(pending)
+    scope = current_scope()
+    queue = getattr(scope, "input_queue", None)
+    if queue is not None:
+        queue.acknowledge(pending)
+    return True
 
 
 def _tool_recovery_nudge(calls, results):

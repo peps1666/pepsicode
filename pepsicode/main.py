@@ -152,6 +152,9 @@ def main() -> None:
         description="pepsicode - terminal coding agent",
         add_help=True,
     )
+    from pepsicode.build_info import version_description
+
+    parser.add_argument("--version", action="version", version=version_description())
     parser.add_argument(
         "--resume",
         nargs="?",

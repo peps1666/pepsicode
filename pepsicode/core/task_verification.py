@@ -66,10 +66,13 @@ class TaskVerifier:
             and not task.get("required_artifacts")
             and not task.get("requirements", {}).get("behavior")
         )
-        if plain_answer and (
-            task.get("classification", {}).get("read_only_request")
-            or mode == "off"
-            or (mode == "auto" and tools.mutation_count <= self.project.start_count)
+        if (
+            task
+            and task["kind"] == "answer"
+            and task.get("classification", {}).get("read_only_request")
+            and (not task["criteria"] or task.get("classification", {}).get("source") == "human_instruction")
+        ) or (
+            plain_answer and (mode == "off" or (mode == "auto" and tools.mutation_count <= self.project.start_count))
         ):
             # An explanation makes no workspace-behavior claim. Do not scan a
             # large or partially unreadable repository merely to answer it.
@@ -87,7 +90,7 @@ class TaskVerifier:
                 ).verify(messages=messages, tools=tools, cwd=cwd, permissions=permissions)
                 if not prepared.ok:
                     return prepared
-            before = workspace_state(cwd, include_paths=task_paths(task or {}))
+            before = workspace_state(cwd, include_paths=task_paths(task or {}), reason="acceptance_start")
         except (OSError, ValueError) as error:
             return VerificationResult(
                 False, str(error), status="blocked", reason_code="verification_snapshot_unavailable"
@@ -106,7 +109,7 @@ class TaskVerifier:
         with edit_control() as control:
             latest = control.get("task")
             try:
-                after = workspace_state(cwd, include_paths=task_paths(task or {}))
+                after = workspace_state(cwd, include_paths=task_paths(task or {}), reason="acceptance_final")
                 changed = before["digest"] != after["digest"]
             except (OSError, ValueError):
                 changed = True
@@ -227,11 +230,16 @@ class TaskVerifier:
             return VerificationResult(
                 False, "Required user question remains unanswered", status="blocked", reason_code="awaiting_user"
             )
-        if (
-            task["kind"] == "answer"
-            and not task["criteria"]
-            and not task.get("required_artifacts")
-            and not task.get("requirements", {}).get("behavior")
+        if task["kind"] == "answer" and (
+            (
+                task.get("classification", {}).get("read_only_request")
+                and task.get("classification", {}).get("source") == "human_instruction"
+            )
+            or (
+                not task["criteria"]
+                and not task.get("required_artifacts")
+                and not task.get("requirements", {}).get("behavior")
+            )
         ):
             with edit_control() as state:
                 latest = state["task"]
@@ -243,6 +251,10 @@ class TaskVerifier:
                         reason_code="stale_task_revision",
                     )
                 state["task"]["status"] = "answered"
+                state["task"]["acceptance"] = None
+                state["task"]["evidence"] = []
+                if task.get("classification", {}).get("read_only_request"):
+                    state["task"]["assurance"] = "explanation_only"
             return report
         if any(
             item.get("task_id") == task["id"] and item.get("required", True) and item["status"] != "completed"
@@ -304,6 +316,13 @@ class TaskVerifier:
                 if criterion["kind"].startswith("file_"):
                     file = FILES.snapshot(context, criterion["path"], observe=False)
                     passed = file.content is not None
+                    if criterion["kind"] == "file_absent":
+                        passed = file.content is None
+                    if criterion["kind"] == "file_unchanged":
+                        baseline = task.get("file_baselines", {}).get(criterion["path"])
+                        if baseline is None:
+                            raise ValueError("file_unchanged requires a host baseline captured before task execution")
+                        passed = file.version == baseline
                     if passed and criterion["kind"] == "file_contains":
                         passed = criterion["text"] in file.text
                     item.update(

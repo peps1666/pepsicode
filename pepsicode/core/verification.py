@@ -252,6 +252,13 @@ def _run_verified_turn_once(
     runtime = runtime if runtime is not None else {}
     contract_options = {**runtime, **({"taskKind": task_kind} if task_kind is not None else {})}
     task = begin_task(options.get("messages", []), contract_options)
+    if task:
+        from pepsicode.core.task_acceptance import validate_criteria
+
+        inputs = runtime.get("verificationInputs", [])
+        validate_criteria([{"id": str(i), "kind": "file_exists", "path": path} for i, path in enumerate(inputs)])
+        with edit_control() as control:
+            control["task"]["verification_inputs"] = inputs
     if task and task_requirements is not None:
         from pepsicode.core.task_acceptance import validate_requirements
 
@@ -288,6 +295,21 @@ def _run_verified_turn_once(
             control["task"]["criterion_sources"] = {
                 c["id"]: {"source": "caller", "input_id": task["inputs"][-1]} for c in control["task"]["criteria"]
             }
+    if task:
+        from pepsicode.execution.filesystem import FILES
+        from pepsicode.tooling import ToolContext
+
+        current = snapshot()["task"]
+        paths = {item["path"] for item in current.get("file_mentions", [])}
+        paths.update(c["path"] for c in current["criteria"] if c["kind"] == "file_unchanged")
+        context = ToolContext(options["cwd"], permissions=options.get("permissions"))
+        baselines = {
+            path: FILES.snapshot(context, path, observe=False).version
+            for path in paths
+            if path not in current.get("file_baselines", {})
+        }
+        with edit_control() as control:
+            control["task"].setdefault("file_baselines", {}).update(baselines)
     runtime.pop("_lastVerification", None)
     event = options.get("cancellation_event")
     report = None

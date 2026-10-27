@@ -8,6 +8,7 @@ import threading
 import uuid
 from contextlib import contextmanager
 
+from pepsicode.core.file_contract import artifact_requirements, file_mentions
 from pepsicode.core.session_tree import current_session
 from pepsicode.execution.runtime import current_scope
 
@@ -124,7 +125,7 @@ def classify_intent(text):
     # supply taskKind; the model can strengthen the contract with task_state.
     only = bool(
         re.search(
-            r"只(?:需|要)?(?:解释|分析|审查)|仅(?:解释|分析)|不要(?:改|写)(?:动)?(?:任何)?(?:代码|文件)|do not (?:edit|modify)(?: any)? (?:files|code)|explain only",
+            r"只(?:需|要)?(?:解释|分析|审查)|仅(?:解释|分析)|不要(?:改|写)(?:动)?(?:任何)?(?:代码|文件)|do not (?:edit|modify)(?: any)? (?:files|code)|explain only|only (?:explain|analy[sz]e)|stop (?:editing|modifying)",
             text,
             re.I,
         )
@@ -146,7 +147,7 @@ def classify_intent(text):
     )
     action = bool(
         re.search(
-            r"实现|修复|修改|改一下|改一改|添加|新增|编写|部署|执行|运行|完成|帮我|帮忙|请把|做成|\b(?:implement|fix|create|add|build|update|change|deploy|execute|run|support)\b",
+            r"实现|修复|修改|改一下|改一改|添加|新增|编写|部署|执行|运行|完成|帮我|帮忙|请把|做成|删除|迁移|重命名|\b(?:implement|fix|create|add|build|update|change|modify|edit|remove|delete|rename|migrate|deploy|execute|run|support)\b",
             text,
             re.I,
         )
@@ -154,7 +155,7 @@ def classify_intent(text):
     kind = "answer" if only or (question and not mixed) else "change" if action or mixed else "answer"
     explicit_action = bool(
         re.search(
-            r"^(?:实现|修复|修改|添加|新增|支持|做成|把|implement\b|fix\b|create\b|add\b|support\b)|请把|\bcan you\s+(?:fix|implement|create)",
+            r"^(?:实现|修复|修改|添加|新增|支持|做成|删除|移除|迁移|重命名|把|implement\b|fix\b|create\b|add\b|support\b|modify\b|edit\b|remove\b|delete\b|rename\b|migrate\b)|请把|\bcan you\s+(?:fix|implement|create)",
             normalized,
             re.I,
         )
@@ -178,14 +179,6 @@ def is_continuation(text):
     )
 
 
-def artifact_requirements(text):
-    # Explicit filename mentions are inferred, never represented as user-supplied structured requirements.
-    paths = re.findall(
-        r"(?<![\w/])([\w./-]+\.(?:py|tsx?|jsx?|md|txt|csv|json|ya?ml|html|css|png|svg|pdf|docx))\b", text
-    )
-    return [{"path": path, "source": "inferred"} for path in dict.fromkeys(paths) if not path.startswith(("/", "../"))]
-
-
 def begin_task(messages, runtime):
     human = next((m for m in reversed(messages) if m.get("role") == "user" and not m.get("internal")), None)
     if human is None:
@@ -197,7 +190,8 @@ def begin_task(messages, runtime):
         if task and input_id in task["inputs"]:
             task["status"] = "active"
             task["evidence"] = []
-            task["admitted_revision"] = task["revision"]
+            if not task.get("pending_intents"):
+                task["admitted_revision"] = task["revision"]
             return copy.deepcopy(task)
         resume = (
             task
@@ -206,11 +200,9 @@ def begin_task(messages, runtime):
             and task["status"] not in {"complete", "answered"}
         )
         if resume:
-            task["revision"] += 1
-            task["inputs"].append(input_id)
-            task["instructions"].append(human["content"])
-            task["status"] = "active"
-            task["evidence"] = []
+            from pepsicode.core.task_intent import apply_user_instruction
+
+            apply_user_instruction(task, input_id, human["content"], delivered=True)
             pending = [
                 q for q in control.get("questions", []) if q["task_id"] == task["id"] and q["status"] == "pending"
             ]
@@ -240,6 +232,8 @@ def begin_task(messages, runtime):
                     **({"kind": kind, "source": "caller", "locked": True} if runtime.get("taskKind") else {}),
                 },
                 "required_artifacts": artifact_requirements(human["content"]) if kind != "answer" else [],
+                "file_mentions": file_mentions(human["content"], input_id),
+                "file_contract_version": 2,
                 "request_sources": [{"id": input_id, "text": human["content"], "source": "human"}],
             }
             control["task"] = task
@@ -254,27 +248,36 @@ def begin_task(messages, runtime):
                         "purpose": "Check the requested artifact exists",
                     }
                 }
-        task["admitted_revision"] = task["revision"]
+        if not task.get("pending_intents"):
+            task["admitted_revision"] = task["revision"]
         return copy.deepcopy(task)
 
 
-def admit_steering(items):
-    with edit_control() as control:
-        task = control.get("task")
-        if not task:
-            return
-        for item in items:
-            if item.mode != "steer":
-                continue
-            if item.id not in task["inputs"]:
-                task["revision"] += 1
-                task["inputs"].append(item.id)
-                task["instructions"].append(item.content)
-                task["evidence"] = []
-                task["status"] = "active"
-            if infer_kind(item.content) == "change":
-                task["kind"] = "change"
-        task["admitted_revision"] = task["revision"]
+def admit_steering(items, *, messages=None):
+    from pepsicode.core.task_intent import apply_user_instruction
+
+    session, _ = owner()
+    with session._tree_lock if session else _fallback_lock:
+        tree = copy.deepcopy(session.tree) if session else None
+        saved_messages = list(session.messages) if session else None
+        try:
+            with edit_control() as control:
+                task = control.get("task")
+                if task:
+                    for item in items:
+                        if item.mode == "steer":
+                            apply_user_instruction(task, item.id, item.content, delivered=True)
+                if messages is not None:
+                    from pepsicode.core.session_tree import checkpoint_messages
+
+                    checkpoint_messages(messages)
+        except BaseException:
+            if session:
+                session.tree, session.messages = tree, saved_messages
+            raise
+    scope = current_scope()
+    if scope and scope.permissions and hasattr(scope.permissions, "clear_task_grants"):
+        scope.permissions.clear_task_grants()
 
 
 def task_context():
@@ -296,6 +299,8 @@ def task_context():
         + json.dumps(view, ensure_ascii=False)
         + "\nFor change/operation tasks use task_state to define concrete acceptance criteria before claiming completion. "
         "Use file_contains for expected content, file_exists for required artifacts, or command for a targeted behavior check. "
+        "Use file_absent for deletion and file_unchanged for a protected file with a host baseline. "
+        "File mentions have roles; inputs and references need not exist at delivery. correct_files with a reason can fix inferred roles, never silently drop explicit caller requirements. "
         "Project tests alone do not prove this objective. Read the current task id/revision before updating. "
         "Do not downgrade explicit actionable requests or discard existing requirements; classify may correct uncertain rule inference with a reason. When a human changes requirements, "
         "task_state revise must cite the latest inputs ID and explain the changes. Reconfirm acceptance for the current revision. "

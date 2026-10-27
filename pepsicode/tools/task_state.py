@@ -12,8 +12,8 @@ from pepsicode.tooling import ToolDefinition, ToolResult
 
 def _validate(value):
     action = value.get("action", "inspect")
-    if action not in {"inspect", "define", "revise", "classify"}:
-        raise ValueError("action must be inspect, define, or revise")
+    if action not in {"inspect", "define", "revise", "classify", "correct_files"}:
+        raise ValueError("action must be inspect, define, revise, classify, or correct_files")
     if action == "inspect":
         return {"action": action}
     revision = value.get("revision")
@@ -22,12 +22,23 @@ def _validate(value):
     kind = value.get("kind")
     if kind is not None and kind not in {"answer", "change", "operation"}:
         raise ValueError("kind must be answer, change, or operation")
-    if action in {"revise", "classify"} and (
+    if action in {"revise", "classify", "correct_files"} and (
         (action == "revise" and not isinstance(value.get("instruction_id"), str))
         or not isinstance(value.get("reason"), str)
         or not value["reason"].strip()
     ):
         raise ValueError("revise requires the latest human instruction_id and a reason")
+    roles = value.get("file_roles", [])
+    if not isinstance(roles, list) or len(roles) > 32:
+        raise ValueError("file_roles must be an array of at most 32 corrections")
+    from pepsicode.core.file_contract import ROLES
+
+    for item in roles:
+        if not isinstance(item, dict) or set(item) != {"path", "role"} or item["role"] not in ROLES:
+            raise ValueError("file_roles needs path and a known role")
+        validate_criteria([{"id": "role", "kind": "file_exists", "path": item["path"]}])
+    if action == "correct_files" and not roles:
+        raise ValueError("correct_files requires file_roles and a reason")
     return {
         "action": action,
         "task_id": value.get("task_id"),
@@ -36,15 +47,27 @@ def _validate(value):
         "criteria": validate_criteria(value.get("criteria", [])),
         "instruction_id": value.get("instruction_id"),
         "reason": value.get("reason"),
+        "file_roles": roles,
     }
 
 
 def _run(value, context):
-    if value["action"] in {"define", "revise", "classify"}:
+    if value["action"] in {"define", "revise", "classify", "correct_files"}:
         with edit_control(context) as control:
             task = control.get("task")
             if not task or (value["task_id"], value["revision"]) != (task["id"], task["revision"]):
                 raise PermissionError("Stale task identity; inspect task_state before defining acceptance")
+            if task.get("admitted_revision") != task["revision"]:
+                raise PermissionError(
+                    "Wait for pending human instructions to be delivered before changing the contract"
+                )
+            if value["action"] == "correct_files":
+                from pepsicode.core.file_contract import correct_file_roles
+
+                correct_file_roles(
+                    task, value["file_roles"], reason=value["reason"], instruction_id=value["instruction_id"]
+                )
+                return ToolResult(True, json.dumps(task, ensure_ascii=False))
             classification = task.get("classification", {"locked": True})
             if value["kind"] == "answer" and task["kind"] != "answer":
                 if value["action"] != "classify" or classification.get("locked", True) or task["criteria"]:
@@ -68,11 +91,12 @@ def _run(value, context):
                         "kind": value["kind"],
                         "reason": value.get("reason"),
                     }
+                    task["delivered_intent"] = copy.deepcopy(task["classification"])
             existing = {item["id"]: item for item in task["criteria"]}
             if value["action"] == "revise":
                 if (
                     not task["instructions"]
-                    or value["instruction_id"] != task["inputs"][-1]
+                    or value["instruction_id"] != task.get("last_delivered_input_id", task["inputs"][-1])
                     or task.get("criteria_revision") == task["revision"]
                 ):
                     raise PermissionError(
@@ -130,7 +154,21 @@ task_state_tool = ToolDefinition(
     input_schema={
         "type": "object",
         "properties": {
-            "action": {"type": "string", "enum": ["inspect", "define", "revise", "classify"]},
+            "action": {"type": "string", "enum": ["inspect", "define", "revise", "classify", "correct_files"]},
+            "file_roles": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "path": {"type": "string"},
+                        "role": {
+                            "type": "string",
+                            "enum": ["input", "output", "delete_target", "protected", "reference"],
+                        },
+                    },
+                    "required": ["path", "role"],
+                },
+            },
             "instruction_id": {"type": "string"},
             "reason": {"type": "string"},
             "task_id": {"type": "string"},
@@ -142,7 +180,10 @@ task_state_tool = ToolDefinition(
                     "type": "object",
                     "properties": {
                         "id": {"type": "string"},
-                        "kind": {"type": "string", "enum": ["file_exists", "file_contains", "command"]},
+                        "kind": {
+                            "type": "string",
+                            "enum": ["file_exists", "file_contains", "file_absent", "file_unchanged", "command"],
+                        },
                         "path": {"type": "string"},
                         "text": {"type": "string"},
                         "input_id": {"type": "string", "description": "Accepted user input this condition addresses"},

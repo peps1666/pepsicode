@@ -203,6 +203,7 @@ class ExecutionScope:
     repetitions: dict = field(default_factory=dict)
     repeat_thresholds: tuple = (3, 5, 8)
     observations: dict = field(default_factory=dict)
+    snapshot_metrics: list = field(default_factory=list)
     recovery_version: list = field(default_factory=lambda: [0])
     _recovery_lock: Any = field(default_factory=threading.RLock, repr=False)
 
@@ -235,6 +236,12 @@ class ExecutionScope:
             "journal": str(self.journal.path) if self.journal else None,
             "recovery_revision": self.recovery_version[0],
             "usage_uncertain": bool(self.budget and self.budget.unmetered),
+            "workspace_scans": {
+                "calls": len(self.snapshot_metrics),
+                "duration_ms": round(sum(item["duration_ms"] for item in self.snapshot_metrics), 3),
+                "bytes": sum(item["bytes"] for item in self.snapshot_metrics),
+                "recent": self.snapshot_metrics[-32:],
+            },
         }
 
     def check_cancelled(self):

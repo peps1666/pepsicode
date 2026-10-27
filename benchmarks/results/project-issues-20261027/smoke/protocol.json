@@ -1,0 +1,40 @@
+{
+  "version": 1,
+  "evaluation_kind": "offline_smoke",
+  "acceptance_track": "preset",
+  "approval_policy": "automated allow-once for exact public test command; all others denied; wait times are simulated backend time",
+  "pepsicode_version": "2.0.7",
+  "source_identity": {
+    "schema_version": 1,
+    "version": "2.0.7",
+    "git_sha": "af533e915c3d7baafcaf09c45f30030d2d30f871",
+    "dirty": true,
+    "channel": "development",
+    "python": "3.12.4",
+    "platform": "Windows-11-10.0.26200-SP0"
+  },
+  "evaluator_sha256": "7936d2637257e02e0a86373efd80dcafaa3ab13170e3d9b883dedf41831a3aa5",
+  "harness_sha256": "6d34339944cbe20534d261c860345d3a7811d4e82b75897a53fea7219cc60204",
+  "harness_digest_scope": "production Python and bundled agent data, excluding evaluator/runtime artifacts",
+  "pricing": {},
+  "mode": "smoke",
+  "model": null,
+  "provider": null,
+  "reasoning_effort": "default",
+  "limits": {
+    "timeout_seconds": 180,
+    "max_steps_per_iteration": 40,
+    "max_requests": 50,
+    "estimated_budget_usd": 1.0
+  },
+  "cohort": [
+    {
+      "case": "smoke",
+      "run": 1,
+      "case_sha256": "d95789f89c8a3d239e8564a8954cfcfbfecef3e30461d67150621bb3f159652c"
+    }
+  ],
+  "cost_basis": "CostTracker approximate price table; unknown models use its default for budget enforcement only",
+  "isolation": "Fresh process/home/workspace; restricted tool set; not an OS security sandbox",
+  "sha256": "0e1ddca874d97c49d65e461c5460816570b0fd8b713e3023ef0d6b86ef6c927c"
+}

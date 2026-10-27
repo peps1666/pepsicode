@@ -114,7 +114,7 @@ export default function ModelSettings({ onClose }: { onClose: () => void }) {
         </label>
         {error && <p className={styles.error} role="alert">{error}</p>}
         <footer className={styles.actions}>
-          <span className={styles.footerNote}>Key 仅保存在本机</span>
+          <Button variant="ghost" className={styles.footerNote} onClick={() => { void window.pepsiAPI.showAbout(); }}>关于 Pepsicode</Button>
           <Button onClick={onClose} disabled={modelUpdating}>取消</Button>
           <Button variant="primary" type="submit" disabled={busy || isMock || !capabilities || capabilities.id !== selectedModel}>{modelUpdating ? "应用中…" : "应用设置"}</Button>
         </footer>

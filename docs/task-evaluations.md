@@ -59,6 +59,7 @@ python -m pepsicode.evals --mode real --track model --runs 3 --output .evals/mod
 每个输出目录包含：
 
 - `protocol.json`：完整计划样本、样本摘要、评测代码摘要、版本、模型、思考档位、运行限制和单价。
+  新运行还记录源码 `source_identity`（完整 SHA、dirty、渠道）；未提交候选不能仅靠版本号当作固定提交。旧版缺失身份字段时须明确归档来源，不能补造旧实验身份。
 - `observations.jsonl`：逐次结果与失败原因。
 - `report.json`：总体、按 case 汇总和逐次结果。
 - `report.md`：简要报告。

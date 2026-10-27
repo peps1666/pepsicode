@@ -13,6 +13,7 @@ import time
 import uuid
 from pathlib import Path
 
+from pepsicode.build_info import source_identity
 from pepsicode.evals.cases import CASES, SMOKE, Case, case_digest, materialize, protected_files_intact
 from pepsicode.llm.providers import CONNECTION_KEYS
 from pepsicode.subprocess_utils import Popen, WindowsProcessJob
@@ -253,6 +254,7 @@ def evaluate(
         "acceptance_track": acceptance_track,
         "approval_policy": "automated allow-once for exact public test command; all others denied; wait times are simulated backend time",
         "pepsicode_version": VERSION,
+        "source_identity": source_identity(),
         "evaluator_sha256": hashlib.sha256(
             b"".join(path.read_bytes() for path in sorted(Path(__file__).parent.glob("*.py")))
         ).hexdigest(),

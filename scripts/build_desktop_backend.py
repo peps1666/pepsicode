@@ -15,6 +15,13 @@ def main() -> None:
     if sys.platform != "win32" or platform.machine().lower() not in {"amd64", "x86_64"}:
         raise SystemExit("The ZIP backend must be built on Windows x64.")
     root = Path(__file__).resolve().parents[1]
+    sys.path.insert(0, str(root))
+    from pepsicode.build_info import write_manifest
+    from scripts.check_project import check
+
+    check(root)
+    manifest = root / "build/build-info.json"
+    write_manifest(root, manifest)
     python = root / "build/desktop-venv/Scripts/python.exe"
     if not python.exists():
         venv.EnvBuilder(with_pip=True).create(python.parents[1])
@@ -57,6 +64,8 @@ def main() -> None:
             str(root),
             "--collect-data",
             "pepsicode",
+            "--add-data",
+            f"{manifest}{os.pathsep}pepsicode",
             "--copy-metadata",
             "websockets",
             "--copy-metadata",

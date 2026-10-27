@@ -19,6 +19,15 @@ from pathlib import Path
 from websockets.sync.client import connect
 
 
+def verify_build_identity(application: Path, diagnostics: dict):
+    manifest = json.loads((application / "resources/build-info.json").read_text(encoding="utf-8"))
+    if manifest.get("schema_version") != 1 or not manifest.get("git_sha"):
+        raise ValueError("ZIP lacks a versioned build manifest with a source commit")
+    if diagnostics.get("build") != manifest:
+        raise ValueError("Desktop and frozen backend build identities differ")
+    return manifest
+
+
 def smoke(archive: Path) -> None:
     expected = archive.with_suffix(archive.suffix + ".sha256").read_text(encoding="utf-8").split()[0]
     with archive.open("rb") as stream:
@@ -60,7 +69,10 @@ def smoke(archive: Path) -> None:
             check=True,
             timeout=30,
         )
-        assert json.loads(diagnostics.stdout)["frozen"] is True
+        self_test = json.loads(diagnostics.stdout)
+        assert self_test["frozen"] is True
+        manifest = verify_build_identity(application, self_test)
+        print("ZIP build identity: " + json.dumps(manifest, ensure_ascii=False))
         with socket.socket() as probe:
             probe.bind(("127.0.0.1", 0))
             port = probe.getsockname()[1]

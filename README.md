@@ -6,7 +6,7 @@
 
 终端全屏 TUI 与 Electron 桌面客户端共用同一套代理内核：权限感知的工具、只读 Plan 模式、可审计的 Hooks v2、上下文压缩、MCP / Skills / 子代理，以及修改后的自动验证与修复。
 
-![Version](https://img.shields.io/badge/version-2.0.0-orange.svg)
+![Version](https://img.shields.io/badge/version-2.0.7-orange.svg)
 ![Python](https://img.shields.io/badge/python-3.11%2B-blue.svg)
 ![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey.svg)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
@@ -58,6 +58,8 @@
 ---
 
 ## 这是什么
+
+当前源码为 **2.0.7 开发候选**，尚未创建对应发行标签或完成该候选的 Windows ZIP 成品验收。已发布的旧版 ZIP 不包含所有当前修复；使用 `pepsicode --version` 或桌面“关于 Pepsicode”核对提交及 dirty 状态。源码安装与便携包使用见 [快速上手指南](ONBOARDING.md)。
 
 pepsicode 是一个面向本地开发工作流的 Python 编程代理。它有两种前端、一个内核：既能作为终端里的全屏交互程序使用，也能作为白色主题的桌面应用启动，两者共享同一套工具、权限、Hook 与上下文机制。
 

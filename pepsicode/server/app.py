@@ -487,7 +487,10 @@ class PepsiCodeServer:
         # Defer initialization until the first session/create request so the
         # client can pick a cwd.  But we need a default cwd to start.
         try:
-            await emit("connection/ready", {"cwd": cwd, "version": "2.0.0"})
+            from pepsicode.build_info import build_identity
+            from pepsicode.version import VERSION
+
+            await emit("connection/ready", {"cwd": cwd, "version": VERSION, "build": build_identity()})
         except Exception:
             pass
 

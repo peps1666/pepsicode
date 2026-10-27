@@ -508,6 +508,13 @@ class ToolRegistry:
                     with edit_control(context) as control:
                         current = control["task"]
                         current.update(kind="change", status="active", evidence=[])
+                        current["classification"] = {
+                            **current.get("classification", {}),
+                            "kind": "change",
+                            "source": "host_tool_effect",
+                            "locked": True,
+                        }
+                        current["delivered_intent"] = dict(current["classification"])
                         current["revision"] += 1
                         current["admitted_revision"] = current["revision"]
                         current["required_artifacts"] = artifact_requirements(current["objective"])

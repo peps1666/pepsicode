@@ -104,7 +104,8 @@ class TurnInputQueue:
     def _persist(self):
         if self._session is None:
             return
-        from pepsicode.core.task_control import edit_control, infer_kind
+        from pepsicode.core.task_control import edit_control
+        from pepsicode.core.task_intent import apply_user_instruction, return_user_instructions
 
         with edit_control(session=self._session) as control:
             control["inbox"] = {
@@ -115,14 +116,9 @@ class TurnInputQueue:
             task = control.get("task")
             if task:
                 for item in self._pending:
-                    if item.mode == "steer" and item.id not in task["inputs"]:
-                        task["revision"] += 1
-                        task["inputs"].append(item.id)
-                        task["instructions"].append(item.content)
-                        task["evidence"] = []
-                        task["status"] = "active"
-                        if infer_kind(item.content) == "change":
-                            task["kind"] = "change"
+                    if item.mode == "steer":
+                        apply_user_instruction(task, item.id, item.content, delivered=False)
+                return_user_instructions(task, {item.id for item in self._returned})
 
     def acknowledge(self, items):
         with self._mutation():

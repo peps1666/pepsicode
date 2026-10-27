@@ -261,6 +261,10 @@ def load_session(session_id: str) -> SessionData | None:
         validate_control(data.get("task_control", {}))
         control = data.get("task_control", {})
         task = control.get("task")
+        if task:
+            from pepsicode.core.file_contract import migrate_file_contract
+
+            migrate_file_contract(task)
         current_proof = False
         if task and task.get("status") == "complete":
             from pepsicode.core.workspace_state import digest, task_paths, workspace_state

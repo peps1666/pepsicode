@@ -1,6 +1,6 @@
 {
   "name": "pepsicode-client",
-  "version": "2.0.6",
+  "version": "2.0.7",
   "description": "Pepsicode local coding agent desktop client",
   "author": "pepsicode contributors",
   "license": "MIT",
@@ -61,6 +61,10 @@
       "icon": "assets/app-icon.ico"
     },
     "extraResources": [
+      {
+        "from": "../build/build-info.json",
+        "to": "build-info.json"
+      },
       {
         "from": "../build/desktop-backend/pepsicode-server",
         "to": "backend"

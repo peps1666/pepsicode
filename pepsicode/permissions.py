@@ -435,7 +435,7 @@ class PermissionManager:
         task = snapshot().get("task")
         if not scope or scope.parent_task_id is not None or not task or task["status"] != "active":
             return None
-        state = workspace_state(self.workspace_root, include_paths=task_paths(task))
+        state = workspace_state(self.workspace_root, include_paths=task_paths(task), reason="command_task_grant")
         environment = dict(os.environ if environment is None else environment)
         executable = shutil.which(command, path=environment.get("PATH"))
         if executable is None:

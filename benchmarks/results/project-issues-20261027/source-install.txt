@@ -1,0 +1,11 @@
+Processing e:\code\pepsicode
+  Preparing metadata (pyproject.toml): started
+  Preparing metadata (pyproject.toml): finished with status 'done'
+Building wheels for collected packages: pepsicode
+  Building wheel for pepsicode (pyproject.toml): started
+  Building wheel for pepsicode (pyproject.toml): finished with status 'done'
+  Created wheel for pepsicode: filename=pepsicode-2.0.7-py3-none-any.whl size=529027 sha256=dbff952c878f5789de6e275fc9ff7d8bf9094ea98c9dfc5d78e4929b99be6a0a
+  Stored in directory: E:\Code\pepsicode\.eval-work\policy-temp\pip-ephem-wheel-cache-mx9xfovt\wheels\71\e7\e5\f60c5a4f8caf5c364974c3cc926a51408598aa87ff530be530
+Successfully built pepsicode
+Installing collected packages: pepsicode
+Successfully installed pepsicode-2.0.7

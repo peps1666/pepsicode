@@ -227,6 +227,7 @@ def load_runtime_config(cwd: str | Path | None = None) -> dict[str, Any]:
         ),
         "verificationCommands": effective.get("verificationCommands"),
         "verificationPreparationCommands": effective.get("verificationPreparationCommands"),
+        "verificationInputs": effective.get("verificationInputs", []),
         "modelRecoveryLimit": effective.get("modelRecoveryLimit", 1),
         "verificationDiscovery": effective.get("verificationDiscovery"),
         "verificationNoProgressLimit": effective.get("verificationNoProgressLimit", 2),

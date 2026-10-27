@@ -18,8 +18,10 @@ def validate_criteria(criteria):
             raise ValueError("criterion IDs must be unique")
         ids.add(key)
         kind = item.get("kind")
-        if kind not in {"file_exists", "file_contains", "command"}:
-            raise ValueError("criterion kind must be file_exists, file_contains, or command")
+        if kind not in {"file_exists", "file_contains", "file_absent", "file_unchanged", "command"}:
+            raise ValueError(
+                "criterion kind must be file_exists, file_contains, file_absent, file_unchanged, or command"
+            )
         normalized = {"id": key, "kind": kind}
         for field in ("input_id", "purpose"):
             if field in item:

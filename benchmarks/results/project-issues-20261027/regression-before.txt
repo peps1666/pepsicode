@@ -1,0 +1,135 @@
+FFFFFF                                                                   [100%]
+================================== FAILURES ===================================
+___ test_issue001_later_command_invalidates_generated_code_evidence[build] ____
+
+project = SessionData(session_id='dba985220f31', created_at=1793029162.7290375, updated_at=1793029164.4341857, workspace='E:\\Co...count=2, workspace='E:\\Code\\pepsicode\\.eval-work\\project-issues-before\\test_issue001_later_command_in0\\project'))
+directory = 'build'
+
+    @pytest.mark.parametrize("directory", ["build", "dist", "release"])
+    def test_issue001_later_command_invalidates_generated_code_evidence(project, directory):
+        root = Path(project.workspace)
+        (root / directory).mkdir()
+        path = f"{directory}/value.py"
+        (root / path).write_text("VALUE = 42\n", encoding="utf-8")
+        task, runtime = finish(
+            project,
+            "Implement the calculation behavior",
+            [
+                {"id": "behavior", "kind": "command", "argv": [sys.executable, "-c", f"import runpy; assert runpy.run_path('{path}')['VALUE'] == 42"]},
+                {"id": "later", "kind": "command", "argv": [sys.executable, "-c", f"from pathlib import Path; Path('{path}').write_text('VALUE = 0\\n')"]},
+            ],
+        )
+>       assert task["status"] != "complete"
+E       AssertionError: assert 'complete' != 'complete'
+
+tests\test_project_issues.py:63: AssertionError
+____ test_issue001_later_command_invalidates_generated_code_evidence[dist] ____
+
+project = SessionData(session_id='95b257fdc97a', created_at=1793029164.659768, updated_at=1793029166.010028, workspace='E:\\Code...count=2, workspace='E:\\Code\\pepsicode\\.eval-work\\project-issues-before\\test_issue001_later_command_in1\\project'))
+directory = 'dist'
+
+    @pytest.mark.parametrize("directory", ["build", "dist", "release"])
+    def test_issue001_later_command_invalidates_generated_code_evidence(project, directory):
+        root = Path(project.workspace)
+        (root / directory).mkdir()
+        path = f"{directory}/value.py"
+        (root / path).write_text("VALUE = 42\n", encoding="utf-8")
+        task, runtime = finish(
+            project,
+            "Implement the calculation behavior",
+            [
+                {"id": "behavior", "kind": "command", "argv": [sys.executable, "-c", f"import runpy; assert runpy.run_path('{path}')['VALUE'] == 42"]},
+                {"id": "later", "kind": "command", "argv": [sys.executable, "-c", f"from pathlib import Path; Path('{path}').write_text('VALUE = 0\\n')"]},
+            ],
+        )
+>       assert task["status"] != "complete"
+E       AssertionError: assert 'complete' != 'complete'
+
+tests\test_project_issues.py:63: AssertionError
+__ test_issue001_later_command_invalidates_generated_code_evidence[release] ___
+
+project = SessionData(session_id='a2e806dd8c56', created_at=1793029166.1023219, updated_at=1793029167.5050695, workspace='E:\\Co...count=2, workspace='E:\\Code\\pepsicode\\.eval-work\\project-issues-before\\test_issue001_later_command_in2\\project'))
+directory = 'release'
+
+    @pytest.mark.parametrize("directory", ["build", "dist", "release"])
+    def test_issue001_later_command_invalidates_generated_code_evidence(project, directory):
+        root = Path(project.workspace)
+        (root / directory).mkdir()
+        path = f"{directory}/value.py"
+        (root / path).write_text("VALUE = 42\n", encoding="utf-8")
+        task, runtime = finish(
+            project,
+            "Implement the calculation behavior",
+            [
+                {"id": "behavior", "kind": "command", "argv": [sys.executable, "-c", f"import runpy; assert runpy.run_path('{path}')['VALUE'] == 42"]},
+                {"id": "later", "kind": "command", "argv": [sys.executable, "-c", f"from pathlib import Path; Path('{path}').write_text('VALUE = 0\\n')"]},
+            ],
+        )
+>       assert task["status"] != "complete"
+E       AssertionError: assert 'complete' != 'complete'
+
+tests\test_project_issues.py:63: AssertionError
+___________ test_issue002_migration_does_not_require_deleted_input ____________
+
+project = SessionData(session_id='03fb49746718', created_at=1793029167.6241593, updated_at=1793029168.1835928, workspace='E:\\Co...count=3, workspace='E:\\Code\\pepsicode\\.eval-work\\project-issues-before\\test_issue002_migration_does_n0\\project'))
+
+    def test_issue002_migration_does_not_require_deleted_input(project):
+        root = Path(project.workspace)
+        (root / "old.py").write_text("VALUE = 42\n", encoding="utf-8")
+    
+        def migrate(**options):
+            (root / "old.py").rename(root / "new.py")
+            return [*options["messages"], {"role": "assistant", "content": "Migrated"}]
+    
+        task, _ = finish(
+            project,
+            "Implement the migration from old.py to new.py; remove old.py.",
+            [{"id": "migration", "kind": "command", "argv": [sys.executable, "-c", "from pathlib import Path; assert Path('new.py').exists() and not Path('old.py').exists()"]}],
+            prepare=migrate,
+        )
+>       assert task["status"] == "complete"
+E       AssertionError: assert 'incomplete' == 'complete'
+E         - complete
+E         + incomplete
+E         ? ++
+
+tests\test_project_issues.py:81: AssertionError
+_________ test_issue003_delivered_human_action_replaces_explain_only __________
+
+project = SessionData(session_id='91beace03291', created_at=1793029168.2766914, updated_at=1793029168.3457315, workspace='E:\\Co...count=0, workspace='E:\\Code\\pepsicode\\.eval-work\\project-issues-before\\test_issue003_delivered_human_0\\project'))
+
+    def test_issue003_delivered_human_action_replaces_explain_only(project):
+        scope = ExecutionScope(project.workspace)
+        with recording_session(project), bind_scope(scope):
+            begin_task([{"role": "user", "content": "ֻ��������޸���ҳ����Ҫ�޸Ĵ���"}], {})
+            admit_steering([QueuedInput("actual-human", "�����޸���ҳ��������ɫ����", "steer")])
+            task = snapshot()["task"]
+>           assert task["kind"] == task["classification"]["kind"] == "change"
+E           AssertionError: assert 'change' == 'answer'
+E             - answer
+E             + change
+
+tests\test_project_issues.py:90: AssertionError
+_ test_issue003_narrowing_blocks_at_acceptance_but_widening_waits_for_delivery _
+
+project = SessionData(session_id='dab0b7bd373f', created_at=1793029168.4388323, updated_at=1793029168.6192145, workspace='E:\\Co...count=0, workspace='E:\\Code\\pepsicode\\.eval-work\\project-issues-before\\test_issue003_narrowing_blocks0\\project'))
+
+    def test_issue003_narrowing_blocks_at_acceptance_but_widening_waits_for_delivery(project):
+        with recording_session(project):
+            begin_task([{"role": "user", "content": "�޸���ҳ"}], {})
+            queue = TurnInputQueue()
+            queue.bind_session(project)
+            queue.start()
+            stop = queue.enqueue("ֹͣ�޸ģ�ֻ������ҳ")
+>           assert snapshot()["task"]["classification"]["read_only_request"]
+E           assert False
+
+tests\test_project_issues.py:105: AssertionError
+=========================== short test summary info ===========================
+FAILED tests/test_project_issues.py::test_issue001_later_command_invalidates_generated_code_evidence[build]
+FAILED tests/test_project_issues.py::test_issue001_later_command_invalidates_generated_code_evidence[dist]
+FAILED tests/test_project_issues.py::test_issue001_later_command_invalidates_generated_code_evidence[release]
+FAILED tests/test_project_issues.py::test_issue002_migration_does_not_require_deleted_input
+FAILED tests/test_project_issues.py::test_issue003_delivered_human_action_replaces_explain_only
+FAILED tests/test_project_issues.py::test_issue003_narrowing_blocks_at_acceptance_but_widening_waits_for_delivery
+6 failed in 6.23s

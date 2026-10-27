@@ -7,6 +7,7 @@ import { randomBytes } from "node:crypto";
 import { pathToFileURL } from "node:url";
 import { backendLaunch, serverOrigins, trustedRenderer } from "./server-runtime";
 import { launchBackend, stopBackend } from "./backend-process";
+import { buildInformation, describeBuild } from "./build-info";
 
 if (process.platform === "win32") {
   app.setAppUserModelId("com.pepsicode.client");
@@ -71,6 +72,9 @@ async function start(): Promise<void> {
   backendLog.on("error", (error) => console.error("Unable to write backend log:", error.message));
   try {
     const projectRoot = path.resolve(__dirname, "..", "..");
+    const identity = buildInformation({ packaged: app.isPackaged, resourcesPath: process.resourcesPath,
+      projectRoot, version: app.getVersion() });
+    backendLog.write(`Build: ${JSON.stringify(identity)}\n`);
     const workspace = process.env.PEPSI_CODE_WORKSPACE ||
       (app.isPackaged ? path.join(app.getPath("documents"), "Pepsicode Projects") : projectRoot);
     mkdirSync(workspace, { recursive: true });
@@ -138,4 +142,12 @@ ipcMain.handle("select-folder", async () => {
     properties: ["openDirectory"], title: "选择项目文件夹",
   });
   return result.canceled ? null : result.filePaths[0];
+});
+
+ipcMain.handle("show-about", async (event) => {
+  if (!mainWindow || event.sender !== mainWindow.webContents || event.senderFrame !== mainWindow.webContents.mainFrame ||
+      !trustedRenderer(event.senderFrame.url, rendererURL())) throw new Error("Untrusted about request");
+  const identity = buildInformation({ packaged: app.isPackaged, resourcesPath: process.resourcesPath,
+    projectRoot: path.resolve(__dirname, "..", ".."), version: app.getVersion() });
+  await dialog.showMessageBox(mainWindow, { type: "info", title: "关于 Pepsicode", message: "Pepsicode", detail: describeBuild(identity) });
 });

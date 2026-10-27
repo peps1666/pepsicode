@@ -40,3 +40,56 @@ jobs:
 
       - name: Run offline task evaluation smoke
         run: python -m pepsicode.evals --mode smoke --output .evals/ci-smoke
+
+      - name: Check versions and entry documentation
+        run: python scripts/check_project.py
+
+  client:
+    name: Desktop checks (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: pepsicode-client/package-lock.json
+      - name: Install backend test dependencies
+        run: python -m pip install -e ".[dev]"
+      - name: Install locked desktop dependencies
+        working-directory: pepsicode-client
+        run: npm ci
+      - name: Test desktop behavior
+        working-directory: pepsicode-client
+        shell: pwsh
+        run: |
+          npm test *> client-tests.log
+          $result = $LASTEXITCODE
+          Get-Content client-tests.log
+          exit $result
+      - name: Check TypeScript
+        if: ${{ !cancelled() }}
+        working-directory: pepsicode-client
+        shell: pwsh
+        run: |
+          npm run typecheck *> client-types.log
+          $result = $LASTEXITCODE
+          Get-Content client-types.log
+          exit $result
+      - uses: actions/upload-artifact@v4
+        if: ${{ !cancelled() }}
+        with:
+          name: desktop-checks-${{ matrix.os }}
+          path: |
+            pepsicode-client/client-tests.log
+            pepsicode-client/client-types.log
+          retention-days: 7
+          if-no-files-found: ignore
