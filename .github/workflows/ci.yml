@@ -44,6 +44,36 @@ jobs:
       - name: Check versions and entry documentation
         run: python scripts/check_project.py
 
+  qq:
+    name: QQ private bridge (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: integrations/qq/package-lock.json
+      - name: Install backend
+        run: python -m pip install -e ".[dev]"
+      - name: Install locked QQ bridge dependencies
+        working-directory: integrations/qq
+        run: npm ci --ignore-scripts
+      - name: Test QQ protocol and private conversation behavior
+        working-directory: integrations/qq
+        run: npm test
+      - name: Test with the real Python server and offline model
+        working-directory: integrations/qq
+        run: npm run test:e2e
+
   client:
     name: Desktop checks (${{ matrix.os }})
     runs-on: ${{ matrix.os }}

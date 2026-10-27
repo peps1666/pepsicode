@@ -72,6 +72,7 @@ from pepsicode.llm.providers import model_settings_snapshot, provider_catalog, p
 from pepsicode.logging_config import get_logger, setup_logging
 from pepsicode.permissions import PermissionManager, PermissionMode
 from pepsicode.server import protocol
+from pepsicode.server.profiles import profile_prompt
 from pepsicode.server.security import authenticate
 from pepsicode.server.thinking import ThinkingStream
 from pepsicode.tools import create_default_tool_registry
@@ -285,6 +286,9 @@ class ClientSession:
             plan_mode=self.permissions.is_plan_mode,
             plan_file_path=self.permissions.plan_file_path,
         )
+        presentation = profile_prompt(self.session_data.profile if self.session_data else "default")
+        if presentation:
+            prompt += "\n\n" + presentation
         # Replace existing system prompt or prepend
         if self.messages and self.messages[0].get("role") == "system":
             self.messages[0] = {"role": "system", "content": prompt}
@@ -627,11 +631,17 @@ class PepsiCodeServer:
         if method == "session/create":
             if session._turn_lock.locked() or session._worker_active.is_set():
                 raise ValueError("Wait for the current turn to finish before creating a session")
+            profile = params.get("profile", "default")
+            profile_prompt(profile)  # Validate before changing the current session.
             cwd = normalize_workspace(params.get("cwd", str(Path.cwd())))
             session.cwd = cwd
             session.initialize(force=session.tools is not None)
             session.set_permission_handler(bridge)
             assert session.session_data is not None
+            session.session_data.profile = profile
+            session._rebuild_system_prompt()
+            if profile != "default":
+                session.snapshot()
             return {
                 "session_id": session.session_data.session_id,
                 "cwd": session.cwd,
@@ -639,6 +649,7 @@ class PepsiCodeServer:
                 "tools": [t.name for t in session.tools.list()],
                 "permissions": session.permissions.get_summary() if session.permissions else [],
                 "access_mode": session.permissions.access_mode.value if session.permissions else "auto",
+                "profile": session.session_data.profile,
             }
 
         if method == "session/list":
@@ -665,6 +676,7 @@ class PepsiCodeServer:
             loaded = load_session(session_id)
             if loaded is None:
                 raise ValueError(f"Session not found: {session_id}")
+            profile_prompt(loaded.profile)
             expected_workspace = params.get("workspace")
             if expected_workspace and not same_workspace(loaded.workspace, expected_workspace):
                 raise ValueError("Session does not belong to the current workspace")
@@ -698,6 +710,7 @@ class PepsiCodeServer:
                 "pending_inputs": loaded.task_control.get("inbox", {}).get("pending", []),
                 "task": loaded.task_control.get("task"),
                 "workspace": session.cwd,
+                "profile": loaded.profile,
                 **session.model_settings(),
                 "permission_mode": session.permissions.mode.value if session.permissions else "default",
                 "access_mode": session.permissions.access_mode.value if session.permissions else "auto",
@@ -1290,8 +1303,9 @@ class PepsiCodeServer:
         try:
             async with websockets.serve(
                 handler, self.host, self.port, origins=[None, *self.allowed_origins], max_size=50 * 1024 * 1024
-            ):
-                print(f"pepsicode server listening on ws://{self.host}:{self.port}", flush=True)
+            ) as listener:
+                bound_port = listener.sockets[0].getsockname()[1]
+                print(f"pepsicode server listening on ws://{self.host}:{bound_port}", flush=True)
                 await asyncio.Future()  # run forever
         finally:
             await asyncio.gather(

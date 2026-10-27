@@ -1,0 +1,9 @@
+config*.json
+!config.example.json
+.env
+.env.*
+!.env.example
+state/
+logs/
+upstream-reference/
+.test-runtime/

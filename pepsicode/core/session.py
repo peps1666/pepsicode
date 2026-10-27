@@ -78,6 +78,7 @@ class SessionData:
     mcp_servers: list[dict[str, Any]] = field(default_factory=list)
     permission_mode: str = "default"
     access_mode: str = "auto"
+    profile: str = "default"
     plan_file_path: str | None = None
     model_settings: dict[str, str] = field(default_factory=dict)
     verification_state: dict[str, Any] | None = None
@@ -210,6 +211,7 @@ def _save_session_locked(session: SessionData) -> None:
         "mcp_servers": session.mcp_servers,
         "permission_mode": session.permission_mode,
         "access_mode": session.access_mode,
+        "profile": session.profile,
         "plan_file_path": session.plan_file_path,
         "model_settings": session.model_settings,
         "verification_state": session.verification_state,
@@ -297,6 +299,7 @@ def load_session(session_id: str) -> SessionData | None:
             mcp_servers=data.get("mcp_servers", []),
             permission_mode=data.get("permission_mode", "default"),
             access_mode=data.get("access_mode", "auto"),
+            profile=data.get("profile", "default"),
             plan_file_path=data.get("plan_file_path"),
             model_settings=data.get("model_settings", {}),
             verification_state=data.get("verification_state"),

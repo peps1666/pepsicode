@@ -46,3 +46,8 @@ python -m pepsicode.evals --mode smoke --output .evals/first-smoke
 - 检查被拒绝、用量未知或任务未完成：查看具体原因及 [任务验收说明](docs/task-orchestration.md)，不要把进程退出当成行为已验证。
 
 开发构建身份、成品验证与剩余限制见 [项目问题清单](docs/project-issues.md) 和 [执行边界](docs/harness-boundaries.md)。
+
+## QQ 私聊入口
+
+想把 Pepsi 加为 QQ 好友并通过私聊使用，可按 [QQ 接入指南](integrations/qq/README.md) 配置独立消息通道。
+该入口需要已登录的 OneBot v11 网关，首次使用先配置模型、你的 QQ 号和网关令牌。

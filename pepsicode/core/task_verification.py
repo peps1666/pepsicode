@@ -10,6 +10,7 @@ from functools import wraps
 from tempfile import TemporaryDirectory
 
 from pepsicode.core.loop_engine import VerificationResult
+from pepsicode.core.session_tree import current_session
 from pepsicode.core.task_control import edit_control, snapshot
 from pepsicode.core.workspace_state import digest, summary, task_paths, workspace_state
 from pepsicode.execution.filesystem import FILES
@@ -66,6 +67,28 @@ class TaskVerifier:
             and not task.get("required_artifacts")
             and not task.get("requirements", {}).get("behavior")
         )
+        session = current_session()
+        if (
+            plain_answer
+            and session is not None
+            and session.profile == "qq_private"
+            and tools.mutation_count <= self.project.turn_start_count
+        ):
+            # QQ conversation makes no claim about project behavior. Prior
+            # unverified work still remains pending for the next coding task;
+            # it must not force repository snapshots after every chat reply.
+            return self._verify(
+                messages=messages,
+                tools=tools,
+                cwd=cwd,
+                permissions=permissions,
+                project_report=VerificationResult(
+                    False,
+                    "Conversational answer; no edits or commands in this turn",
+                    status="not_run",
+                    reason_code="conversation_answer",
+                ),
+            )
         if (
             task
             and task["kind"] == "answer"
@@ -187,10 +210,12 @@ class TaskVerifier:
         }
         return report
 
-    def _verify(self, *, messages, tools, cwd, permissions):
+    def _verify(self, *, messages, tools, cwd, permissions, project_report=None):
         task = snapshot().get("task")
         ref = (task["id"], task["revision"]) if task else None
-        if task and task["kind"] == "answer" and task.get("classification", {}).get("read_only_request"):
+        if project_report is not None:
+            report = project_report
+        elif task and task["kind"] == "answer" and task.get("classification", {}).get("read_only_request"):
             report = VerificationResult(
                 False,
                 "Explanation-only request; no project programs executed",

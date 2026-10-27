@@ -75,6 +75,7 @@ class ProjectVerifier:
     ) -> None:
         self.runtime = runtime
         self.start_count = getattr(tools, "verified_mutation_count", 0)
+        self.turn_start_count = getattr(tools, "mutation_count", 0)
         self.cancellation_event = cancellation_event if cancellation_event is not None else threading.Event()
         self.on_tool_start = on_tool_start
         self.on_tool_result = on_tool_result

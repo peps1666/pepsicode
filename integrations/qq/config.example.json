@@ -1,0 +1,21 @@
+{
+  "ownerQQ": "123456789",
+  "botQQ": "",
+  "workspace": "../..",
+  "accessMode": "auto",
+  "onebot": {
+    "wsUrl": "ws://127.0.0.1:3001",
+    "tokenEnv": "PEPSI_QQ_ONEBOT_TOKEN"
+  },
+  "backend": {
+    "mode": "managed",
+    "python": "python"
+  },
+  "limits": {
+    "queueSize": 16,
+    "inputChars": 12000,
+    "messageChars": 2000,
+    "sendDelayMs": 500,
+    "outboxSize": 200
+  }
+}

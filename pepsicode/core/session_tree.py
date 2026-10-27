@@ -210,6 +210,7 @@ def copy_session(session: SessionData, *, entry_id: str | None = None, clone: bo
             "skills",
             "mcp_servers",
             "model_settings",
+            "profile",
             "verification_state",
             "execution_state",
             "task_control",

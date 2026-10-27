@@ -1,0 +1,16 @@
+{
+  "name": "pepsicode-qq",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "license": "MIT",
+  "description": "Pepsi private QQ friend, connected to the pepsicode agent server",
+  "engines": { "node": ">=22" },
+  "scripts": {
+    "start": "node src/main.js",
+    "check": "node src/main.js --check",
+    "test": "node --test tests/*.test.js && node vendor/qq-bridge/test-md-to-plain.mjs",
+    "test:e2e": "node --test tests/*.e2e.js"
+  },
+  "dependencies": { "ws": "^8.18.3" }
+}
