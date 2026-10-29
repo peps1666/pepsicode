@@ -18,7 +18,7 @@ python -m venv .venv
 
 macOS/Linux 使用 `.venv/bin/python`。必需依赖以 [pyproject.toml](pyproject.toml) 为准，目前包括 `psycopg2-binary` 和 `websockets`，安装时由 pip 解析；不是零依赖项目。开发测试使用 `pip install -e ".[dev]"`；可选语言服务使用 `pip install -e ".[intelligence]"`。
 
-配置通常放在用户目录的 `.pepsi-code/settings.json`；支持的项目设置与环境变量优先级见 [README 模型配置](README.md#模型配置)。推荐通过设置界面填写服务商、模型与 API Key；配置诊断仅输出是否已配置及来源，避免把真实凭据写进示例或报告。
+配置通常放在用户目录的 `.pepsi-code/settings.json`；支持的项目设置与环境变量优先级见 [模型配置](docs/configuration.md#模型配置)。推荐通过设置界面填写服务商、模型与 API Key；配置诊断仅输出是否已配置及来源，避免把真实凭据写进示例或报告。
 
 离线检查可使用 mock 模式，不调用付费接口：
 
