@@ -7,9 +7,9 @@
 pepsicode 提供一个独立的 Electron 桌面应用，采用白色主题界面，体验类似 Codex / Claude Desktop，可以在图形界面里选择项目文件夹并与代理对话。
 
 <p align="center">
-  <img src="../assets/desktop-client.jpg" alt="pepsicode 桌面客户端" width="900">
+  <img src="../assets/desktop-client.png" alt="pepsicode 桌面客户端" width="900">
   <br>
-  <sub>桌面客户端：左侧项目与历史会话，中间一轮带工具调用的对话，底部是模型、权限与实时用量</sub>
+  <sub>桌面客户端：项目列表、任务入口和底部的模型与权限选择</sub>
 </p>
 
 ## 架构
