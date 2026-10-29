@@ -23,17 +23,26 @@
 
 </div>
 
-<p align="center">
-  <img src="assets/tui.png" alt="pepsicode 终端界面" width="760">
-  <br>
-  <sub>终端界面</sub>
-</p>
+<div align="center">
 
-<p align="center">
-  <img src="assets/desktop-client.png" alt="pepsicode 桌面客户端" width="760">
-  <br>
-  <sub>桌面客户端</sub>
-</p>
+<table>
+  <tr>
+    <td align="center" valign="top">
+      <a href="assets/tui.png"><img src="assets/tui.png" width="458" height="240" alt="pepsicode 终端界面"></a>
+      <br>
+      <sub><b>终端 TUI</b></sub>
+    </td>
+    <td align="center" valign="top">
+      <a href="assets/desktop-client.png"><img src="assets/desktop-client.png" width="373" height="240" alt="pepsicode 桌面客户端"></a>
+      <br>
+      <sub><b>桌面客户端</b></sub>
+    </td>
+  </tr>
+</table>
+
+<sub>两种前端共享同一套代理内核 · 点击图片查看大图</sub>
+
+</div>
 
 > **English summary** — pepsicode is a Python coding agent for local development workflows, usable from a full-screen terminal UI or an Electron desktop client. It ships 38 built-in tools, LSP-backed code intelligence, an automatic verify-and-fix loop, permission modes with a read-only Plan mode, project-trusted Hooks v2, MCP / Skills / sub-agents, context compaction, multi-provider model switching, and a token-authenticated WebSocket server.
 
