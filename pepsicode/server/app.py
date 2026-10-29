@@ -70,7 +70,7 @@ from pepsicode.llm.model_settings import (
 from pepsicode.llm.provider_setup import probe_provider_setup, public_setup_result, save_provider_setup
 from pepsicode.llm.providers import model_settings_snapshot, provider_catalog, provider_runtime
 from pepsicode.logging_config import get_logger, setup_logging
-from pepsicode.permissions import PermissionManager, PermissionMode
+from pepsicode.permissions import PermissionManager
 from pepsicode.server import protocol
 from pepsicode.server.profiles import profile_prompt
 from pepsicode.server.security import authenticate
@@ -236,10 +236,12 @@ class ClientSession:
         self.tools = create_default_tool_registry(
             self.cwd, runtime=self.runtime, cost_tracker=self.cost_tracker, trace_manager=self.trace_manager
         )
+        from pepsicode.workspace_permissions import get_workspace_default
+
         self.permissions = PermissionManager(
             self.cwd,
             prompt=None,
-            mode=PermissionMode.AUTO,
+            mode=get_workspace_default(self.cwd),
             process_sandbox_mode=(self.runtime or {}).get("processSandboxMode", "danger-full-access"),
         )  # set later
         self.hook_engine = create_hook_engine(self.cwd, self.permissions)
@@ -716,6 +718,15 @@ class PepsiCodeServer:
                 "access_mode": session.permissions.access_mode.value if session.permissions else "auto",
                 "plan_file": session.permissions.plan_file_path if session.permissions else None,
             }
+
+        if method == "permissions/set_workspace_default":
+            if session._turn_lock.locked() or session._worker_active.is_set():
+                raise ValueError("Wait for the current turn to finish before changing permissions")
+            from pepsicode.workspace_permissions import set_workspace_default
+
+            mode = params.get("mode", "")
+            set_workspace_default(session.cwd, mode)
+            return {"workspace_default": mode}
 
         if method == "permissions/set":
             if session._turn_lock.locked() or session._worker_active.is_set():

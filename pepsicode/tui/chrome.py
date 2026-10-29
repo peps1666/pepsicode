@@ -509,13 +509,16 @@ def render_tool_panel(
 
 
 def render_footer_bar(
-    status: str | None, tools_enabled: bool, skills_enabled: bool, background_tasks: list[dict[str, Any]] | None = None
+    status: str | None, tools_enabled: bool, skills_enabled: bool, background_tasks: list[dict[str, Any]] | None = None,
+    mode: str = "auto", plan: bool = False,
 ) -> str:
     """Claude-style: minimal single-line footer."""
     if background_tasks is None:
         background_tasks = []
     width, _ = _cached_terminal_size()
-    left = render_status_line(status)
+    risk = " 高风险" if mode == "trust_commands" else ""
+    plan_label = " PLAN" if plan else ""
+    left = f"{YELLOW}mode: {mode}{risk}{plan_label}{RESET}  {render_status_line(status)}"
 
     parts = []
     if tools_enabled:
@@ -700,12 +703,27 @@ def colorize_edit_permission_details(details: list[str]) -> list[str]:
 
 def get_permission_prompt_max_scroll_offset(request: dict[str, Any], expanded: bool = False) -> int:
     """Calculate max scroll offset for permission details."""
-    if not expanded:
+    if not expanded and request.get("kind") != "command":
         return 0
-    flat = flatten_detail_lines(request.get("details", []))
+    flat = _permission_detail_lines(request)
     _, rows = _cached_terminal_size()
-    max_visible = max(4, rows - 20)
+    max_visible = _permission_max_visible(request, rows)
     return max(0, len(flat) - max_visible)
+
+
+def _permission_max_visible(request: dict[str, Any], rows: int) -> int:
+    return max(2, rows - len(request.get("choices", [])) - 9)
+
+
+def _permission_detail_lines(request: dict[str, Any]) -> list[str]:
+    details = list(request.get("details", []))
+    if request.get("kind") == "command" and request.get("scope"):
+        details.append(f"scope: {request['scope']}")
+    flat = flatten_detail_lines(details)
+    if request.get("kind") != "command":
+        return flat
+    width, _ = _cached_terminal_size()
+    return [wrapped for line in flat for wrapped in wrap_panel_body_line(line, max(8, width))]
 
 
 def flatten_detail_lines(details: list[str]) -> list[str]:
@@ -751,14 +769,15 @@ def render_permission_prompt(
         lines.extend([request.get("summary", "Permission Request"), ""])
         details = request.get("details", [])
         if details:
-            flat = flatten_detail_lines(details)
-            if not expanded:
+            flat = _permission_detail_lines(request)
+            if not expanded and request.get("kind") != "command":
                 lines.append(
                     f"{SUBTLE}  {ICON_ARROW} {len(flat)} lines hidden {SUBTLE}|{RESET} {DIM}press 'v' to expand | Ctrl+O toggle{RESET}"
                 )
             else:
                 colorized = colorize_edit_permission_details(flat)
-                visible, total = slice_visible_details(colorized, scroll_offset)
+                _, rows = _cached_terminal_size()
+                visible, total = slice_visible_details(colorized, scroll_offset, _permission_max_visible(request, rows))
                 lines.extend(visible)
                 if total > len(visible):
                     lines.append(

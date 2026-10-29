@@ -110,9 +110,10 @@ interface SessionState {
   verification: VerificationReport | null;
   task: TaskReport | null;
   cacheHitPercentage: number | null;
-  accessMode: "read_only" | "auto" | "full_access";
+  accessMode: "read_only" | "auto" | "trust_commands" | "full_access";
   permissionUpdating: boolean;
   updatePermissions: (mode: SessionState["accessMode"]) => Promise<void>;
+  setWorkspaceDefaultPermissions: (mode: SessionState["accessMode"]) => Promise<void>;
   messages: ChatMessage[];
   isRunning: boolean;
   isStopping: boolean;
@@ -320,6 +321,16 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     try {
       const result = await sendRequest(ws, "permissions/set", { mode });
       set({ accessMode: result.access_mode });
+    } finally {
+      set({ permissionUpdating: false });
+    }
+  },
+  setWorkspaceDefaultPermissions: async (mode) => {
+    const { ws } = useConnectionStore.getState();
+    if (!ws || get().isRunning || get().branchUpdating || get().permissionUpdating) throw new Error("当前无法保存工作区默认权限");
+    set({ permissionUpdating: true });
+    try {
+      await sendRequest(ws, "permissions/set_workspace_default", { mode });
     } finally {
       set({ permissionUpdating: false });
     }

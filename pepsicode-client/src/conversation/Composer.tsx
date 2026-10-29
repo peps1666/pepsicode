@@ -9,7 +9,8 @@ import PermissionPrompt from "./PermissionPrompt";
 
 const accessModes = {
   read_only: { label: "只读", description: "查看文件和搜索，禁止编辑及命令执行。" },
-  auto: { label: "自动", description: "项目内编辑免确认；越界、危险命令及外部写入仍需确认。" },
+  auto: { label: "自动", description: "项目内编辑免确认；本地命令、项目外访问和外部工具需确认。" },
+  trust_commands: { label: "命令免确认（高风险）", description: "所有程序以当前用户权限运行，可访问项目外文件和网络；内置工具访问项目外及外部工具仍需确认。" },
   full_access: { label: "完全访问", description: "编辑、命令和外部工具均免确认，可访问项目外的文件。" },
 };
 
@@ -23,13 +24,14 @@ interface ComposerProps {
 export default function Composer({ onSend, disabled, running, onOpenSettings }: ComposerProps) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const permissionsRef = useRef<HTMLDetailsElement>(null);
-  const { accessMode, permissionUpdating, updatePermissions, cacheHitPercentage, contextData, pendingInputs, draft: input, setDraft: setInput, removeQueuedInput, cancelTurn, isStopping } = useSessionStore();
+  const { accessMode, permissionUpdating, updatePermissions, setWorkspaceDefaultPermissions, cacheHitPercentage, contextData, pendingInputs, draft: input, setDraft: setInput, removeQueuedInput, cancelTurn, isStopping } = useSessionStore();
   const [inputMode, setInputMode] = useState<InputMode>("steer");
   const [submitting, setSubmitting] = useState(false);
   const [sendError, setSendError] = useState("");
   const contextPercent = contextData?.max_tokens ? contextData.usage_percentage : null;
   const estimated = contextData?.is_estimate || contextData?.window_is_estimate;
   const [permissionError, setPermissionError] = useState("");
+  const [permissionNotice, setPermissionNotice] = useState("");
   const [permissionsOpen, setPermissionsOpen] = useState(false);
   const { commands, refreshCommands, commandDiagnostics, commandError, cwd } = useSessionStore();
   const { model, models, reasoningEffort, isMock } = useSessionStore();
@@ -199,6 +201,13 @@ export default function Composer({ onSend, disabled, running, onOpenSettings }: 
                   <small>{mode.description}</small>
                 </button>
               ))}
+              <button type="button" disabled={disabled || running || permissionUpdating} onClick={() => {
+                setPermissionError("");
+                setPermissionNotice("");
+                void setWorkspaceDefaultPermissions(accessMode)
+                  .then(() => { setPermissionNotice("已保存工作区默认权限，适用于新会话"); setPermissionsOpen(false); })
+                  .catch((error) => setPermissionError(error instanceof Error ? error.message : String(error)));
+              }}><span>将当前模式设为工作区默认</span><small>仅影响此工作区的新会话，不更改当前会话。</small></button>
             </div>
           </details>
           {running && (
@@ -233,6 +242,7 @@ export default function Composer({ onSend, disabled, running, onOpenSettings }: 
         <div className={styles.hint}>{running ? "响应及工具结束后处理补充指令 · Alt+Enter 排队 · 停止后取回未执行输入" : "Enter 发送 · Shift+Enter 换行"}</div>
       </div>
       {permissionError && <div className={styles.modeHint} role="alert">{permissionError}</div>}
+      {permissionNotice && <div className={styles.modeHint} role="status">{permissionNotice}</div>}
     </div>
   );
 }

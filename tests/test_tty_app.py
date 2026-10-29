@@ -197,11 +197,26 @@ def test_stream_screen_anchors_input_and_limits_menu(monkeypatch, capsys) -> Non
     monkeypatch.setattr(app, "_get_terminal_size", lambda: (40, 12))
     monkeypatch.setattr(chrome, "_cached_terminal_size", lambda: (40, 12))
     args = SimpleNamespace(
-        runtime={"model": "test-model"}, cwd="E:/Code/demo", permissions=SimpleNamespace(is_plan_mode=False)
+        runtime={"model": "test-model"}, cwd="E:/Code/demo", permissions=SimpleNamespace(is_plan_mode=False, access_mode=SimpleNamespace(value="auto"))
     )
     state = app.ScreenState(input="/", transcript=[TranscriptEntry(id=1, kind="user", body="hello")])
     app._render_stream_screen(args, state)
     frame = _initial_frame_text(capsys.readouterr().out)
     assert len(frame.splitlines()) == 12
     assert "demo" in frame.splitlines()[-1]
+    assert "mode: auto" in frame.splitlines()[-1]
     assert "> /" in frame
+
+
+def test_stream_footer_shows_trusted_mode_during_plan(monkeypatch, capsys):
+    from pepsicode.tui import app, chrome
+
+    monkeypatch.setattr(app, "_get_terminal_size", lambda: (80, 15))
+    monkeypatch.setattr(chrome, "_cached_terminal_size", lambda: (80, 15))
+    args = SimpleNamespace(runtime={"model": "test-model"}, cwd="E:/Code/demo", permissions=SimpleNamespace(
+        is_plan_mode=True, access_mode=SimpleNamespace(value="trust_commands")
+    ))
+    state = app.ScreenState()
+    app._render_stream_screen(args, state)
+    frame = _initial_frame_text(capsys.readouterr().out)
+    assert "mode: trust_commands 高风险 PLAN" in frame.splitlines()[-1]

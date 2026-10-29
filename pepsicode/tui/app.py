@@ -1010,7 +1010,7 @@ def _reset_scroll_if_needed(state: ScreenState) -> None:
 
 def _scroll_pending_approval_by(state: ScreenState, delta: int) -> bool:
     pending = state.pending_approval
-    if not pending or not pending.details_expanded:
+    if not pending or (not pending.details_expanded and pending.request.get("kind") != "command"):
         return False
     max_offset = get_permission_prompt_max_scroll_offset(pending.request, expanded=True)
     next_offset = max(0, min(max_offset, pending.details_scroll_offset + delta))
@@ -1118,6 +1118,8 @@ def _render_footer_cached(
     tools_enabled: bool,
     skills_enabled: bool,
     background_tasks: list[dict[str, Any]],
+    mode: str = "auto",
+    plan: bool = False,
 ) -> str:
     """Render the bottom status bar with caching to reduce flicker.
 
@@ -1128,12 +1130,14 @@ def _render_footer_cached(
         tools_enabled,
         skills_enabled,
         len(background_tasks),
+        mode,
+        plan,
         _cached_terminal_size(),
     )
     cached = _footer_cache.get("key")
     if cached and cached[0] == cache_key:
         return cached[1]
-    result = render_footer_bar(status, tools_enabled, skills_enabled, background_tasks)
+    result = render_footer_bar(status, tools_enabled, skills_enabled, background_tasks, mode, plan)
     _footer_cache["key"] = (cache_key, result)
     return result
 
@@ -1221,6 +1225,14 @@ def _render_home_brand(cols: int, rows: int) -> list[str]:
     return lines
 
 
+def _permission_mode_label(args: TtyAppArgs) -> str:
+    permissions = getattr(args, "permissions", None)
+    mode = getattr(getattr(permissions, "access_mode", None), "value", "auto")
+    risk = " 高风险" if mode == "trust_commands" else ""
+    plan = " PLAN" if getattr(permissions, "is_plan_mode", False) else ""
+    return f"{YELLOW}mode: {mode}{risk}{plan}{RESET}"
+
+
 def _render_home_screen(args: TtyAppArgs, state: ScreenState, cols: int, rows: int) -> None:
     """Fill the viewport with welcome content above a bottom-anchored composer."""
     runtime = args.runtime or {}
@@ -1261,7 +1273,7 @@ def _render_home_screen(args: TtyAppArgs, state: ScreenState, cols: int, rows: i
     exit_hint = (
         "Press Ctrl+C again to exit" if state.exit_requested_at is not None else "/help for commands · /exit to quit"
     )
-    frame.append(f"  {SUBTLE}{exit_hint}{RESET}")
+    frame.append(f"  {_permission_mode_label(args)}  {SUBTLE}{exit_hint}{RESET}")
     frame = _truncate_frame_lines(frame, cols, rows)
     state.frame_renderer.draw(frame, cols, rows)
 
@@ -1547,7 +1559,7 @@ def _render_stream_screen(args: TtyAppArgs, state: ScreenState) -> None:
             cols,
             rows - 1,
         )
-        footer = f"  {SUBTLE}{Path(args.cwd).name or args.cwd}{RESET}  {SUBTLE}{len(state.resume_picker_sessions)} saved sessions{RESET}"
+        footer = f"  {_permission_mode_label(args)}  {SUBTLE}{Path(args.cwd).name or args.cwd}{RESET}  {SUBTLE}{len(state.resume_picker_sessions)} saved sessions{RESET}"
         state.frame_renderer.draw(frame + [footer], cols, rows)
         return
 
@@ -1594,11 +1606,11 @@ def _render_stream_screen(args: TtyAppArgs, state: ScreenState) -> None:
     sep = f"  {SUBTLE}{'─' * max(1, cols - 4)}{RESET}"
 
     cwd_name = Path(args.cwd).name or args.cwd
-    mode_label = f"  {YELLOW}PLAN{RESET}" if args.permissions.is_plan_mode else ""
+    mode_label = _permission_mode_label(args)
     notice = f"  {ACCENT}{state.selection_notice}{RESET}" if state.selection_notice else ""
-    footer = f"  {SUBTLE}{cwd_name}{RESET}  {SUBTLE}{msg_count} events{RESET}{mode_label}  {SUBTLE}{DISPLAY_VERSION}{RESET}{notice}"
+    footer = f"  {mode_label}  {SUBTLE}{cwd_name}{RESET}  {SUBTLE}{msg_count} events{RESET}  {SUBTLE}{DISPLAY_VERSION}{RESET}{notice}"
     if state.exit_requested_at is not None:
-        footer = f"  {YELLOW}Press Ctrl+C again within 2s to exit · /exit to quit{RESET}"
+        footer = f"  {mode_label}  {YELLOW}Press Ctrl+C again within 2s to exit · /exit to quit{RESET}"
 
     reserved = len(input_lines) + 2
     transcript_height = rows - reserved
@@ -1684,7 +1696,7 @@ def _render_screen(args: TtyAppArgs, state: ScreenState) -> None:
             )
         )
         buf.append("\n\n")
-        buf.append(_render_footer_cached(state.status, True, has_skills, background_tasks))
+        buf.append(_render_footer_cached(state.status, True, has_skills, background_tasks, args.permissions.access_mode.value, args.permissions.is_plan_mode))
         state.frame_renderer.draw("".join(buf).splitlines(), cols, rows)
         return
 
@@ -1712,7 +1724,7 @@ def _render_screen(args: TtyAppArgs, state: ScreenState) -> None:
     buf.append("\n\n")
 
     # Footer (cached)
-    buf.append(_render_footer_cached(state.status, True, has_skills, background_tasks))
+    buf.append(_render_footer_cached(state.status, True, has_skills, background_tasks, args.permissions.access_mode.value, args.permissions.is_plan_mode))
 
     # Contextual help line
     if contextual_help:

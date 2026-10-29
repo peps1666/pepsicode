@@ -24,6 +24,17 @@ test("approval presents the exact command and accurate Chinese scopes",()=>{
   assert.equal(permissionChoice({...request,kind:"edit"},{decision:"allow_turn"}).label,"本轮允许此文件");
 });
 
+test("long command and scope are available without expanding details",async()=>{
+  const command="git status "+"argument ".repeat(80)+"END";
+  const renderer=await render({request:{...request,scope:command,details:["cwd: D:\\project",`command: ${command}`]},approve:async()=>{}});
+  const previews=renderer.root.findAllByType("pre").filter(node=>text(node)===command);
+  assert.equal(previews.length,1);
+  assert.equal(previews[0].props.className,undefined);
+  assert.equal(button(renderer,"展开完整内容"),undefined);
+  assert.ok(text(renderer.root).includes(`授权范围: ${command}`));
+  act(()=>renderer.unmount());
+});
+
 test("only a deliberate click approves; duplicate clicks are locked and failed submissions can retry",async()=>{
   let reject,calls=0;
   const renderer=await render({approve:()=>{calls++;return new Promise((resolve,no)=>{reject=no;});}});

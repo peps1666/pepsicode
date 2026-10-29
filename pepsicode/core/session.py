@@ -378,13 +378,18 @@ def cleanup_old_sessions(max_sessions: int = 50) -> int:
 
 def create_new_session(workspace: str) -> SessionData:
     """Create a new empty session."""
+    from pepsicode.workspace_permissions import get_workspace_default
+
     now = time.time()
     session_id = uuid.uuid4().hex[:12]
+    mode = get_workspace_default(workspace)
     return SessionData(
         session_id=session_id,
         created_at=now,
         updated_at=now,
         workspace=workspace,
+        access_mode=mode,
+        permission_mode=mode,
     )
 
 

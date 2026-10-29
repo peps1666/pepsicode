@@ -88,6 +88,29 @@ def test_render_permission_prompt_lists_choices() -> None:
     assert "allow once" in rendered
 
 
+def test_command_approval_details_are_visible_and_scrollable(monkeypatch) -> None:
+    from pepsicode.tui import chrome
+
+    monkeypatch.setattr(chrome, "_cached_terminal_size", lambda: (48, 16))
+    command = "git status " + "long-argument-" * 15 + "END"
+    request = {
+        "kind": "command",
+        "summary": "Need approval",
+        "details": ["cwd: C:/project", f"command: {command}", "reason: process"],
+        "scope": "exact command",
+        "choices": [{"key": "y", "label": "allow once"}],
+    }
+    first = chrome.strip_ansi(chrome.render_permission_prompt(request))
+    assert "cwd: C:/project" in first
+    assert "command: git status" in first
+    assert "lines hidden" not in first
+    offset = chrome.get_permission_prompt_max_scroll_offset(request)
+    assert offset > 0
+    last = chrome.strip_ansi(chrome.render_permission_prompt(request, scroll_offset=offset))
+    assert "END" in last
+    assert "scope: exact command" in last
+
+
 @pytest.mark.parametrize("width", [0, 1, 2, 3, 8])
 def test_truncation_fits_small_column_budgets(width) -> None:
     from pepsicode.tui.chrome import string_display_width, truncate_plain

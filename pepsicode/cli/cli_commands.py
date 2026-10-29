@@ -222,17 +222,30 @@ def try_handle_local_command(
         if permissions is None:
             return "Permissions unavailable."
         parts = user_input.split()
+        if len(parts) >= 2 and parts[1] == "default":
+            if len(parts) != 3:
+                return "Usage: /permissions default [read_only|auto|trust_commands|full_access]"
+            from pepsicode.workspace_permissions import set_workspace_default
+
+            try:
+                set_workspace_default(permissions.workspace_root, parts[2])
+            except ValueError as error:
+                return str(error)
+            except OSError as error:
+                return f"保存工作区默认权限失败：{error}"
+            return f"工作区新会话默认权限已设为 {parts[2]}；当前会话不变。"
         if len(parts) > 1:
             if len(parts) != 2:
-                return "Usage: /permissions [read_only|auto|full_access]"
+                return "Usage: /permissions [read_only|auto|trust_commands|full_access]"
             try:
                 permissions.set_access_mode(parts[1])
             except ValueError:
-                return "Usage: /permissions [read_only|auto|full_access]"
+                return "Usage: /permissions [read_only|auto|trust_commands|full_access]"
         return (
             f"权限模式: {permissions.access_mode.value}\n"
             "read_only · 只读：查看文件和搜索，禁止编辑及命令执行\n"
-            "auto · 自动：项目内编辑免确认，越界、危险命令及外部写入仍确认\n"
+            "auto · 自动：项目内编辑免确认；本地命令、项目外访问和外部工具需确认\n"
+            "trust_commands · 命令免确认（高风险）：所有程序以当前用户权限运行，可访问项目外文件和网络；内置工具访问项目外及外部工具仍需确认\n"
             "full_access · 完全访问：编辑、命令与外部工具均免确认\n"
             f"permission store: {PEPSI_CODE_PERMISSIONS_PATH}"
         )

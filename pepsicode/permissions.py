@@ -66,6 +66,7 @@ PermissionDecision = str  # one of ApprovalDecision values
 class PermissionMode(str, Enum):
     READ_ONLY = "read_only"
     AUTO = "auto"
+    TRUST_COMMANDS = "trust_commands"
     FULL_ACCESS = "full_access"
     # Legacy callers can retain per-file approval; new sessions use AUTO.
     DEFAULT = "default"
@@ -84,6 +85,10 @@ _MCP_INPUT_PREVIEW_CHARS = 600
 
 def _normalize_path(target_path: str) -> str:
     return str(Path(target_path).resolve())
+
+
+def _command_grant_key(command: str, args: list[str], cwd: str) -> str:
+    return json.dumps([_normalize_path(cwd), command, args], ensure_ascii=False)
 
 
 def _is_within_directory(root: str, target: str) -> bool:
@@ -214,8 +219,13 @@ class PermissionManager:
     def set_access_mode(self, mode: str) -> None:
         self._task_command_grants.clear()
         candidate = PermissionMode(mode)
-        if candidate not in {PermissionMode.READ_ONLY, PermissionMode.AUTO, PermissionMode.FULL_ACCESS}:
-            raise ValueError("Choose read_only, auto, or full_access")
+        if candidate not in {
+            PermissionMode.READ_ONLY,
+            PermissionMode.AUTO,
+            PermissionMode.TRUST_COMMANDS,
+            PermissionMode.FULL_ACCESS,
+        }:
+            raise ValueError("Choose read_only, auto, trust_commands, or full_access")
         if self.is_plan_mode:
             self.previous_mode = candidate
         else:
@@ -549,6 +559,15 @@ class PermissionManager:
         if path_outcome.is_denied or path_outcome.is_unavailable:
             return path_outcome
 
+        if self.mode == PermissionMode.TRUST_COMMANDS:
+            # Trust applies to processes, but an explicit denial for this exact
+            # command and working directory remains authoritative.
+            grant_key = _command_grant_key(command, args, command_cwd)
+            cached = self.store.lookup(ApprovalKind.COMMAND, grant_key)
+            if cached is not None and cached.is_denied:
+                return cached
+            return ApprovalOutcome(decision=ApprovalDecision.ALLOW_ONCE)
+
         # 2. Dangerous-command classification
         reason = force_prompt_reason or classify_dangerous_command(command, args)
         if not reason:
@@ -556,7 +575,7 @@ class PermissionManager:
 
         # 3. Check cache
         signature = format_command_signature(command, args)
-        grant_key = json.dumps([_normalize_path(command_cwd), command, args], ensure_ascii=False)
+        grant_key = _command_grant_key(command, args, command_cwd)
         try:
             task_key = self._task_command_key(command, args, command_cwd, environment, verification)
         except (OSError, ValueError):
@@ -697,7 +716,7 @@ class PermissionManager:
         if cached is not None:
             return cached
 
-        if self.mode == PermissionMode.AUTO:
+        if self.mode in {PermissionMode.AUTO, PermissionMode.TRUST_COMMANDS}:
             # Path approval already expresses consent to edit outside the
             # workspace; do not ask again for the same file modification.
             return self.check_path_access(normalized, "write")

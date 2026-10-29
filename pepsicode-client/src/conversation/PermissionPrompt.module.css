@@ -13,6 +13,7 @@
 .expand:hover { background: var(--dsw-alias-interactive-bg-hover); }
 .cwd { display: flex; align-items: center; gap: 5px; margin: 7px 0 0; font-size: 10px; color: var(--dsw-alias-label-tertiary); overflow-wrap: anywhere; }
 .cwd svg { flex-shrink: 0; }
+.scope { margin: 7px 0 0; font-size: 11px; color: var(--dsw-alias-label-secondary); white-space: pre-wrap; overflow-wrap: anywhere; }
 .details { margin-top: 8px; font-size: 11px; color: var(--dsw-alias-label-tertiary); }
 .details summary { cursor: pointer; padding: 4px 0; }
 .details pre { padding: 8px 0; }

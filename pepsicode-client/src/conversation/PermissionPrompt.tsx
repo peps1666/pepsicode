@@ -25,7 +25,7 @@ export function PermissionCard({ request, approve }: {
   const once = request.choices.find(choice => choice.decision === "allow_once");
   const deny = request.choices.find(choice => choice.decision === "deny_once");
   const others = request.choices.filter(choice => choice !== once && choice !== deny);
-  const longPreview = presentation.preview.length > 180 || presentation.preview.split("\n").length > 3;
+  const longPreview = request.kind !== "command" && (presentation.preview.length > 180 || presentation.preview.split("\n").length > 3);
 
   useEffect(() => {
     const previous = document.activeElement as HTMLElement | null;
@@ -55,6 +55,7 @@ export function PermissionCard({ request, approve }: {
         {longPreview && <button type="button" className={styles.expand} aria-expanded={expanded} onClick={() => setExpanded(value => !value)}>{expanded ? "收起命令" : "展开完整内容"}</button>}
       </div>}
       {presentation.cwd && <p className={styles.cwd} title={presentation.cwd}><Icon name="folder" size={12} />{presentation.cwd}</p>}
+      {request.kind === "command" && request.scope && <p className={styles.scope}>授权范围: {request.scope}</p>}
       <details className={styles.details}><summary>查看请求详情</summary><pre>{[request.summary, ...request.details, request.scope ? `授权范围: ${request.scope}` : ""].filter(Boolean).join("\n")}</pre></details>
       {showOptions && !showFeedback && <div className={styles.options} role="group" aria-label="其他授权方式">
         {others.map(choice => {

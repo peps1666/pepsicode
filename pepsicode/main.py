@@ -260,10 +260,12 @@ def main() -> None:
     tools = create_default_tool_registry(
         cwd, runtime=runtime, cost_tracker=cost_tracker, trace_manager=trace_manager
     )  # 创建工具注册表，传入当前工作目录和运行时配置，工具注册表负责管理可用的技能和 MCP 服务器
+    from pepsicode.workspace_permissions import get_workspace_default
+
     permissions = PermissionManager(
         cwd,
         prompt=prompt_handler,
-        mode="auto",
+        mode=get_workspace_default(cwd),
         process_sandbox_mode=(runtime or {}).get("processSandboxMode", "danger-full-access"),
     )
     hook_engine = create_hook_engine(cwd, permissions)

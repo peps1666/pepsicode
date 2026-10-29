@@ -158,7 +158,7 @@ def test_permissions_menu_opens_from_slash_selection_and_marks_current(tmp_path,
     assert picker.kind == "permissions"
     assert picker.current == "auto"
     assert picker.selected == 1
-    assert [option.value for option in picker.options] == ["read_only", "auto", "full_access"]
+    assert [option.value for option in picker.options] == ["read_only", "auto", "trust_commands", "full_access"]
     screen = "\n".join(render_settings_picker(picker, 90, 20))
     assert "自动  √ 当前" in screen
     assert "保存为新会话默认" not in screen
@@ -167,13 +167,13 @@ def test_permissions_menu_opens_from_slash_selection_and_marks_current(tmp_path,
     assert picker.current == "auto"
     assert manager.access_mode == PermissionMode.AUTO
     _handle_settings_picker_event(args, state, KeyEvent("return", False, False), lambda: None)
-    assert manager.access_mode == PermissionMode.FULL_ACCESS
-    assert state.session.access_mode == "full_access"
+    assert manager.access_mode == PermissionMode.TRUST_COMMANDS
+    assert state.session.access_mode == "trust_commands"
     assert state.settings_picker is None
     _handle_input(args, state, lambda: None, "/permissions")
-    assert state.settings_picker.current == "full_access"
-    assert "完全访问  √ 当前" in "\n".join(render_settings_picker(state.settings_picker, 90, 20))
+    assert state.settings_picker.current == "trust_commands"
+    assert "命令免确认（高风险）  √ 当前" in "\n".join(render_settings_picker(state.settings_picker, 90, 20))
     _handle_settings_picker_event(args, state, KeyEvent("up", False, False), lambda: None)
     _handle_settings_picker_event(args, state, KeyEvent("escape", False, False), lambda: None)
     assert state.settings_picker is None
-    assert manager.access_mode == PermissionMode.FULL_ACCESS
+    assert manager.access_mode == PermissionMode.TRUST_COMMANDS
