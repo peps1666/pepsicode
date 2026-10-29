@@ -1,0 +1,54 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-labelledby="pepsicode-logo-title">
+  <title id="pepsicode-logo-title">pepsicode</title>
+  <defs>
+    <style>
+      .face {
+        animation: pepsicode-bob 6.5s ease-in-out infinite;
+        transform-box: fill-box;
+        transform-origin: center;
+      }
+      .eye {
+        animation: pepsicode-blink 5.2s infinite;
+        transform-box: fill-box;
+        transform-origin: center;
+      }
+      .nose {
+        animation: pepsicode-breathe 3.2s ease-in-out infinite;
+      }
+      .mouth {
+        animation: pepsicode-mouth 3.2s ease-in-out infinite;
+      }
+      @keyframes pepsicode-bob {
+        0%, 100% { transform: translateY(0); }
+        50% { transform: translateY(-6px); }
+      }
+      @keyframes pepsicode-blink {
+        0%, 91%, 100% { transform: scaleY(1); }
+        93%, 95% { transform: scaleY(0.08); }
+      }
+      @keyframes pepsicode-breathe {
+        0%, 100% { opacity: 1; }
+        50% { opacity: 0.55; }
+      }
+      @keyframes pepsicode-mouth {
+        0%, 100% { opacity: 0.85; }
+        50% { opacity: 0.45; }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        .face, .eye, .nose, .mouth { animation: none; }
+      }
+    </style>
+  </defs>
+  <rect width="512" height="512" rx="112" fill="#292925"/>
+  <g class="face" fill="none" stroke="#ffd7af" stroke-width="18" stroke-linecap="round" stroke-linejoin="round">
+    <polyline points="137,208 151,114 221,176 291,176 361,114 375,208"/>
+    <polyline points="117,227 100,247 95,274 100,302 117,323"/>
+    <polyline points="395,227 412,247 417,274 412,302 395,323"/>
+    <circle class="eye" cx="201" cy="264" r="17" fill="#ffd7af" stroke="none"/>
+    <circle class="eye" cx="311" cy="264" r="17" fill="#ffd7af" stroke="none"/>
+    <circle class="nose" cx="256" cy="290" r="8" fill="#ffd7af" stroke="none"/>
+    <polyline points="165,352 191,369 165,386"/>
+    <polyline points="347,352 321,369 347,386"/>
+    <polyline class="mouth" points="240,379 256,361 272,379" stroke-width="13"/>
+  </g>
+</svg>

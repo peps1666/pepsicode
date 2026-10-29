@@ -1,5 +1,10 @@
 <div align="center">
 
+<picture>
+  <source media="(prefers-reduced-motion: reduce)" srcset="assets/logo.png">
+  <img src="assets/logo.gif" width="112" height="112" alt="pepsicode logo">
+</picture>
+
 # pepsicode
 
 **把「想清楚 → 改完 → 验证通过」走完一遍的本地编程代理**
