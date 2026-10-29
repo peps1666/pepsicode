@@ -5,11 +5,14 @@ from pepsicode.llm.assistant_text import parse_assistant_text
 from .chrome import (
     ACCENT,
     BOLD,
+    BORDER,
     BRIGHT_RED,
+    CYAN,
     DIM,
     GREEN,
     ICON_DIVIDER,
     ICON_DOT,
+    RED,
     RESET,
     SUBTLE,
     YELLOW,
@@ -58,6 +61,7 @@ _TOOL_LABELS = {
     "patch_file": "Patch file",
     "run_command": "Run command",
     "search_files": "Search files",
+    "grep_files": "Search files",
     "list_files": "List files",
     "file_tree": "Explore files",
     "web_fetch": "Fetch page",
@@ -66,57 +70,167 @@ _TOOL_LABELS = {
 }
 
 
+_DIFF_TOOLS = frozenset({"edit_file", "patch_file", "write_file", "diff_viewer"})
+
+
+def _tool_status(entry: TranscriptEntry) -> tuple[str, str, str]:
+    """Return the ``(color, icon, label)`` used by the header."""
+    if entry.status == "running":
+        return YELLOW, "·", "running"
+    if entry.status == "error":
+        return BRIGHT_RED, "!", "failed"
+    if entry.status == "success":
+        return GREEN, "✓", "done"
+    return SUBTLE, "·", ""
+
+
+def _tool_summary(entry: TranscriptEntry, name: str) -> str:
+    """Turn the raw input summary into a compact header target."""
+    summary = entry.toolSummary or (entry.body if entry.status == "running" else "")
+    summary = " ".join(strip_ansi(summary).split())
+    if summary == name:
+        return ""
+    if summary.startswith(name + " "):
+        summary = summary[len(name) + 1 :]
+    return summary.removeprefix("path=").strip()
+
+
+def _render_tool_header(
+    name: str,
+    label: str,
+    summary: str,
+    cols: int,
+    color: str,
+    icon: str,
+    status: str,
+) -> str:
+    """Build a one-line header with an optional trailing status.
+
+    The last terminal column is left unused, matching FrameRenderer, so a
+    full-width row cannot wrap. Narrow terminals drop the status before they
+    truncate the operation itself.
+    """
+    available = max(1, cols - 1)
+    right = f"{color}{status}{RESET}" if status else ""
+    right_width = string_display_width(right)
+    if right and available - right_width - 2 < 12:
+        right, right_width = "", 0
+    lead = f"{icon} {label}"
+    lead_width = string_display_width(lead)
+    # On narrow screens, showing what ran is more useful than showing "done".
+    # Drop the status only when doing so actually makes room for the target.
+    target_with_status = available - right_width - 2 - 2 - lead_width - 2
+    target_without_status = available - 2 - lead_width - 2
+    if right and summary and target_with_status < 4 <= target_without_status:
+        right, right_width = "", 0
+    left_budget = available - right_width - (2 if right else 0)
+    lead_budget = max(1, left_budget - 2)
+    if lead_width > lead_budget:
+        lead = truncate_plain(lead, lead_budget)
+        left = f"  {color}{lead}{RESET}"
+    else:
+        left = f"  {color}{icon}{RESET} {BOLD}{label}{RESET}"
+        target_budget = lead_budget - string_display_width(lead) - 2
+        if summary and target_budget >= 4:
+            target = summary
+            if name == "run_command" and not target.startswith("$"):
+                target = f"$ {target}"
+            target = truncate_plain(target, target_budget)
+            style = ACCENT if name == "run_command" else SUBTLE
+            left += f"  {style}{target}{RESET}"
+    if string_display_width(left) > left_budget:
+        left = truncate_plain(left, left_budget)
+    if not right:
+        return left
+    # Keep status close enough to read as part of the row; on wide terminals a
+    # far-right status would float away from short tool names.
+    gap = min(4, max(2, available - string_display_width(left) - right_width))
+    return f"{left}{' ' * gap}{right}"
+
+
+def _output_style(name: str, line: str) -> str:
+    """Add a little semantic color without guessing at arbitrary output."""
+    stripped = line.lstrip()
+    if stripped.startswith(("ERROR:", "Error:", "error:")):
+        return BRIGHT_RED
+    if name in _DIFF_TOOLS:
+        if stripped.startswith(("+++", "---", "@@")):
+            return CYAN
+        if stripped.startswith("+"):
+            return GREEN
+        if stripped.startswith("-"):
+            return RED
+    return ""
+
+
 def render_tool_activity(entry: TranscriptEntry, cols: int) -> list[str]:
-    """Render a stable operation row and a bounded result preview in either TUI."""
+    """Render a tool call as a compact header plus a left-railed output well."""
     cols = max(8, cols)
     name = entry.toolName or "tool"
     label = _TOOL_LABELS.get(name, name)
     running = entry.status == "running"
     failed = entry.status == "error"
-    color, icon, status = (
-        (YELLOW, "·", "running") if running else ((BRIGHT_RED, "!", "failed") if failed else (GREEN, "✓", "done"))
-    )
-    summary = entry.toolSummary or (entry.body if running else "")
-    summary = " ".join(strip_ansi(summary).split())
-    if summary == name:
-        summary = ""
-    elif summary.startswith(name + " "):
-        summary = summary[len(name) + 1 :].removeprefix("path=")
-    suffix = f"  {color}{status}{RESET}"
-    left = f"  {color}{icon}{RESET} {BOLD}{label}{RESET}"
-    budget = max(1, cols - string_display_width(suffix))
-    remaining = budget - string_display_width(left) - 2
-    if summary and remaining > 4:
-        left += f"  {SUBTLE}{truncate_plain(summary, remaining)}{RESET}"
-    lines = [truncate_plain(truncate_plain(left, budget) + suffix, cols)]
-    if running:
-        return lines
+    color, icon, status = _tool_status(entry)
+    summary = _tool_summary(entry, name)
+    header = _render_tool_header(name, label, summary, cols, color, icon, status)
 
-    if entry.collapsed and not failed:
-        body = entry.collapsedSummary or "No output"
-        lines.append(f"    {SUBTLE}└ {truncate_plain(body, max(1, cols - 6))}{RESET}")
-        return lines
-    if entry.collapsePhase and not failed:
-        phase = truncate_plain(f"└ collapsing{'.' * entry.collapsePhase}", max(1, cols - 4))
-        lines.append(f"    {SUBTLE}{phase}{RESET}")
-        return lines
+    # Two spaces, one rail cell, one gutter, and one unused terminal column.
+    content_width = max(1, cols - 5)
+    rail = BRIGHT_RED if failed else BORDER
+
+    def row(prefix: str, text: str, style: str = "") -> str:
+        text = truncate_plain(strip_ansi(text).expandtabs(4), content_width)
+        if not text:
+            return f"  {rail}{prefix}{RESET}"
+        return f"  {rail}{prefix}{RESET} {style}{text}{RESET}"
+
+    def body_row(text: str, style: str = "") -> str:
+        return row("│", text, style)
+
+    def close_row(text: str, style: str = SUBTLE) -> str:
+        return row("╰", text, style)
+
+    if running:
+        return [header]
+
+    # Shell output is the primary content of a command card. Other tools keep
+    # their existing collapsed summaries, while failures always show details.
+    if entry.collapsed and not failed and (name != "run_command" or not entry.toolSummary):
+        body = " ".join(strip_ansi(entry.collapsedSummary or "").split()) or "No output"
+        return [header, close_row(body)]
+
+    if entry.collapsePhase and not entry.collapsed and not failed:
+        return [header, close_row(f"collapsing{'.' * entry.collapsePhase}")]
+
+    # Drop leading/trailing blank rows so the well starts and ends on content.
+    raw_lines = (entry.body or "").splitlines()
+    while raw_lines and not raw_lines[0].strip():
+        raw_lines.pop(0)
+    while raw_lines and not raw_lines[-1].strip():
+        raw_lines.pop()
+    if not raw_lines:
+        return [header, close_row("No output")]
 
     # Bound physical rows, including a single very long line on a narrow screen.
     max_rows = 8 if failed else 6
-    output: list[str] = []
+    output: list[tuple[str, str]] = []
     truncated = False
-    for raw in (entry.body or "No output").splitlines():
-        parts = wrap_text(raw, max(2, cols - 6)).split("\n")
-        output.extend(parts[: max_rows + 1 - len(output)])
-        if len(output) > max_rows:
-            truncated = True
+    for raw in raw_lines:
+        style = _output_style(name, raw)
+        parts = wrap_text(strip_ansi(raw).expandtabs(4), content_width).split("\n")
+        for part in parts:
+            if len(output) >= max_rows:
+                truncated = True
+                break
+            output.append((part, style))
+        if truncated:
             break
-    for index, part in enumerate(output[:max_rows]):
-        marker = "└ " if index == 0 else "  "
-        lines.append(f"    {SUBTLE}{marker}{part}{RESET}")
+
+    lines = [header]
+    lines.extend(body_row(part, style or SUBTLE) for part, style in output)
     if truncated:
-        hint = "… full output: /transcript-save <path>"
-        lines.append(f"    {SUBTLE}{truncate_plain(hint, max(1, cols - 4))}{RESET}")
+        hint = "… output continues · /transcript-save <path>" if content_width > 3 else "…"
+        lines.append(close_row(hint))
     return lines
 
 

@@ -156,7 +156,7 @@ def test_stream_transcript_renders_conversation_timeline() -> None:
 
     assert "fix tests" in plain
     assert "Sure, I will check them." in plain
-    assert "pytest  done" in plain
+    assert re.search(r"✓ pytest\s+done", plain)
     assert "pytest passed" in plain
 
 

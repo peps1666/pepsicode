@@ -68,3 +68,53 @@ def test_old_transcript_entry_without_summary_still_renders():
         **{"id": 1, "kind": "tool", "toolName": "read_file", "status": "success", "body": "legacy output"}
     )
     assert "legacy output" in strip_ansi("\n".join(render_tool_activity(entry, 80)))
+
+
+def test_command_card_shows_command_and_bounded_output_without_claiming_click_expansion():
+    entry = TranscriptEntry(
+        id=1,
+        kind="tool",
+        toolName="run_command",
+        toolSummary="run_command Get-ChildItem -Force",
+        status="success",
+        collapsed=True,
+        collapsedSummary="Mode Length Name",
+        body="Mode  Length  Name\n" + "d-----        folder\n" * 12,
+    )
+    lines = [strip_ansi(line).rstrip() for line in render_tool_activity(entry, 80)]
+    assert "Run command" in lines[0]
+    assert "$ Get-ChildItem -Force" in lines[0]
+    assert "done" in lines[0]
+    assert lines[1].lstrip().startswith("│") and "Mode  Length  Name" in lines[1]
+    assert lines[2].lstrip().startswith("│") and "folder" in lines[2]
+    assert lines[-1].lstrip().startswith("╰")
+    assert "/transcript-save" in lines[-1]
+    assert "Click to expand" not in "\n".join(lines)
+
+
+def test_tool_card_keeps_its_header_inside_the_terminal_with_a_trailing_status():
+    entry = TranscriptEntry(
+        id=1, kind="tool", toolName="run_command", toolSummary="run_command dir", status="success", body="hello"
+    )
+    lines = render_tool_activity(entry, 40)
+    assert all(string_display_width(line) <= 40 for line in lines)
+    header = strip_ansi(lines[0])
+    assert header.startswith("  ✓ Run command  $ dir")
+    assert header.endswith("done")
+    assert string_display_width(header) < 40
+    assert lines[1].startswith("  │ ")
+
+
+def test_narrow_tool_card_keeps_a_visible_rail_and_ellipsis():
+    entry = TranscriptEntry(
+        id=1,
+        kind="tool",
+        toolName="run_command",
+        toolSummary="run_command " + "echo x " * 40,
+        status="success",
+        body="line\n" * 20,
+    )
+    lines = render_tool_activity(entry, 8)
+    assert all(string_display_width(line) <= 8 for line in lines)
+    assert strip_ansi(lines[-1]).rstrip().endswith("…")
+    assert all("│" in line or "╰" in line for line in lines[1:])

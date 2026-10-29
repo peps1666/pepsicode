@@ -24,7 +24,7 @@ def _plain(entries, **kwargs) -> str:
 
 def test_live_activity_stays_expanded_until_the_answer_is_final():
     running = _plain(_turn(None, tool_status="running"))
-    assert "Let me look at the failing test." in running and "Run command" in running
+    assert "Let me look at the failing test." in running and "$ pytest output" in running
     assert "Activity" not in running
 
     # The final answer is still streaming in: keep showing the work.
