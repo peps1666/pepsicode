@@ -60,6 +60,7 @@ class SessionMetadata:
     last_message: str = ""  # Truncated last message
     message_count: int = 0
     workspace: str = ""  # Working directory when session started
+    has_visible_content: bool | None = None  # None for older indexes
 
 
 @dataclass
@@ -105,17 +106,20 @@ class SessionData:
         self.updated_at = time.time()
         self.metadata.updated_at = self.updated_at
         self.metadata.message_count = len(self.messages)
+        self.metadata.has_visible_content = _has_recoverable_content(self, include_service=False)
 
         # Extract first user message (truncated)
+        self.metadata.first_message = ""
         for msg in self.messages:
-            if msg.get("role") == "user":
+            if msg.get("role") == "user" and not msg.get("internal"):
                 content = msg.get("displayContent", msg.get("content", ""))
                 self.metadata.first_message = content[:100]
                 break
 
         # Extract last message (truncated)
+        self.metadata.last_message = ""
         for msg in reversed(self.messages):
-            if msg.get("role") in ("user", "assistant"):
+            if msg.get("role") in ("user", "assistant") and not msg.get("internal"):
                 content = msg.get("content", "")
                 self.metadata.last_message = content[:100]
                 break
@@ -177,15 +181,60 @@ def _save_session_index(index: dict[str, SessionMetadata]) -> None:
             "last_message": meta.last_message,
             "message_count": meta.message_count,
             "workspace": meta.workspace,
+            "has_visible_content": meta.has_visible_content,
         }
         for sid, meta in index.items()
     }
     _atomic_write(_session_index_file(), json.dumps(serializable, indent=2) + "\n")
 
 
+def _has_recoverable_content(session: SessionData, *, include_service: bool = True) -> bool:
+    """Do not create blank sessions, but keep unfinished work and archived branches."""
+
+    def conversation_message(message: Any) -> bool:
+        if not isinstance(message, dict) or message.get("internal") or message.get("role") not in {"user", "assistant"}:
+            return False
+        content = message.get("displayContent", message.get("content"))
+        return bool(content.strip()) if isinstance(content, str) else bool(content)
+
+    if any(conversation_message(message) for message in session.messages):
+        return True
+    if any(
+        conversation_message(node.get("message")) for node in session.tree.get("nodes", []) if isinstance(node, dict)
+    ):
+        return True
+    if any(
+        entry.get("kind") == "user" and str(entry.get("body", "")).strip()
+        for entry in session.transcript_entries
+        if isinstance(entry, dict)
+    ):
+        return True
+    # The QQ bridge stores the session ID immediately after creation and must
+    # be able to resume it after a restart even before the first message.
+    if session.execution_state or session.plan_file_path or (include_service and session.profile != "default"):
+        return True
+    if session.verification_state and (
+        session.verification_state.get("pending") or session.verification_state.get("last_report")
+    ):
+        return True
+
+    def populated(value: Any) -> bool:
+        if isinstance(value, dict):
+            return any(populated(item) for key, item in value.items() if key != "version")
+        if isinstance(value, (list, tuple)):
+            return any(populated(item) for item in value)
+        return bool(value)
+
+    return populated(session.task_control)
+
+
 def save_session(session: SessionData) -> None:
     """Persist a complete session to disk."""
     with session._tree_lock, _STORE_LOCK:
+        # Existing sessions are never removed or suppressed: a selected
+        # historical branch may be empty while other branches remain useful.
+        if not _session_file(session.session_id).exists() and not _has_recoverable_content(session):
+            return
         _save_session_locked(session)
 
 
@@ -228,6 +277,7 @@ def _save_session_locked(session: SessionData) -> None:
             "last_message": session.metadata.last_message,
             "message_count": session.metadata.message_count,
             "workspace": session.metadata.workspace,
+            "has_visible_content": session.metadata.has_visible_content,
         },
     }
     _atomic_write(session_path, json.dumps(serializable, indent=2, ensure_ascii=False) + "\n")
@@ -337,6 +387,17 @@ def list_sessions(workspace: str | None = None) -> list[SessionMetadata]:
     sessions = [meta for sid, meta in index.items() if _session_file(sid).exists()]
     if workspace is not None:
         sessions = [meta for meta in sessions if same_workspace(meta.workspace, workspace)]
+    visible = []
+    for meta in sessions:
+        if meta.has_visible_content is True:
+            visible.append(meta)
+            continue
+        # Old indexes do not tell us whether an apparently empty session has
+        # pending work or archived branches. Inspect it; never delete it.
+        session = load_session(meta.session_id)
+        if session is None or _has_recoverable_content(session, include_service=False):
+            visible.append(meta)
+    sessions = visible
     sessions.sort(key=lambda s: s.updated_at, reverse=True)
     return sessions
 

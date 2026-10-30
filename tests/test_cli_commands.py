@@ -5,7 +5,7 @@ from pepsicode.cli.local_tool_shortcuts import parse_local_tool_shortcut
 def test_find_matching_slash_commands_returns_help_variants() -> None:
     matches = find_matching_slash_commands("/mo")
     assert "/model" in matches
-    assert "/model <model-name>" in matches
+    assert "/model list" in matches
 
 
 def test_parse_local_tool_shortcut_parses_cmd() -> None:

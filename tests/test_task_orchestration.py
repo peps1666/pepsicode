@@ -359,6 +359,7 @@ def test_repeated_identical_results_remind_without_granting_new_permissions(tmp_
 
 
 def test_corrupt_task_contract_is_rejected_before_restoring_a_session(session):
+    session.messages = [{"role": "user", "content": "existing task"}]
     sessions.save_session(session)
     path = sessions.SESSIONS_DIR / f"{session.session_id}.json"
     data = json.loads(path.read_text(encoding="utf-8"))

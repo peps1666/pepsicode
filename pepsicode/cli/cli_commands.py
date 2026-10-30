@@ -27,7 +27,9 @@ class SlashCommand:
 
     @property
     def completion_text(self) -> str:
-        return self.name if self.is_prompt else self.usage
+        if self.is_prompt or self.name in {"/tree", "/fork", "/resume", "/hooks"}:
+            return self.name
+        return self.usage
 
 
 SLASH_COMMANDS = [
@@ -37,15 +39,15 @@ SLASH_COMMANDS = [
     SlashCommand("/clear", "/clear", "Clear the current transcript view.", "Session"),
     SlashCommand("/history", "/history", "Show recent prompt history.", "Session"),
     SlashCommand("/retry", "/retry", "在新分支重新生成上一条用户消息的回答，保留原路线。", "Session"),
-    SlashCommand("/tree", "/tree [entry-id]", "查看或切换当前会话的对话分支，文件保持当前状态。", "Session"),
-    SlashCommand("/fork", "/fork [user-entry-id]", "从某条用户消息创建独立会话。", "Session"),
+    SlashCommand("/tree", "/tree", "选择当前会话的对话位置，文件保持当前状态。", "Session"),
+    SlashCommand("/fork", "/fork", "选择一条用户消息创建独立会话。", "Session"),
     SlashCommand("/clone", "/clone", "将当前对话路线复制为新会话。", "Session"),
     SlashCommand("/plan", "/plan [task]", "Enter read-only Plan mode.", "Session"),
-    SlashCommand("/resume", "/resume [id]", "Resume a saved session.", "Session"),
+    SlashCommand("/resume", "/resume", "选择并恢复已保存的会话。", "Session"),
     SlashCommand("/transcript-save", "/transcript-save <path>", "Save transcript to a text file.", "Session"),
     # Tools
     SlashCommand("/tools", "/tools", "List tools available to the coding agent.", "Tools"),
-    SlashCommand("/hooks", "/hooks [list|errors|reload|trust|enable|disable]", "Inspect and manage Hooks v2.", "Tools"),
+    SlashCommand("/hooks", "/hooks", "选择查看或管理 Hooks。", "Tools"),
     SlashCommand("/skills", "/skills", "List discovered SKILL.md workflows.", "Tools"),
     SlashCommand("/commands", "/commands [reload]", "List Markdown prompt commands and loading errors.", "Tools"),
     SlashCommand("/mcp", "/mcp", "Show MCP servers and connection state.", "Tools"),
@@ -53,9 +55,6 @@ SLASH_COMMANDS = [
     # Status
     SlashCommand("/status", "/status", "Show application state summary.", "Status"),
     SlashCommand("/model", "/model", "Show the current model.", "Status"),
-    SlashCommand(
-        "/model", "/model <model-name>", "Switch the current session model; append --save for defaults.", "Status"
-    ),
     SlashCommand("/model", "/model list", "List configured model candidates and reasoning levels.", "Status"),
     SlashCommand("/model", "/model refresh", "从当前 API 重新读取模型名称与能力。", "Status"),
     SlashCommand("/provider", "/provider", "选择模型服务商及其模型，支持添加自定义厂商。", "Status"),
@@ -68,6 +67,7 @@ SLASH_COMMANDS = [
     SlashCommand("/config", "/config", "Show configuration diagnostics.", "Status"),
     SlashCommand("/config-paths", "/config-paths", "Show settings file paths.", "Status"),
     SlashCommand("/permissions", "/permissions", "选择权限模式，√ 标记当前模式。", "Status"),
+    SlashCommand("/permissions", "/permissions default", "选择此工作区新会话的默认权限。", "Status"),
     # Files
     SlashCommand("/ls", "/ls [path]", "List files in a directory.", "Files"),
     SlashCommand("/grep", "/grep <pattern>::[path]", "Search text in files.", "Files"),
@@ -82,10 +82,8 @@ SLASH_COMMANDS = [
     SlashCommand("/worktree", "/worktree", "List active git worktrees.", "Worktree"),
     SlashCommand("/worktree", "/worktree status", "Show detailed worktree session status.", "Worktree"),
     SlashCommand("/worktree", "/worktree create <name> [base]", "Create a new isolated worktree.", "Worktree"),
-    SlashCommand("/worktree", "/worktree enter <name>", "Enter a worktree (switch context into it).", "Worktree"),
-    SlashCommand(
-        "/worktree", "/worktree exit <name> [keep|remove]", "Exit a worktree, optionally removing it.", "Worktree"
-    ),
+    SlashCommand("/worktree", "/worktree enter", "选择要进入的 worktree。", "Worktree"),
+    SlashCommand("/worktree", "/worktree exit", "选择要退出的 worktree 和处理方式。", "Worktree"),
     SlashCommand("/worktree", "/worktree cleanup [max_age_hours]", "Remove stale ephemeral worktrees.", "Worktree"),
 ]
 
@@ -251,7 +249,7 @@ def try_handle_local_command(
         )
 
     if user_input == "/worktree" or user_input.startswith("/worktree "):
-        return _handle_worktree_command(user_input)
+        return _handle_worktree_command(user_input, cwd=cwd)
 
     if user_input == "/skills":
         skills = tools.get_skills() if tools else []
@@ -363,7 +361,7 @@ def try_handle_local_command(
     return None
 
 
-def _handle_worktree_command(user_input: str) -> str:
+def _handle_worktree_command(user_input: str, cwd: str | None = None) -> str:
     """Handle /worktree subcommands: list, status, create, enter, exit, cleanup.
 
     All operations run against the current working directory's git repo.
@@ -377,7 +375,7 @@ def _handle_worktree_command(user_input: str) -> str:
     sub = parts[1] if len(parts) > 1 else "list"
 
     try:
-        manager = WorktreeManager(repo_root=os.getcwd())
+        manager = WorktreeManager(repo_root=cwd or os.getcwd())
         manager.restore_session()
     except Exception as e:  # noqa: BLE001
         return f"Failed to initialize worktree manager: {e}"

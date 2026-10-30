@@ -54,11 +54,11 @@ from pepsicode.core.session import (
 from pepsicode.core.session_tree import (
     checkout_entry,
     copy_session,
-    format_tree,
     prepare_regeneration,
     rebuild_transcript,
     record_messages,
     recording_session,
+    tree_view,
 )
 from pepsicode.core.state import AppState, Store, create_app_store
 from pepsicode.core.verification import restore_verification_state, run_verified_turn, snapshot_verification_state
@@ -105,6 +105,7 @@ from pepsicode.tui.chrome import (
     wrap_text,
 )
 from pepsicode.tui.clipboard import copy_to_clipboard
+from pepsicode.tui.command_picker import CommandOption, CommandPicker, render_command_picker
 from pepsicode.tui.input import render_input_prompt
 from pepsicode.tui.input_parser import (
     KeyEvent,
@@ -126,6 +127,7 @@ from pepsicode.tui.screen import (
     show_cursor,
 )
 from pepsicode.tui.settings_picker import (
+    PERMISSION_OPTIONS,
     SettingsPicker,
     create_permissions_picker,
     create_settings_picker,
@@ -320,6 +322,7 @@ class ScreenState:
     resume_picker_sessions: list[SessionMetadata] | None = None
     resume_picker_index: int = 0
     settings_picker: SettingsPicker | None = None
+    command_picker: CommandPicker | None = None
     provider_wizard: ProviderWizard | None = None
     is_busy: bool = False
     # Session persistence
@@ -487,6 +490,11 @@ def _handle_settings_picker_event(
                 picker.selected = (picker.selected + (-1 if event.name == "up" else 1)) % len(picker.options)
             elif event.name == "return":
                 option = picker.options[picker.selected]
+                if option.value == "__workspace_default__":
+                    state.settings_picker = None
+                    _handle_input(args, state, rerender, "/permissions default")
+                    rerender()
+                    return
                 try:
                     args.permissions.set_access_mode(option.value)
                     if state.session:
@@ -1341,12 +1349,13 @@ def _render_resume_picker_lines(
     rows: int,
 ) -> list[str]:
     lines = [
-        "",
-        f"  {ACCENT}{BOLD}Resume Session{RESET}",
-        f"  {SUBTLE}Up/Down select, Enter resume, d delete, Esc cancel{RESET}",
+        f"  {ACCENT}{BOLD}选择要继续的对话{RESET}",
+        f"  {SUBTLE}↑/↓ 选择 · Enter 继续 · d 删除 · Esc 取消{RESET}",
         "",
     ]
-    visible_rows = max(1, rows - 8)
+    # Each session occupies two physical rows; keep the selection inside the
+    # viewport even on short terminals and when scrolling through many items.
+    visible_rows = max(1, (rows - len(lines)) // 2)
     selected_index = max(0, min(selected_index, len(sessions) - 1))
     start = max(0, min(selected_index - visible_rows // 2, max(0, len(sessions) - visible_rows)))
     end = min(len(sessions), start + visible_rows)
@@ -1357,15 +1366,10 @@ def _render_resume_picker_lines(
         marker = ">" if selected else " "
         color = ACCENT if selected else SUBTLE
         updated = time.strftime("%Y-%m-%d %H:%M", time.localtime(session.updated_at))
-        workspace = truncate_plain(session.workspace or "unknown", max(12, cols - 36))
-        first = truncate_plain(session.first_message or "(empty)", max(12, cols - 10))
-        lines.append(f"  {color}{marker} [{session.session_id[:8]}]{RESET} {updated}  {workspace}")
-        lines.append(f"      {DIM}{session.message_count} messages | {first}{RESET}")
-
-    if start > 0:
-        lines.insert(4, f"  {SUBTLE}... {start} newer/hidden row(s) ...{RESET}")
-    if end < len(sessions):
-        lines.append(f"  {SUBTLE}... {len(sessions) - end} more row(s) ...{RESET}")
+        first = " ".join("".join(c if c.isprintable() else " " for c in session.first_message).split())
+        title = truncate_plain(first or "（待恢复的会话状态）", max(1, cols - 6))
+        lines.append(f"  {color}{marker} {title}{RESET}")
+        lines.append(f"    {DIM}{updated} · {session.message_count} 条消息{RESET}")
     return _truncate_frame_lines(lines, cols, rows)
 
 
@@ -1572,6 +1576,9 @@ def _render_stream_screen(args: TtyAppArgs, state: ScreenState) -> None:
     if state.provider_wizard is not None:
         state.frame_renderer.draw(render_provider_wizard(state.provider_wizard, cols, rows), cols, rows)
         return
+    if state.command_picker is not None:
+        state.frame_renderer.draw(render_command_picker(state.command_picker, cols, rows), cols, rows)
+        return
     if state.settings_picker is not None:
         state.frame_renderer.draw(render_settings_picker(state.settings_picker, cols, rows), cols, rows)
         return
@@ -1673,7 +1680,12 @@ def _render_stream_screen(args: TtyAppArgs, state: ScreenState) -> None:
 
 
 def _render_screen(args: TtyAppArgs, state: ScreenState) -> None:
-    if os.environ.get("pepsicode_LEGACY_TUI") != "1" or state.settings_picker or state.provider_wizard:
+    if (
+        os.environ.get("pepsicode_LEGACY_TUI") != "1"
+        or state.settings_picker
+        or state.provider_wizard
+        or state.command_picker
+    ):
         _render_stream_screen(args, state)
         return
 
@@ -2060,6 +2072,118 @@ def _enqueue_tty_input(args: TtyAppArgs, state: ScreenState, input_text: str, in
     state.status = "Follow-up queued" if input_mode == "follow_up" else "Instruction queued for the next response"
 
 
+def _open_command_picker(args: TtyAppArgs, state: ScreenState, command: str) -> bool:
+    parts = command.split()
+    if parts == ["/permissions", "default"]:
+        from pepsicode.workspace_permissions import get_workspace_default
+
+        current = get_workspace_default(args.permissions.workspace_root)
+        options = [
+            CommandOption(
+                f"{label}{' √ 当前默认' if mode == current else ''}", f"/permissions default {mode}", description
+            )
+            for mode, label, description in PERMISSION_OPTIONS
+        ]
+        state.command_picker = CommandPicker("工作区新会话默认权限", options, note="不改变当前会话权限。")
+        return True
+    if parts == ["/hooks"]:
+        state.command_picker = CommandPicker(
+            "Hooks",
+            [
+                CommandOption("查看状态", "/hooks list"),
+                CommandOption("查看错误", "/hooks errors"),
+                CommandOption("重新加载", "/hooks reload"),
+                CommandOption("启用 Hook", "/hooks enable"),
+                CommandOption("停用 Hook", "/hooks disable"),
+                CommandOption("信任项目 Hooks", "/hooks trust", "按现有信任和审批规则执行"),
+            ],
+        )
+        return True
+    if len(parts) == 2 and parts[0] == "/hooks" and parts[1] in {"enable", "disable"}:
+        hooks = list(args.hook_engine.hooks) if args.hook_engine is not None else []
+        options = [
+            CommandOption(
+                h.id,
+                f"/hooks {parts[1]} {h.id}",
+                f"{'已启用' if h.enabled else '已停用'} · {'已信任' if h.trusted else '未信任'}",
+            )
+            for h in hooks
+            if h.id and not any(c.isspace() for c in h.id)
+        ]
+        state.command_picker = CommandPicker(
+            "选择要启用的 Hook" if parts[1] == "enable" else "选择要停用的 Hook", options
+        )
+        return True
+    if parts == ["/worktree"]:
+        state.command_picker = CommandPicker(
+            "Worktree",
+            [
+                CommandOption("查看工作区列表", "/worktree list"),
+                CommandOption("查看状态", "/worktree status"),
+                CommandOption("进入工作区", "/worktree enter"),
+                CommandOption("退出工作区", "/worktree exit"),
+                CommandOption("创建工作区", "/worktree create ", "输入新名称", draft=True),
+                CommandOption("清理过期工作区", "/worktree cleanup ", "输入时限后执行", draft=True),
+            ],
+        )
+        return True
+    if len(parts) == 2 and parts[0] == "/worktree" and parts[1] in {"enter", "exit"}:
+        try:
+            from pepsicode.worktree import WorktreeManager
+
+            manager = WorktreeManager(repo_root=args.cwd)
+            worktrees = manager.list_worktrees()
+            options = [CommandOption(wt.name, f"/worktree {parts[1]} {wt.name}", wt.path) for wt in worktrees]
+            state.command_picker = CommandPicker(
+                "选择要进入的工作区" if parts[1] == "enter" else "选择要退出的工作区", options
+            )
+        except Exception as error:  # noqa: BLE001 - show a recoverable picker error
+            _push_transcript_entry(state, kind="assistant", body=f"无法读取 worktree：{error}", status="error")
+        return True
+    if len(parts) == 3 and parts[:2] == ["/worktree", "exit"]:
+        name = parts[2]
+        state.command_picker = CommandPicker(
+            "退出后的处理方式",
+            [
+                CommandOption("保留工作区", f"/worktree exit {name} keep"),
+                CommandOption("删除工作区", f"/worktree exit {name} remove", "删除磁盘上的 worktree"),
+            ],
+            note=f"工作区：{name}",
+        )
+        return True
+    return False
+
+
+def _handle_command_picker_event(
+    args: TtyAppArgs, state: ScreenState, event: ParsedInputEvent, rerender: Callable[[], None]
+) -> None:
+    picker = state.command_picker
+    if picker is None:
+        return
+    if isinstance(event, WheelEvent):
+        delta = -1 if event.direction == "up" else 1
+    elif isinstance(event, KeyEvent) and event.name in {"up", "down", "pageup", "pagedown"}:
+        delta = {"up": -1, "down": 1, "pageup": -8, "pagedown": 8}[event.name]
+    elif isinstance(event, KeyEvent) and event.name == "escape":
+        state.command_picker = None
+        rerender()
+        return
+    elif isinstance(event, KeyEvent) and event.name == "return" and picker.options:
+        option = picker.options[picker.selected]
+        state.command_picker = None
+        if option.draft:
+            state.input, state.cursor_offset = option.value, len(option.value)
+        else:
+            _handle_input(args, state, rerender, option.value)
+        rerender()
+        return
+    else:
+        return
+    if picker.options:
+        picker.selected = max(0, min(len(picker.options) - 1, picker.selected + delta))
+    rerender()
+
+
 def _handle_input(
     args: TtyAppArgs,
     state: ScreenState,
@@ -2090,9 +2214,20 @@ def _handle_input(
             if len(parts) > (1 if parts[0] in {"/clone", "/retry"} else 2):
                 raise ValueError("Usage: /tree [entry-id], /fork [user-entry-id], /clone, /retry")
             if parts[0] in {"/tree", "/fork"} and len(parts) == 1:
-                _push_transcript_entry(
-                    state, kind="assistant", body=format_tree(state.session, users_only=parts[0] == "/fork")
+                view = tree_view(state.session)
+                options = []
+                for node in view["nodes"]:
+                    if parts[0] == "/fork" and node["role"] != "user":
+                        continue
+                    preview = " ".join("".join(c if c.isprintable() else " " for c in node["preview"]).split())
+                    label = f"{'●' if node['active'] else '○'} {'你' if node['role'] == 'user' else '助手'}：{preview or '（空消息）'}"
+                    options.append(CommandOption(label, f"{parts[0]} {node['id']}"))
+                state.command_picker = CommandPicker(
+                    "选择分叉起点" if parts[0] == "/fork" else "选择对话位置",
+                    options,
+                    note="选择后文件保持现状；选择用户消息会取回草稿。",
                 )
+                rerender()
                 return False
             if parts[0] == "/retry":
                 regenerated_prompt = prepare_regeneration(state.session)
@@ -2192,6 +2327,10 @@ def _handle_input(
 
     if input_text in {"/model", "/effort", "/provider", "/permissions"}:
         _open_settings_picker(args, state, input_text[1:])
+        rerender()
+        return False
+
+    if _open_command_picker(args, state, input_text):
         rerender()
         return False
 
@@ -3044,7 +3183,7 @@ def _handle_event(
                 state.pending_approval.feedback_input += text.replace("\n", " ")
         elif state.provider_wizard is not None:
             _handle_provider_wizard_event(args, state, TextEvent(text.strip(), False, False), rerender)
-        elif state.settings_picker is None and state.resume_picker_sessions is None:
+        elif state.settings_picker is None and state.command_picker is None and state.resume_picker_sessions is None:
             state.input = state.input[: state.cursor_offset] + text + state.input[state.cursor_offset :]
             state.cursor_offset += len(text)
         rerender()
@@ -3113,6 +3252,12 @@ def _handle_resume_picker_event(
             _resume_session_by_id(args, state, selected.session_id)
             rerender()
             return
+
+    if isinstance(event, WheelEvent):
+        delta = -1 if event.direction == "up" else 1
+        state.resume_picker_index = max(0, min(len(sessions) - 1, state.resume_picker_index + delta))
+        rerender()
+        return
 
     if isinstance(event, TextEvent) and not event.ctrl and event.text.lower() == "d":
         selected = sessions[state.resume_picker_index]
@@ -3307,6 +3452,9 @@ def _handle_normal_mode_event(
     if state.provider_wizard is not None:
         _handle_provider_wizard_event(args, state, event, rerender)
         return
+    if state.command_picker is not None:
+        _handle_command_picker_event(args, state, event, rerender)
+        return
     if state.settings_picker is not None:
         _handle_settings_picker_event(args, state, event, rerender)
         return
@@ -3430,9 +3578,23 @@ def _handle_normal_mode_return(
         selected = visible_commands[state.selected_slash_index]
         usage = getattr(selected, "completion_text", getattr(selected, "usage", str(selected)))
         # If input already matches the command exactly, submit instead of completing
-        if state.input.strip() == usage or usage in {"/model", "/effort", "/permissions"}:
+        picker_commands = {
+            "/model",
+            "/effort",
+            "/provider",
+            "/permissions",
+            "/permissions default",
+            "/tree",
+            "/fork",
+            "/resume",
+            "/hooks",
+            "/worktree",
+            "/worktree enter",
+            "/worktree exit",
+        }
+        if state.input.strip() == usage or usage in picker_commands:
             state.selected_slash_index = 0
-            submitted = usage if usage in {"/model", "/effort", "/permissions"} else state.input
+            submitted = usage if usage in picker_commands else state.input
             state.input = ""
             state.cursor_offset = 0
             rerender()

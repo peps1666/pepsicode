@@ -32,6 +32,7 @@ PERMISSION_OPTIONS = [
 
 def create_permissions_picker(current: str) -> SettingsPicker:
     options = [SettingOption(*option) for option in PERMISSION_OPTIONS]
+    options.append(SettingOption("__workspace_default__", "设置工作区默认", "选择新会话默认权限，不改变当前会话"))
     return SettingsPicker(
         kind="permissions",
         model="",

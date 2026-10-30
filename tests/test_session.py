@@ -100,6 +100,7 @@ def test_load_session_accepts_unique_short_prefix(temp_session_dir):
 def test_delete_session(temp_session_dir):
     """Test deleting a session."""
     session = create_new_session(workspace="/tmp/test")
+    session.messages = [{"role": "user", "content": "hello"}]
     save_session(session)
 
     # Delete
@@ -141,10 +142,13 @@ def test_list_sessions_can_filter_by_workspace(temp_session_dir, tmp_path):
     other_workspace.mkdir()
 
     first = create_new_session(workspace=str(workspace))
+    first.messages = [{"role": "user", "content": "first"}]
     save_session(first)
     second = create_new_session(workspace=str(workspace / "."))
+    second.messages = [{"role": "user", "content": "second"}]
     save_session(second)
     other = create_new_session(workspace=str(other_workspace))
+    other.messages = [{"role": "user", "content": "other"}]
     save_session(other)
 
     listed = list_sessions(workspace=str(workspace))
@@ -158,9 +162,11 @@ def test_get_latest_session(temp_session_dir):
     """Test getting the most recent session."""
     # Create sessions for different workspaces
     session1 = create_new_session(workspace="/tmp/workspace1")
+    session1.messages = [{"role": "user", "content": "first"}]
     save_session(session1)
 
     session2 = create_new_session(workspace="/tmp/workspace2")
+    session2.messages = [{"role": "user", "content": "second"}]
     save_session(session2)
 
     # Get latest for workspace2
@@ -178,6 +184,7 @@ def test_cleanup_old_sessions(temp_session_dir):
     # Create 10 sessions
     for i in range(10):
         session = create_new_session(workspace=f"/tmp/test-{i}")
+        session.messages = [{"role": "user", "content": f"Message {i}"}]
         save_session(session)
 
     # Cleanup to keep only 5
@@ -192,6 +199,7 @@ def test_cleanup_old_sessions(temp_session_dir):
 def test_autosave_manager(temp_session_dir):
     """Test autosave manager with rate limiting."""
     session = create_new_session(workspace="/tmp/test")
+    session.messages = [{"role": "user", "content": "hello"}]
     manager = AutosaveManager(session, interval=1)
 
     # Initially not dirty

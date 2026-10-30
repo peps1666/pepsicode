@@ -107,6 +107,7 @@ def test_server_persists_mode_and_rejects_changes_during_turn(tmp_path):
     client = ClientSession(str(tmp_path))
     client.permissions = PermissionManager(str(tmp_path), mode="auto")
     client.session_data = create_new_session(str(tmp_path))
+    client.messages = [{"role": "user", "content": "existing conversation"}]
     client._rebuild_system_prompt = Mock()
 
     async def run():
@@ -158,7 +159,13 @@ def test_permissions_menu_opens_from_slash_selection_and_marks_current(tmp_path,
     assert picker.kind == "permissions"
     assert picker.current == "auto"
     assert picker.selected == 1
-    assert [option.value for option in picker.options] == ["read_only", "auto", "trust_commands", "full_access"]
+    assert [option.value for option in picker.options] == [
+        "read_only",
+        "auto",
+        "trust_commands",
+        "full_access",
+        "__workspace_default__",
+    ]
     screen = "\n".join(render_settings_picker(picker, 90, 20))
     assert "自动  √ 当前" in screen
     assert "保存为新会话默认" not in screen

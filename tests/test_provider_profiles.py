@@ -204,6 +204,7 @@ def test_pipe_commands_and_saved_defaults_restore_provider_without_credentials(f
     monkeypatch.setattr("pepsicode.core.session.SESSIONS_DIR", tmp_path / "sessions")
     monkeypatch.setattr("pepsicode.core.session.PEPSI_CODE_DIR", tmp_path)
     session = create_new_session(str(tmp_path))
+    session.messages = [{"role": "user", "content": "hello"}]
     session.model_settings = model_settings_snapshot(runtime)
     save_session(session)
     restored = load_session(session.session_id).model_settings

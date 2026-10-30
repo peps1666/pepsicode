@@ -150,6 +150,7 @@ def test_foreign_session_is_rejected_before_changing_live_state(terminal, tmp_pa
 def test_startup_resume_rejects_foreign_session_before_entering_raw_mode(terminal, tmp_path, monkeypatch, capsys):
     args, _ = terminal
     foreign = create_new_session(str(tmp_path / "other"))
+    foreign.messages = [{"role": "user", "content": "existing conversation"}]
     save_session(foreign)
     raw = Mock(side_effect=AssertionError("must reject before opening the terminal"))
     monkeypatch.setattr(app, "_RawModeContext", raw)
