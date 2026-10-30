@@ -100,7 +100,7 @@ def test_desktop_fork_and_clone_keep_source_and_files_intact(project):
         assert [item["content"] for item in result["history"]] == ["first task", "answer 1"]
         original = load_session(source_id)
         assert original.messages[-1]["content"] == "answer 2"
-        assert len(original.tree["nodes"]) == 4
+        assert len([n for n in original.tree["nodes"] if not n["message"].get("internal")]) == 4
         fork_id = session.session_data.session_id
         clone = await server._dispatch("session/clone", {}, session, None, emit, loop)
         assert clone["tree"]["parent_session_id"] == fork_id
@@ -125,6 +125,7 @@ def test_desktop_regeneration_streams_new_answer_and_preserves_old_branch(projec
         loop = asyncio.get_running_loop()
         await server._run_turn({"input": "initial task"}, session, emit, loop)
         original = list(session.session_data.tree["nodes"])
+        original_visible = [node for node in original if not node["message"].get("internal")]
         events.clear()
         await server._handle_request(
             {"id": 7, "method": "turn/regenerate", "params": {"entry_id": original[0]["id"]}},
@@ -136,13 +137,18 @@ def test_desktop_regeneration_streams_new_answer_and_preserves_old_branch(projec
         )
         await asyncio.wait_for(asyncio.gather(*list(session._background_tasks)), 3)
         assert not responses[-1].get("error")
-        assert len(session.session_data.tree["nodes"]) == 4
-        assert session.session_data.tree["nodes"][:2] == original
-        assert session.model.requests[-1][-1]["content"] == "initial task"
+        assert len([n for n in session.session_data.tree["nodes"] if not n["message"].get("internal")]) == 4
+        assert session.session_data.tree["nodes"][: len(original)] == original
+        assert (
+            next(m for m in reversed(session.model.requests[-1]) if m.get("role") == "user" and not m.get("internal"))[
+                "content"
+            ]
+            == "initial task"
+        )
         assert session.messages[-1]["content"] == "answer 2"
         assert len([name for name, _ in events if name == "turn/end"]) == 1
         assert any(name == "session/view" and data["history"][-1]["content"] == "answer 2" for name, data in events)
-        await server._dispatch("session/checkout", {"entry_id": original[1]["id"]}, session, None, emit, loop)
+        await server._dispatch("session/checkout", {"entry_id": original_visible[1]["id"]}, session, None, emit, loop)
         assert session.messages[-1]["content"] == "answer 1"
 
     asyncio.run(scenario())
@@ -180,12 +186,13 @@ def test_terminal_tree_fork_clone_and_retry_are_actual_commands(project):
     app._collect_agent_result(args, state)
     source_id = state.session.session_id
     original_nodes = list(state.session.tree["nodes"])
+    original_visible = [node for node in original_nodes if not node["message"].get("internal")]
     app._handle_input(args, state, lambda: None, "/retry")
     state.agent_thread.join(3)
     app._collect_agent_result(args, state)
     assert args.messages[-1]["content"] == "answer 2"
-    assert state.session.tree["nodes"][:2] == original_nodes
-    app._handle_input(args, state, lambda: None, f"/tree {original_nodes[1]['id'][:8]}")
+    assert state.session.tree["nodes"][: len(original_nodes)] == original_nodes
+    app._handle_input(args, state, lambda: None, f"/tree {original_visible[1]['id'][:8]}")
     assert args.messages[-1]["content"] == "answer 1"
     app._handle_input(args, state, lambda: None, "/clone")
     assert state.session.session_id != source_id
@@ -195,4 +202,4 @@ def test_terminal_tree_fork_clone_and_retry_are_actual_commands(project):
     assert state.input == "first task"
     assert state.session.session_id != clone_id and state.session.parent_session_id == clone_id
     assert all(message["role"] == "system" for message in args.messages)
-    assert load_session(source_id).tree["nodes"][:2] == original_nodes
+    assert load_session(source_id).tree["nodes"][: len(original_nodes)] == original_nodes

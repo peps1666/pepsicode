@@ -159,7 +159,7 @@ def test_once_hook_is_atomic_across_parallel_calls() -> None:
     assert decisions.count(False) == 1
 
 
-def test_context_action_is_ephemeral_and_lifecycle_events_fire() -> None:
+def test_context_action_is_recorded_and_lifecycle_events_fire() -> None:
     class CapturingModel:
         def __init__(self) -> None:
             self.calls: list[list[ChatMessage]] = []
@@ -198,9 +198,10 @@ def test_context_action_is_ephemeral_and_lifecycle_events_fire() -> None:
     )
 
     engine.close()
-    injected = [message for message in model.calls[1] if message.get("role") == "system"]
+    injected = [message for message in model.calls[1] if message.get("internal")]
     assert any("<hook-context" in message.get("content", "") for message in injected)
-    assert not any("<hook-context" in message.get("content", "") for message in result)
+    assert any("<hook-context" in message.get("content", "") for message in result)
+    assert [m for m in model.calls[0] if m["role"] == "system"] == [m for m in model.calls[1] if m["role"] == "system"]
     assert lifecycle == [HookEvent.AGENT_START, HookEvent.AGENT_STOP]
 
 

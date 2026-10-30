@@ -48,7 +48,7 @@
 
 ## 这是什么
 
-> **状态：** 当前源码是 **2.0.7 开发候选**，尚未创建对应发行标签，也未完成该候选的 Windows ZIP 成品验收。用 `pepsicode --version` 核对提交与 dirty 状态；详见 [2.0.7 开发候选](docs/release-candidate.md) 和 [已知问题](docs/project-issues.md)。
+> **版本：** 当前源码版本为 **2.0.7**。用 `pepsicode --version` 核对提交与 dirty 状态；发行包及其验收结果以 [GitHub Releases](https://github.com/peps1666/pepsicode/releases) 为准。历史候选记录见 [2.0.7 候选](docs/release-candidate.md)，已知限制见 [已知问题](docs/project-issues.md)。
 
 pepsicode 是一个面向本地开发工作流的 Python 编程代理。它有两种前端、一个内核：既能作为终端里的全屏交互程序使用，也能作为白色主题的桌面应用启动，两者共享同一套工具、权限、Hook 与上下文机制。
 

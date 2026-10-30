@@ -74,6 +74,7 @@ def test_automatic_compaction_rechecks_after_tool_result(tmp_path):
         lambda x: x,
         lambda *_: ToolResult(True, "z" * 10000),
         capabilities={ToolCapability.READ_ONLY},
+        max_result_size_chars=10000,
     )
     messages = [{"role": "system", "content": "sys"}]
     for _ in range(12):

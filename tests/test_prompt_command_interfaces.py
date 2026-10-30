@@ -72,8 +72,9 @@ def test_real_terminal_input_completes_command_without_inserting_hints_or_swallo
     state.agent_thread.join(2)
     assert not state.agent_thread.is_alive()
     app._collect_agent_result(args, state)
-    assert model.requests[0][-1]["content"] == "Review 2."
-    assert model.requests[0][-1]["displayContent"] == "/review 2"
+    human = next(m for m in reversed(model.requests[0]) if m.get("role") == "user" and not m.get("internal"))
+    assert human["content"] == "Review 2."
+    assert human["displayContent"] == "/review 2"
     assert state.transcript[0].body == "/review 2"
 
 
@@ -109,8 +110,9 @@ def test_queued_command_keeps_expansion_snapshot_and_returns_original_text_on_st
             assert state.input == "/review security\n\ndraft"
             assert len(model.requests) == 1
         else:
-            assert model.requests[-1][-1]["content"] == "Review security."
-            assert model.requests[-1][-1]["commandPath"].endswith("review.md")
+            human = next(m for m in reversed(model.requests[-1]) if m.get("role") == "user" and not m.get("internal"))
+            assert human["content"] == "Review security."
+            assert human["commandPath"].endswith("review.md")
             assert [entry.body for entry in state.transcript if entry.kind == "user"][-1] == "/review security"
     finally:
         state.cancellation_event.set()

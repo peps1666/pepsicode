@@ -89,9 +89,13 @@ def faux_endpoint():
                     if any(c.get("name") == "task_state" for c in calls):
                         content, stop = [{"type": "text", "text": "Updated and rechecked 43"}], "end_turn"
                     else:
-                        contract, _ = json.JSONDecoder().raw_decode(
-                            body["system"].split("Current task contract: ", 1)[1]
-                        )
+                        texts = [
+                            block.get("text", "")
+                            for message in history
+                            for block in message["content"]
+                            if block.get("type") == "text" and "Current task contract: " in block.get("text", "")
+                        ]
+                        contract, _ = json.JSONDecoder().raw_decode(texts[-1].split("Current task contract: ", 1)[1])
                         content = [
                             {
                                 "type": "tool_use",

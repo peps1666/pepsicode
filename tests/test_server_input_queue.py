@@ -83,7 +83,11 @@ def test_busy_server_admits_input_without_starting_concurrent_workers(tmp_path, 
             else:
                 assert delivered == (["adjust current task", "next task"] if action == "complete" else ["next task"])
                 assert len(requests) == (3 if action == "complete" else 2)
-                user_text = [message["content"] for message in session.messages if message["role"] == "user"]
+                user_text = [
+                    message["content"]
+                    for message in session.messages
+                    if message["role"] == "user" and not message.get("internal")
+                ]
                 assert user_text == ["initial task", *delivered]
             assert not session.input_queue.accepting
             assert len([name for name, _ in events if name == "turn/end"]) == 1
