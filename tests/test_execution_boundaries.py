@@ -240,6 +240,11 @@ def test_journal_failure_prevents_dispatch(tmp_path, monkeypatch):
 
 
 def test_model_log_reconstructs_hook_context_and_schemas_without_auth_headers(tmp_path, monkeypatch):
+    from pepsicode import config
+    from pepsicode.execution.runtime import execution_journal_dir
+
+    monkeypatch.setattr(config, "PEPSI_CODE_DIR", tmp_path / "pepsi-home")
+
     class Response:
         status = 200
 
@@ -272,7 +277,7 @@ def test_model_log_reconstructs_hook_context_and_schemas_without_auth_headers(tm
         hook_engine=hook,
     )
     assert result[-1]["content"] == "done"
-    journal_path = next((tmp_path / ".pepsi-code" / "executions").glob("*.jsonl"))
+    journal_path = next(execution_journal_dir(str(tmp_path)).glob("*.jsonl"))
     records = ExecutionJournal.read(journal_path)
     request = next(record for record in records if record["event"] == "model/prepared")
     assert "HOOK_CONTEXT_SENTINEL" in request["body"]["system"]

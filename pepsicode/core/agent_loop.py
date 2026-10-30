@@ -567,6 +567,18 @@ def run_agent_turn(
         current_messages = _snip_tool_outputs(current_messages)
         if context_manager is not None:
             context_manager.messages = cast(list[dict[str, Any]], current_messages)
+            if context_manager.should_auto_compact():
+                before = len(current_messages)
+                current_messages = cast(list[ChatMessage], context_manager.compact_messages())
+                if context_manager.last_compaction_changed:
+                    _emit_hook(
+                        hook_engine,
+                        HookEvent.CONTEXT_COMPACT,
+                        cwd=cwd,
+                        permissions=permissions,
+                        agent_scope=agent_scope,
+                        data={"reason": "automatic", "before": before, "after": len(current_messages)},
+                    )
         try:
             raise_if_cancelled()
             next_step = model.next(_messages_for_model(current_messages, hook_engine))
@@ -1183,6 +1195,18 @@ def run_agent_turn_stream(
         # ------ Stream the model response ------
         if context_manager is not None:
             context_manager.messages = cast(list[dict[str, Any]], current_messages)
+            if context_manager.should_auto_compact():
+                before = len(current_messages)
+                current_messages = cast(list[ChatMessage], context_manager.compact_messages())
+                if context_manager.last_compaction_changed:
+                    _emit_hook(
+                        hook_engine,
+                        HookEvent.CONTEXT_COMPACT,
+                        cwd=cwd,
+                        permissions=permissions,
+                        agent_scope=agent_scope,
+                        data={"reason": "automatic", "before": before, "after": len(current_messages)},
+                    )
         text_content: str = ""
         parsed_calls: list[dict] | None = None
         thinking_blocks: list[dict[str, Any]] = []

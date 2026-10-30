@@ -143,8 +143,11 @@ class FileSystemService:
                 raise PermissionError("Reconcile unknown operations before further writes")
         target = resolve_tool_path(context, str(path), intent)
         if intent not in {"read", "list", "search"}:
+            from pepsicode import config
+
             reserved = (Path(context.cwd) / ".pepsi-code" / "executions").resolve()
-            if target == reserved or reserved in target.parents:
+            global_reserved = (config.PEPSI_CODE_DIR / "executions").resolve()
+            if target in (reserved, global_reserved) or reserved in target.parents or global_reserved in target.parents:
                 raise PermissionError("Execution journals are owned by the harness and cannot be edited by tools")
         return target
 

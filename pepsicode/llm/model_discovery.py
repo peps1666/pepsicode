@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
+import os
+import tempfile
 import time
 import urllib.error
 import urllib.parse
@@ -12,6 +15,71 @@ from typing import Any
 from pepsicode.llm.providers import auth_headers
 
 CACHE_SECONDS = 300
+CAPABILITY_CACHE_SECONDS = 7 * 24 * 60 * 60
+
+
+def _cache_path(runtime: dict) -> Any:
+    from pepsicode import config
+
+    identity = json.dumps(
+        [
+            runtime.get("baseUrl"),
+            runtime.get("modelsUrl"),
+            runtime.get("authType"),
+            runtime.get("authToken"),
+            runtime.get("apiKey"),
+        ],
+        ensure_ascii=False,
+    ).encode("utf-8")
+    return config.PEPSI_CODE_DIR / "model-capabilities" / (hashlib.sha256(identity).hexdigest() + ".json")
+
+
+def _load_capability_cache(runtime: dict) -> list[dict]:
+    try:
+        path = _cache_path(runtime)
+        if path.stat().st_size > 4 * 1024 * 1024:
+            return []
+        raw = json.loads(path.read_text(encoding="utf-8"))
+        age = time.time() - raw["updatedAt"]
+        if not 0 <= age <= CAPABILITY_CACHE_SECONDS or not isinstance(raw["models"], list):
+            return []
+        result = []
+        for item in raw["models"]:
+            if not isinstance(item, dict) or not isinstance(item.get("id"), str):
+                continue
+            result.append(
+                {
+                    key: item[key]
+                    for key in ("id", "contextWindow", "maxOutputTokens")
+                    if key in item
+                    and (
+                        key == "id"
+                        or (isinstance(item[key], int) and not isinstance(item[key], bool) and item[key] > 0)
+                    )
+                }
+            )
+        return result
+    except (OSError, ValueError, KeyError, TypeError):
+        return []
+
+
+def _save_capability_cache(runtime: dict, models: list[dict]) -> None:
+    path = _cache_path(runtime)
+    tmp = None
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=path.parent, delete=False) as out:
+            tmp = out.name
+            json.dump({"updatedAt": time.time(), "models": models}, out, ensure_ascii=False)
+        os.replace(tmp, path)
+    except OSError:
+        pass  # A read-only home must not prevent connecting to the provider.
+    finally:
+        if tmp and os.path.exists(tmp):
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
 
 
 class ModelDiscoveryError(ValueError):
@@ -80,16 +148,15 @@ def parse_model_metadata(item: dict[str, Any]) -> dict[str, Any]:
     display_name = item.get("name") or item.get("display_name")
     if isinstance(display_name, str) and display_name.strip():
         profile["name"] = "".join(c for c in display_name if ord(c) >= 32 and ord(c) != 127)
-    for target, source in (
-        ("contextWindow", "context_window"),
-        ("contextWindow", "context_length"),
-        ("contextWindow", "max_input_tokens"),
-        ("maxOutputTokens", "max_output_tokens"),
-        ("maxOutputTokens", "max_tokens"),
+    for target, sources in (
+        ("contextWindow", ("context_window", "context_length")),
+        ("maxOutputTokens", ("max_output_tokens", "max_tokens")),
     ):
-        value = item.get(source)
-        if isinstance(value, int) and not isinstance(value, bool) and value > 0:
-            profile[target] = value
+        for source in sources:
+            value = item.get(source)
+            if isinstance(value, int) and not isinstance(value, bool) and value > 0:
+                profile[target] = value
+                break
     return profile
 
 
@@ -124,6 +191,7 @@ def refresh_model_catalog(runtime: dict[str, Any], *, force: bool = False) -> No
     if not force and "_catalogCheckedAt" in runtime and runtime["_catalogCheckedAt"] + CACHE_SECONDS > time.monotonic():
         return
     runtime["_catalogCheckedAt"] = time.monotonic()
+    runtime["_cachedModelCapabilities"] = _load_capability_cache(runtime)
     try:
         urls = _models_urls(runtime)
         headers = {"Accept": "application/json", "anthropic-version": "2023-06-01"}
@@ -170,6 +238,13 @@ def refresh_model_catalog(runtime: dict[str, Any], *, force: bool = False) -> No
                     continue
                 raise ModelDiscoveryError(f"模型列表接口返回 HTTP {status}") from None
         runtime["_discoveredModels"] = list({item["id"]: item for item in collected}.values())
+        fresh = [
+            {key: item[key] for key in ("id", "contextWindow", "maxOutputTokens") if key in item}
+            for item in runtime["_discoveredModels"]
+            if "contextWindow" in item or "maxOutputTokens" in item
+        ]
+        if fresh:
+            _save_capability_cache(runtime, fresh)
         runtime["_catalogAuthoritative"] = True
         runtime["catalogUrl"] = selected_url
         runtime["catalogError"] = ""

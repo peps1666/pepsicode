@@ -3,6 +3,12 @@ import pytest
 from pepsicode.core.task_control import classify_intent
 
 
+def test_chinese_create_html_is_a_change():
+    result = classify_intent("在这个项目里面创建一个周俊豪很帅的html，美观一点")
+    assert result["kind"] == "change"
+    assert not result["read_only_request"]
+
+
 @pytest.mark.parametrize(
     "text",
     [

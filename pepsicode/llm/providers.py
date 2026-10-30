@@ -36,6 +36,7 @@ CONNECTION_KEYS = {
     "_catalogCheckedAt",
     "_catalogAuthoritative",
     "_discoveredModels",
+    "_cachedModelCapabilities",
     "catalogUrl",
     "catalogError",
     "promptCaching",
@@ -50,6 +51,14 @@ def configure_providers(runtime: dict, settings: dict, env: dict) -> None:
         return  # Preserve existing single-endpoint installations.
     if not isinstance(entries, dict) or not entries:
         raise ValueError("providers 必须是包含服务商配置的对象")
+    override = env.get("PEPSI_CODE_MAX_OUTPUT_TOKENS")
+    if override:
+        try:
+            override = int(override)
+        except (TypeError, ValueError):
+            raise ValueError("PEPSI_CODE_MAX_OUTPUT_TOKENS 必须为正整数") from None
+        if override <= 0:
+            raise ValueError("PEPSI_CODE_MAX_OUTPUT_TOKENS 必须为正整数")
     profiles = {}
     for identifier, entry in entries.items():
         if identifier not in PROVIDERS or not isinstance(entry, dict):
@@ -76,7 +85,7 @@ def configure_providers(runtime: dict, settings: dict, env: dict) -> None:
             "models": entry.get("models", []),
             "model": entry.get("model", ""),
             "reasoningEffort": entry.get("reasoningEffort", "default"),
-            "maxOutputTokens": entry.get("maxOutputTokens"),
+            "maxOutputTokens": override or entry.get("maxOutputTokens"),
             "fallbackModel": entry.get("fallbackModel"),
             "promptCaching": entry.get("promptCaching", False),
             "modelSource": f"settings.json providers.{identifier}",

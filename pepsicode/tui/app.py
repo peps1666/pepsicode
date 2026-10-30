@@ -70,9 +70,9 @@ from pepsicode.llm.mock_model import MockModelAdapter
 from pepsicode.llm.model_discovery import refresh_model_catalog
 from pepsicode.llm.model_settings import (
     apply_model_settings,
-    model_capabilities,
     model_display_name,
     model_selection_error,
+    update_context_window,
 )
 from pepsicode.llm.provider_setup import probe_provider_setup, save_provider_setup
 from pepsicode.llm.providers import PROVIDERS, model_settings_snapshot, provider_runtime
@@ -463,6 +463,8 @@ def _open_settings_picker(
         candidate = provider_runtime(args.runtime or {"model": "mock"}, provider)
         if kind != "provider":
             refresh_model_catalog(candidate)
+            if candidate is args.runtime:
+                update_context_window(candidate, args.context_manager)
         state.settings_picker = create_settings_picker(candidate, kind, notice=notice, return_input=return_input)
     except ValueError as error:
         _push_transcript_entry(state, kind="assistant", status="error", body=str(error))
@@ -505,6 +507,8 @@ def _handle_settings_picker_event(
         candidate = provider_runtime(args.runtime or {"model": "mock"}, picker.provider)
         if picker.kind != "provider":
             refresh_model_catalog(candidate, force=True)
+            if candidate is args.runtime:
+                update_context_window(candidate, args.context_manager)
         updated = create_settings_picker(candidate, picker.kind, return_input=picker.return_input)
         updated.persist = picker.persist
         state.settings_picker = updated
@@ -2667,10 +2671,7 @@ def run_tty_app(
         from pepsicode.context.context_manager import ContextManager
 
         context_manager = ContextManager(model=runtime.get("model", "default"))
-        window = model_capabilities(runtime, runtime["model"]).get("contextWindow")
-        if window:
-            context_manager.context_window = window
-            context_manager.context_window_is_estimate = False
+        update_context_window(runtime, context_manager)
         if hasattr(model, "summarize"):
             context_manager.summarizer = model.summarize
 

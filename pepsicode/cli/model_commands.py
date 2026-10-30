@@ -12,6 +12,9 @@ from pepsicode.llm.model_settings import (
     model_capabilities,
     model_catalog,
     model_selection_error,
+    reasoning_request_fields,
+    request_output_tokens,
+    update_context_window,
     validate_model_settings,
 )
 from pepsicode.llm.providers import model_settings_snapshot, provider_catalog, provider_runtime
@@ -111,11 +114,24 @@ def handle_model_command(
             return f"服务商设置未修改：{error}"
     if not arguments:
         if command == "/model":
-            return f"current model: {runtime['model']}\nreasoning effort: {runtime.get('reasoningEffort', 'default')}"
+            caps = model_capabilities(runtime, runtime["model"])
+            context = caps.get("contextWindow", "未提供（使用估算值）")
+            maximum = caps.get("maxOutputTokens", "未提供")
+            sources = caps.get("limitSources", {})
+            request_limit = reasoning_request_fields(runtime, runtime["model"]).get(
+                "max_tokens", request_output_tokens(runtime, runtime["model"])
+            )
+            return (
+                f"current model: {runtime['model']}\nreasoning effort: {runtime.get('reasoningEffort', 'default')}"
+                f"\n上下文窗口: {context} ({sources.get('contextWindow', 'fallback')})"
+                f"\n模型最大输出: {maximum} ({sources.get('maxOutputTokens', 'fallback')})"
+                f"\n基础输出预算: {request_limit}（会按剩余上下文缩小）"
+            )
         levels = model_capabilities(runtime, runtime["model"])["reasoningLevels"]
         return f"reasoning effort: {runtime.get('reasoningEffort', 'default')}\nallowed levels: {', '.join(levels)}"
     if command == "/model" and arguments in (["list"], ["refresh"]):
         refresh_model_catalog(runtime, force=arguments == ["refresh"])
+        update_context_window(runtime, context_manager)
         source = "API 返回的模型" if runtime.get("_catalogAuthoritative") else "本地配置（未验证可用性）"
         return (
             runtime.get("catalogError", "")

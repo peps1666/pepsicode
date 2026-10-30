@@ -82,7 +82,14 @@ def create_settings_picker(runtime: dict, kind: str, *, notice: str = "", return
         ]
         options.append(SettingOption("__add__", "+ 自定义厂商", "逐步配置其他 Anthropic 兼容服务商"))
     elif kind == "model":
-        options = [SettingOption(item["id"], item["name"], f"API ID：{item['id']}") for item in model_catalog(runtime)]
+        options = [
+            SettingOption(
+                item["id"],
+                item["name"],
+                f"上下文：{item.get('contextWindow', '未提供')}({item.get('limitSources', {}).get('contextWindow', '未知')}) · 最大输出：{item.get('maxOutputTokens', '未提供')}({item.get('limitSources', {}).get('maxOutputTokens', '未知')}) · API ID：{item['id']}",
+            )
+            for item in model_catalog(runtime)
+        ]
     else:
         capability = model_capabilities(runtime, runtime["model"])
         options = [

@@ -8,6 +8,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import pytest
 
 from pepsicode.cli.model_commands import handle_model_command, update_session_model_settings
+from pepsicode.context.context_manager import ContextManager
 from pepsicode.llm.anthropic_adapter import AnthropicModelAdapter
 from pepsicode.llm.model_discovery import parse_model_metadata, refresh_model_catalog
 from pepsicode.llm.model_settings import model_capabilities, model_catalog, model_selection_error
@@ -17,6 +18,13 @@ from pepsicode.tooling import ToolRegistry
 from pepsicode.tui.app import ScreenState, TtyAppArgs, _handle_input, _handle_normal_mode_event
 from pepsicode.tui.input_parser import KeyEvent, TextEvent
 from pepsicode.tui.settings_picker import create_settings_picker
+
+
+@pytest.fixture(autouse=True)
+def isolate_capability_cache(tmp_path, monkeypatch):
+    import pepsicode.config as config
+
+    monkeypatch.setattr(config, "PEPSI_CODE_DIR", tmp_path / "cache-home")
 
 
 @pytest.fixture
@@ -84,6 +92,100 @@ def test_discovery_uses_api_name_and_id_without_builtin_models(provider):
     picker = create_settings_picker(runtime, "model")
     assert picker.options[0].label == "Provider Latest 9.7"
     assert picker.options[0].value == "provider-new-model-2099"
+
+
+@pytest.mark.parametrize("stream", [False, True])
+def test_api_limits_follow_model_switch_and_explicit_override(provider, stream):
+    runtime, routes, _ = provider
+    routes["/proxy/models"] = (
+        200,
+        {
+            "data": [
+                {"id": "large", "context_window": 1000000, "max_output_tokens": 200000},
+                {"id": "small", "context_window": 64000, "max_output_tokens": 2048},
+                {"id": "unknown"},
+            ]
+        },
+        {},
+    )
+    refresh_model_catalog(runtime)
+    adapter = AnthropicModelAdapter(runtime, ToolRegistry([]))
+    manager = ContextManager(model="old-alias")
+    builder = adapter._build_stream_request if stream else adapter._build_request
+    for name, window, output in [("large", 1000000, 65536), ("small", 64000, 2048)]:
+        update_session_model_settings(
+            runtime=runtime, model_adapter=adapter, model=name, effort="default", context_manager=manager
+        )
+        assert manager.context_window == window and not manager.context_window_is_estimate
+        assert json.loads(builder(name, "sys", []).data)["max_tokens"] == output
+    update_session_model_settings(
+        runtime=runtime, model_adapter=adapter, model="unknown", effort="default", context_manager=manager
+    )
+    assert manager.context_window_is_estimate
+    assert json.loads(builder("unknown", "sys", []).data)["max_tokens"] == 8192
+    runtime["maxOutputTokens"] = 1234
+    assert json.loads(builder("unknown", "sys", []).data)["max_tokens"] == 1234
+    runtime["maxOutputTokens"] = 4096
+    with pytest.raises(ValueError, match="advertised maximum"):
+        update_session_model_settings(runtime=runtime, model_adapter=adapter, model="small", effort="default")
+
+
+def test_context_and_output_metadata_use_explicit_fields_first():
+    profile = parse_model_metadata(
+        {
+            "id": "x",
+            "context_window": 100000,
+            "context_length": 90000,
+            "max_input_tokens": 80000,
+            "max_output_tokens": 20000,
+            "max_tokens": 10000,
+        }
+    )
+    assert profile["contextWindow"] == 100000
+    assert profile["maxOutputTokens"] == 20000
+    assert "contextWindow" not in parse_model_metadata({"id": "x", "max_input_tokens": 80000})
+
+
+def test_model_refresh_updates_live_context_and_reports_limits(provider):
+    runtime, _, _ = provider
+    runtime["model"] = "provider-new-model-2099"
+    manager = ContextManager(model=runtime["model"])
+    manager.actual_input_tokens = 123
+    adapter = AnthropicModelAdapter(runtime, ToolRegistry([]))
+    handle_model_command("/model refresh", runtime=runtime, model_adapter=adapter, context_manager=manager)
+    assert manager.context_window == 999999 and manager.actual_input_tokens == 123
+    output = handle_model_command("/model", runtime=runtime, model_adapter=adapter)
+    assert "999999" in output and "5000" in output
+
+
+def test_cached_limits_are_scoped_to_provider_and_credentials(provider, tmp_path, monkeypatch):
+    import pepsicode.config as config
+
+    monkeypatch.setattr(config, "PEPSI_CODE_DIR", tmp_path / "home")
+    runtime, routes, _ = provider
+    refresh_model_catalog(runtime, force=True)
+    files = list((tmp_path / "home" / "model-capabilities").glob("*.json"))
+    assert len(files) == 1 and "private-test-token" not in files[0].read_text(encoding="utf-8")
+    routes["/proxy/models"] = (503, {}, {})
+    offline = {key: runtime[key] for key in ("baseUrl", "apiKey", "model")}
+    offline["model"] = "provider-new-model-2099"
+    refresh_model_catalog(offline, force=True)
+    caps = model_capabilities(offline, offline["model"])
+    assert caps["contextWindow"] == 999999 and caps["limitSources"]["contextWindow"] == "cache"
+    assert not offline.get("_catalogAuthoritative")
+    manager = ContextManager(model=offline["model"])
+    from pepsicode.llm.model_settings import update_context_window
+
+    update_context_window(offline, manager)
+    assert manager.context_window_is_estimate
+    other = {**offline, "apiKey": "different-token"}
+    refresh_model_catalog(other, force=True)
+    assert "contextWindow" not in model_capabilities(other, other["model"])
+    cache = json.loads(files[0].read_text(encoding="utf-8"))
+    cache["updatedAt"] = 0
+    files[0].write_text(json.dumps(cache), encoding="utf-8")
+    refresh_model_catalog(offline, force=True)
+    assert "contextWindow" not in model_capabilities(offline, offline["model"])
 
 
 def test_endpoint_refresh_uses_new_ids_and_native_effort_levels(provider):

@@ -65,6 +65,7 @@ from pepsicode.llm.model_settings import (
     model_capabilities,
     model_catalog,
     model_selection_error,
+    update_context_window,
     validate_model_settings,
 )
 from pepsicode.llm.provider_setup import probe_provider_setup, public_setup_result, save_provider_setup
@@ -261,10 +262,7 @@ class ClientSession:
 
         if self.runtime:
             self.context_manager = ContextManager(model=self.runtime.get("model", "default"))
-            window = model_capabilities(self.runtime, self.runtime["model"]).get("contextWindow")
-            if window:
-                self.context_manager.context_window = window
-                self.context_manager.context_window_is_estimate = False
+            update_context_window(self.runtime, self.context_manager)
             summarize = getattr(self.model, "summarize", None)
             if summarize is not None:
                 self.context_manager.summarizer = summarize
@@ -749,6 +747,8 @@ class PepsiCodeServer:
                 and not isinstance(session.model, MockModelAdapter)
             ):
                 await asyncio.to_thread(refresh_model_catalog, candidate, force=bool(params.get("refresh")))
+                if candidate is session.runtime:
+                    update_context_window(candidate, session.context_manager)
             settings = session.model_settings(params.get("provider"))
             model = params.get("model")
             if model is not None:

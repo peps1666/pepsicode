@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pepsicode.core.file_review import apply_reviewed_file_change
 from pepsicode.execution.filesystem import FILES
-from pepsicode.tooling import ToolDefinition
+from pepsicode.tooling import ToolDefinition, ToolResult
 from pepsicode.workspace import resolve_tool_path
 
 
@@ -29,7 +29,7 @@ def _run(input_data: dict, context):
     snapshot = FILES.snapshot(context, target, for_edit=True)
     content = snapshot.text
     if input_data["search"] not in content:
-        raise ValueError(f"Text not found in {input_data['path']}")
+        return ToolResult(False, f"Text not found in {input_data['path']}", status="error")
     if input_data["replace_all"]:
         next_content = input_data["replace"].join(content.split(input_data["search"]))
     else:

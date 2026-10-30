@@ -83,6 +83,9 @@ def test_child_unknown_outcome_blocks_parent_and_reconciliation_requires_approva
 
 
 def test_session_persists_running_journal_before_dispatch_and_recovers_without_replay(tmp_path, monkeypatch):
+    from pepsicode import config
+
+    monkeypatch.setattr(config, "PEPSI_CODE_DIR", tmp_path / "sessions-home")
     monkeypatch.setattr(sessions, "PEPSI_CODE_DIR", tmp_path / "sessions-home")
     monkeypatch.setattr(sessions, "SESSIONS_DIR", tmp_path / "sessions-home" / "sessions")
     session = sessions.create_new_session(str(tmp_path))
@@ -101,6 +104,7 @@ def test_session_persists_running_journal_before_dispatch_and_recovers_without_r
         first(cwd=str(tmp_path), runtime=runtime, messages=[{"role": "user", "content": "make a change"}])
     loaded = sessions.load_session(session.session_id)
     assert loaded.execution_state["journal"]
+    assert not (tmp_path / ".pepsi-code").exists()
 
     @scoped_turn
     def resumed(**options):
@@ -129,6 +133,48 @@ def test_reserved_journal_is_not_editable_even_with_full_access(tmp_path):
     context = ToolContext(str(tmp_path), permissions=PermissionManager(str(tmp_path), mode="full_access"))
     with pytest.raises(PermissionError, match="owned by the harness"):
         FILES.write_text(context, tmp_path / ".pepsi-code" / "executions" / "audit.jsonl", "forged")
+
+
+def test_global_journal_is_not_editable_even_with_full_access(tmp_path, monkeypatch):
+    from pepsicode import config
+    from pepsicode.execution.runtime import execution_journal_dir
+
+    monkeypatch.setattr(config, "PEPSI_CODE_DIR", tmp_path / "home")
+    context = ToolContext(str(tmp_path), permissions=PermissionManager(str(tmp_path), mode="full_access"))
+    with pytest.raises(PermissionError, match="owned by the harness"):
+        FILES.write_text(context, execution_journal_dir(str(tmp_path)) / "audit.jsonl", "forged")
+
+
+def test_missing_edit_text_is_a_known_failure_and_can_be_corrected(tmp_path):
+    from pepsicode.tools.edit_file import edit_file_tool
+
+    path = tmp_path / "index.html"
+    path.write_text("hello", encoding="utf-8")
+    permissions = PermissionManager(str(tmp_path), mode="auto")
+    scope = ExecutionScope(str(tmp_path), permissions=permissions)
+    registry = ToolRegistry([edit_file_tool])
+    context = ToolContext(str(tmp_path), permissions=permissions, execution=scope)
+    result = registry.execute("edit_file", {"path": "index.html", "old": "missing", "new": "x"}, context)
+    assert not result.ok and result.status == "error" and not scope.has_unknown
+    result = registry.execute("edit_file", {"path": "index.html", "old": "hello", "new": "goodbye"}, context)
+    assert result.ok and path.read_text(encoding="utf-8") == "goodbye"
+
+
+def test_legacy_journal_recovery_and_workspace_isolation(tmp_path, monkeypatch):
+    from pepsicode import config
+    from pepsicode.execution.runtime import _recover, execution_journal_dir
+
+    monkeypatch.setattr(config, "PEPSI_CODE_DIR", tmp_path / "home")
+    project = tmp_path / "project"
+    project.mkdir()
+    legacy = project / ".pepsi-code" / "executions" / "old.jsonl"
+    ExecutionJournal(legacy).append("tool/started", call_id="old", tool="write")
+    scope = ExecutionScope(str(project))
+    _recover(scope, {"journal": str(legacy)})
+    assert "old" in scope.unresolved
+    foreign = execution_journal_dir(str(tmp_path / "other")) / "other.jsonl"
+    with pytest.raises(ValueError, match="workspace"):
+        _recover(ExecutionScope(str(project)), {"journal": str(foreign)})
 
 
 def test_approval_does_not_survive_a_mode_change(tmp_path):

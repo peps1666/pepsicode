@@ -66,7 +66,7 @@ pepsicode
 
 `reasoningEffort` 默认为 `default`，不额外发送思考参数。其余档位读取接口返回的 `effort.supported_levels` 或 `capabilities.effort`，保留服务端新增的档位；只有接口明确声明支持时才显示「关闭思考」。接口未提供能力元数据时只显示默认档位，不根据模型名称推测。
 
-读取失败时显示具体状态并保留上次成功的列表；首次读取失败则仅显示本地配置，并标记未验证可用性。对于未提供能力元数据的网关，可按其文档显式配置 `models`，作为缺失元数据的补充：
+读取失败时显示具体状态并保留上次成功的列表；首次读取失败则仅显示本地配置，并标记未验证可用性。对于代理或自建网关，可按其实际配置显式设置模型能力：
 
 ```json
 {
@@ -75,6 +75,8 @@ pepsicode
   "models": [
     {
       "id": "my-model-alias",
+      "contextWindow": 128000,
+      "maxOutputTokens": 8192,
       "reasoningMode": "effort",
       "reasoningLevels": ["low", "high", "max"],
       "supportsThinkingOff": true
@@ -83,7 +85,11 @@ pepsicode
 }
 ```
 
-`reasoningMode` 可设为 `none`（默认参数）、`budget`（`thinking.budget_tokens`）、`budget_effort`（预算与 `output_config.effort`）、`adaptive`（自适应 `thinking` + `output_config.effort`）、`output_effort`（只发送 `output_config.effort`）或 `effort`（启用 `thinking` + `output_config.effort`）。显式使用 `budget` 模式时，客户端的 `low/medium/high` 预算分别为 1024/4096/16384；`maxOutputTokens` 必须大于预算，未配置时预留 4096 token 用于回答。能力声明应与服务端实际支持保持一致，参考 [DeepSeek 参数说明](https://api-docs.deepseek.com/guides/anthropic_api/) 和 [Kimi 参数参考](https://platform.kimi.com/docs/api/messages)。默认请求显式发送 `max_tokens`，未配置输出上限时使用客户端的 4096 token 默认值（不会超过接口声明的上限）。
+`reasoningMode` 可设为 `none`（默认参数）、`budget`（`thinking.budget_tokens`）、`budget_effort`（预算与 `output_config.effort`）、`adaptive`（自适应 `thinking` + `output_config.effort`）、`output_effort`（只发送 `output_config.effort`）或 `effort`（启用 `thinking` + `output_config.effort`）。显式使用 `budget` 模式时，客户端的 `low/medium/high` 预算分别为 1024/4096/16384，输出上限必须大于思考预算。能力声明应与服务端实际支持保持一致，参考 [DeepSeek 参数说明](https://api-docs.deepseek.com/guides/anthropic_api/) 和 [Kimi 参数参考](https://platform.kimi.com/docs/api/messages)。
+
+模型列表返回 `context_window` / `context_length` 和 `max_output_tokens` 时，自动随模型切换使用这些能力。默认单次输出预算取模型最大输出和 65536 两者的较小值，避免把模型的整个上限用于每次请求；未提供最大输出时回退到 8192，显式思考预算较大时额外预留回答空间。如果接口没有提供上限而实际支持不足 8192，需按服务商文档手动设置。可以在服务商配置中设定 `maxOutputTokens` 或使用 `PEPSI_CODE_MAX_OUTPUT_TOKENS` 覆盖；显式设置超过模型有效上限时会报错。终端模型菜单可查看接口提供的容量，管道模式下 `/model` 还显示基础输出预算。上下文窗口缺失时沿用本地默认或估算容量。
+
+`models` 中的 `contextWindow` 和 `maxOutputTokens` 是对应模型在当前服务商上的实际限制，优先于接口返回值，适合代理或自建服务限制较低的情况。请求实际输出预算还会根据当前输入估算和剩余窗口缩小；输入占用接近窗口时自动压缩或提示无法安全压缩，估算仍可能与服务商计数不同。模型菜单标注 `config`（手动配置）、`api`（接口）、`last-api`（本次刷新失败后的上次接口数据）或 `cache`（磁盘缓存）。API 成功返回的限制会按接口及凭据身份隔离缓存在用户目录，最多保留 7 天；缓存只补充同一模型的能力，不证明模型当前可用。
 
 也可使用环境变量：
 

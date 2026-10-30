@@ -302,6 +302,8 @@ def test_bounded_truncation_recovery_discards_partial_tools(tmp_path, monkeypatc
         )
         assert len(calls) == 2 and not messages[-1].get("isError")
         assert snapshot()["task"]["status"] == "answered"
+        recovery = next(m["content"] for m in messages if m.get("internal") and "bounded recovery" in m["content"])
+        assert "smaller next step" in recovery and "small, complete edits" in recovery
 
 
 @pytest.mark.parametrize("prompt", ["帮我支持 CSV 导出", "请把首页做成深色", "先解释原因再修改首页"])

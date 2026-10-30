@@ -75,7 +75,7 @@ def test_request_uses_model_specific_reasoning(session, stream, model, effort, t
     if thinking and thinking.get("budget_tokens"):
         assert body["max_tokens"] > thinking["budget_tokens"]
     if effort == "default":
-        assert body["max_tokens"] == 4096  # Messages requires an explicit output limit.
+        assert body["max_tokens"] == 8192  # Messages requires an explicit output limit.
 
 
 def test_switch_preserves_conversation_services_and_shared_runtime(session, monkeypatch):

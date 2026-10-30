@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import html
 import json
+import math
 import random
 import re
 import time
@@ -13,7 +14,12 @@ from typing import Any, Literal, cast
 from pepsicode.cancellation import cancellable_response, cancellation_event, raise_if_cancelled
 from pepsicode.execution.model_requests import model_timeout, recorded_request, recorded_stream
 from pepsicode.llm.assistant_text import parse_assistant_text
-from pepsicode.llm.model_settings import model_capabilities, model_selection_error, reasoning_request_fields
+from pepsicode.llm.model_settings import (
+    model_capabilities,
+    model_selection_error,
+    reasoning_request_fields,
+    request_output_tokens,
+)
 from pepsicode.llm.providers import auth_headers, messages_url
 from pepsicode.types import AgentStep, ChatMessage, ProviderThinkingBlock, StepDiagnostics, StreamToken, ToolCall
 
@@ -384,6 +390,23 @@ class AnthropicModelAdapter:
         # Last token usage reported by the API ({"input_tokens", "output_tokens"}).
         self.last_usage: dict[str, int] | None = None
 
+    def _fit_output_to_context(self, body: dict, model: str) -> None:
+        from pepsicode.context.context_manager import estimate_tokens
+
+        window = model_capabilities(self.runtime, model).get("contextWindow")
+        if not isinstance(window, int) or isinstance(window, bool) or window <= 0:
+            return
+        prompt = json.dumps({key: body.get(key) for key in ("system", "messages", "tools")}, ensure_ascii=False)
+        estimated = math.ceil(estimate_tokens(prompt) * 1.15)
+        room = math.floor(window * 0.99) - estimated
+        thinking = body.get("thinking", {})
+        thinking_budget = thinking.get("budget_tokens", 0) if isinstance(thinking, dict) else 0
+        if room < max(256, thinking_budget + 1):
+            raise ContextOverflowError(
+                "Insufficient context space for the request and output; compact the conversation"
+            )
+        body["max_tokens"] = min(body["max_tokens"], room)
+
     def _build_request(
         self, model: str, system_message: str, converted_messages: list[dict[str, Any]]
     ) -> urllib.request.Request:
@@ -400,10 +423,9 @@ class AnthropicModelAdapter:
                 for tool in self.tools.model_tools(converted_messages)
             ],
         }
-        request_body["max_tokens"] = self.runtime.get("maxOutputTokens") or min(
-            4096, model_capabilities(self.runtime, model).get("maxOutputTokens", 4096)
-        )
+        request_body["max_tokens"] = request_output_tokens(self.runtime, model)
         request_body.update(reasoning_request_fields(self.runtime, model))
+        self._fit_output_to_context(request_body, model)
         if self.runtime.get("promptCaching") is True:
             request_body["cache_control"] = {"type": "ephemeral"}
 
@@ -441,10 +463,9 @@ class AnthropicModelAdapter:
                 for tool in self.tools.model_tools(converted_messages)
             ],
         }
-        request_body["max_tokens"] = self.runtime.get("maxOutputTokens") or min(
-            4096, model_capabilities(self.runtime, model).get("maxOutputTokens", 4096)
-        )
+        request_body["max_tokens"] = request_output_tokens(self.runtime, model)
         request_body.update(reasoning_request_fields(self.runtime, model))
+        self._fit_output_to_context(request_body, model)
         if self.runtime.get("promptCaching") is True:
             request_body["cache_control"] = {"type": "ephemeral"}
 

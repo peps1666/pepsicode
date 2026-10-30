@@ -242,6 +242,20 @@ def test_only_four_provider_types_and_invalid_config_rejected():
         configure_providers({}, {"providers": {"qwen": {"maxOutputTokens": -1}}}, {})
 
 
+def test_output_environment_override_applies_across_providers(monkeypatch):
+    monkeypatch.delenv("PEPSI_CODE_PROVIDER", raising=False)
+    runtime = {}
+    settings = {
+        "providers": {
+            "deepseek": {"apiKey": "one", "model": "a", "maxOutputTokens": 1000},
+            "kimi": {"apiKey": "two", "model": "b", "maxOutputTokens": 2000},
+        }
+    }
+    configure_providers(runtime, settings, {"PEPSI_CODE_MAX_OUTPUT_TOKENS": "16000"})
+    assert runtime["maxOutputTokens"] == 16000
+    assert provider_runtime(runtime, "kimi")["maxOutputTokens"] == 16000
+
+
 def test_provider_without_catalog_uses_explicit_models_without_network(four_providers):
     runtime, _, seen = four_providers
     candidate = provider_runtime(runtime, "qwen")

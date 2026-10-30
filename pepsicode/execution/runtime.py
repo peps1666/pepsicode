@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 import os
@@ -301,6 +302,15 @@ def bind_scope(scope: ExecutionScope | None):
         _scope.reset(token)
 
 
+def execution_journal_dir(cwd: str) -> Path:
+    """Keep per-workspace journals outside the user's project tree."""
+    from pepsicode import config
+
+    workspace = os.path.normcase(str(Path(cwd).resolve()))
+    digest = hashlib.sha256(workspace.encode("utf-8")).hexdigest()
+    return (config.PEPSI_CODE_DIR / "executions" / digest).resolve()
+
+
 def _recover(scope, previous):
     if isinstance(previous, dict) and previous.get("usage_uncertain") and scope.budget:
         scope.budget.unmetered = True
@@ -308,7 +318,7 @@ def _recover(scope, previous):
         return
     path = Path(previous["journal"]).resolve()
     reserved = (Path(scope.cwd) / ".pepsi-code" / "executions").resolve()
-    if path.parent != reserved or path.suffix != ".jsonl":
+    if path.parent not in {reserved, execution_journal_dir(scope.cwd)} or path.suffix != ".jsonl":
         raise ValueError("Recovery journal must belong to this workspace's execution directory")
     try:
         calls = ExecutionJournal.interrupted_calls(path)
@@ -358,7 +368,7 @@ def scoped_turn(function):
                 control=runtime.setdefault("_taskControl", {}),
             )
             if Path(cwd).is_dir():
-                scope.journal = ExecutionJournal(Path(cwd) / ".pepsi-code" / "executions" / f"{scope.task_id}.jsonl")
+                scope.journal = ExecutionJournal(execution_journal_dir(cwd) / f"{scope.task_id}.jsonl")
             thresholds = runtime.get("repeatToolThresholds", [3, 5, 8])
             if (
                 not isinstance(thresholds, (list, tuple))

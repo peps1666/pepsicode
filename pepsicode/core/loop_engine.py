@@ -266,7 +266,18 @@ def run_loop(
                     {
                         "role": "user",
                         "internal": True,
-                        "content": f"Harness bounded recovery ({reason}). The previous response was incomplete; none of its tools were dispatched. Rebuild the next request from current state. Do not concatenate or replay incomplete tool arguments.",
+                        "content": (
+                            f"Harness bounded recovery ({reason}). The previous response was incomplete; "
+                            "none of its tools were dispatched. Rebuild the next request from current state. "
+                            "Do not concatenate or replay incomplete tool arguments. "
+                            + (
+                                "Use a much smaller next step: create a compact working file first, then use "
+                                "small, complete edits to expand it over separate tool calls. Avoid long thinking "
+                                "or emitting the whole implementation in one response. "
+                                if reason == "max_tokens"
+                                else ""
+                            )
+                        ),
                     }
                 )
                 continue

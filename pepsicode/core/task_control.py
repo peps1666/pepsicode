@@ -160,7 +160,7 @@ def classify_intent(text):
     )
     action = bool(
         re.search(
-            r"实现|修复|修改|改一下|改一改|添加|新增|编写|部署|执行|运行|完成|帮我|帮忙|请把|做成|删除|迁移|重命名|\b(?:implement|fix|create|add|build|update|change|modify|edit|remove|delete|rename|migrate|deploy|execute|run|support)\b",
+            r"实现|修复|修改|改一下|改一改|添加|新增|创建|生成|编写|部署|执行|运行|完成|帮我|帮忙|请把|做成|删除|迁移|重命名|\b(?:implement|fix|create|add|build|update|change|modify|edit|remove|delete|rename|migrate|deploy|execute|run|support)\b",
             text,
             re.I,
         )

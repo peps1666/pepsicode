@@ -467,6 +467,7 @@ class ContextManager:
     context_window: int = 0
     messages: list[dict[str, Any]] = field(default_factory=list)
     context_window_is_estimate: bool = False
+    output_reserve: int = 0
     compaction_history: list[dict[str, Any]] = field(default_factory=list)
     compact_boundaries: list[CompactBoundary] = field(default_factory=list)
     recovery_state: RecoveryState = field(default_factory=RecoveryState)
@@ -625,7 +626,7 @@ class ContextManager:
         usage_pct = (total_tokens / self.context_window * 100) if self.context_window > 0 else 0
 
         is_near_limit = usage_pct >= 80  # Warning at 80%
-        should_compact = usage_pct >= (AUTOCOMPACT_THRESHOLD * 100)
+        should_compact = total_tokens >= self.compaction_ceiling()
 
         return ContextStats(
             total_tokens=total_tokens,
@@ -638,6 +639,13 @@ class ContextManager:
             is_near_limit=is_near_limit,
             should_compact=should_compact,
         )
+
+    def compaction_ceiling(self) -> int:
+        """Leave bounded room for output and estimation error, even mid-turn."""
+        if self.output_reserve <= 0:
+            return int(self.context_window * AUTOCOMPACT_THRESHOLD)
+        reserve = min(self.output_reserve, self.context_window // 4)
+        return min(int(self.context_window * AUTOCOMPACT_THRESHOLD), int(self.context_window * 0.99) - reserve)
 
     def should_auto_compact(self) -> bool:
         """Check if auto-compaction should trigger."""
@@ -658,7 +666,7 @@ class ContextManager:
             self.last_compaction_error = self.circuit_breaker.blocked_reason
             return self.messages
 
-        target_tokens = int(self.context_window * COMPACT_TARGET_RATIO)
+        target_tokens = min(int(self.context_window * COMPACT_TARGET_RATIO), int(self.compaction_ceiling() * 0.8))
         system_messages = [m for m in self.messages if m.get("role") == "system" and not m.get("_compaction_marker")]
         prior_markers = [m for m in self.messages if m.get("role") == "system" and m.get("_compaction_marker")]
         other_messages = [m for m in self.messages if m.get("role") != "system"]

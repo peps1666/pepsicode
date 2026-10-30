@@ -291,6 +291,9 @@ def main() -> None:
     context_mgr = None
     if runtime:
         context_mgr = ContextManager(model=runtime.get("model", "default"))
+        from pepsicode.llm.model_settings import update_context_window
+
+        update_context_window(runtime, context_mgr)
         # Let the context manager LLM-summarize old turns during compaction
         # when a real model is available (falls back to heuristics otherwise).
         summarize = getattr(model, "summarize", None)
