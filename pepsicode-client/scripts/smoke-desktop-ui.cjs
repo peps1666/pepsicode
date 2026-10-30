@@ -70,16 +70,27 @@ async function main() {
         2: { id: "read-missing", name: "read_file", input: { path: "missing-trajectory-file.txt" } },
         3: { id: "read-existing", name: "read_file", input: { path: "README.md" } },
         4: { id: "write-result", name: "write_file", input: { path: "trajectory-result.txt", content: "written once" } },
-        7: { id: "permission-deny", name: "run_command", input: { command: process.env.ComSpec || "C:\\Windows\\System32\\cmd.exe", args: ["/d", "/c", approvalCommand] } },
-        9: { id: "permission-allow", name: "run_command", input: { command: process.env.ComSpec || "C:\\Windows\\System32\\cmd.exe", args: ["/d", "/c", approvalCommand] } },
+        9: { id: "permission-deny", name: "run_command", input: { command: process.env.ComSpec || "C:\\Windows\\System32\\cmd.exe", args: ["/d", "/c", approvalCommand] } },
+        12: { id: "permission-allow", name: "run_command", input: { command: process.env.ComSpec || "C:\\Windows\\System32\\cmd.exe", args: ["/d", "/c", approvalCommand] } },
       };
       const call = calls[modelRequests];
-      const blocks = call ? [
-        ["content_block_start", { index: 2, content_block: { type: "tool_use", id: call.id, name: call.name, input: {} } }],
-        ["content_block_delta", { index: 2, delta: { type: "input_json_delta", partial_json: JSON.stringify(call.input) } }],
-      ] : [
+      const batch = call ? [call] : [];
+      if ([5, 7, 10, 13].includes(modelRequests)) {
+        const request = JSON.parse(requestBody);
+        const texts = request.messages.flatMap(message => Array.isArray(message.content) ? message.content : []).filter(block => block.type === "text" && block.text.includes("Current task contract: "));
+        const jsonText = texts.at(-1).text.split("Current task contract: ")[1].split("\nFor change/operation tasks")[0];
+        const contract = JSON.parse(jsonText);
+        const criterion = modelRequests === 10 ? {id:"fixture",kind:"file_absent",path:"permission-result.txt"} : modelRequests === 13 ? {id:"fixture",kind:"file_exists",path:"permission-result.txt"} : {id:"fixture",kind:"file_exists",path:"trajectory-result.txt"};
+        batch.unshift({id:`define-acceptance-${modelRequests}`,name:"task_state",input:{action:"define",task_id:contract.id,revision:contract.revision,criteria:[criterion]}});
+      }
+      const blocks = batch.length ? batch.flatMap((item, n) => [
+        ["content_block_start", { index: 2 + n, content_block: { type: "tool_use", id: item.id, name: item.name, input: {} } }],
+        ["content_block_delta", { index: 2 + n, delta: { type: "input_json_delta", partial_json: JSON.stringify(item.input) } }],
+        ["content_block_stop", { index: 2 + n }],
+      ]) : [
         ["content_block_start", { index: 2, content_block: { type: "text", text: "" } }],
-        ["content_block_delta", { index: 2, delta: { type: "text_delta", text: modelRequests === 10 ? "LOCAL_PERMISSION_APPROVED" : modelRequests === 8 ? "LOCAL_PERMISSION_DENIED" : modelRequests > 5 ? "LOCAL_TRAJECTORY_CONTINUE_OK" : "LOCAL_PROVIDER_RESTART_OK" } }],
+        ["content_block_delta", { index: 2, delta: { type: "text_delta", text: modelRequests === 14 ? "LOCAL_PERMISSION_APPROVED" : modelRequests === 11 ? "LOCAL_PERMISSION_DENIED" : modelRequests > 6 ? "LOCAL_TRAJECTORY_CONTINUE_OK" : "LOCAL_PROVIDER_RESTART_OK" } }],
+        ["content_block_stop", { index: 2 }],
       ];
       const events = [
         ["message_start", { message: { usage: { input_tokens: 10 } } }],
@@ -93,7 +104,6 @@ async function main() {
         ["content_block_start", { index: 1, content_block: { type: "redacted_thinking", data: "fixture-redacted-secret" } }],
         ["content_block_stop", { index: 1 }],
         ...blocks,
-        ["content_block_stop", { index: 2 }],
         ["message_delta", { delta: { stop_reason: "end_turn" }, usage: { output_tokens: 5 } }],
         ["message_stop", {}],
       ];
@@ -240,7 +250,7 @@ async function main() {
     await until(() => evaluate("!document.querySelector('button[aria-label=\"停止任务\"]')"), "Trajectory turn did not finish");
     assert.equal(await evaluate("document.body.innerText.includes('No verification commands found')"), false, "No-check warning leaked into chat");
     await evaluate("Array.from(document.querySelectorAll('button')).find(button => button.innerText.startsWith('执行过程')).click()");
-    assert.equal(await evaluate("Array.from(document.querySelectorAll('[data-model-thinking]')).length"), 4, "Public thinking blocks missing after authoritative history refresh");
+    assert.equal(await evaluate("Array.from(document.querySelectorAll('[data-model-thinking]')).length"), 5, "Public thinking blocks missing after authoritative history refresh");
     assert.equal(await evaluate("Array.from(document.querySelectorAll('[data-model-thinking]'))[0].textContent.includes('LOCAL_MODEL_THINKING_2')"), true);
     assert.equal(await evaluate("document.body.textContent.includes('fixture-thinking-signature') || document.body.textContent.includes('fixture-redacted-secret')"), false, "Signed or redacted metadata leaked to the renderer");
     assert.ok(thinkingReplayRequests >= 3, "Signed thinking was lost from provider replay");
@@ -249,13 +259,13 @@ async function main() {
     await until(() => evaluate("!!document.querySelector('tr[data-call-id=\"read-missing\"]')"), "Recorded tool IDs did not survive authoritative history refresh");
     assert.equal(await evaluate("document.querySelector('tr[data-call-id=\"read-missing\"]').dataset.status"), "failed");
     assert.equal(await evaluate("document.querySelector('tr[data-call-id=\"read-existing\"]').dataset.status"), "completed");
-    assert.equal(await evaluate("document.body.innerText.includes('模型请求重试') && document.body.innerText.includes('项目未发现自动检查命令')"), true);
+    assert.equal(await evaluate("document.body.innerText.includes('模型请求重试') && document.body.innerText.includes('产物已检查，行为未验证')"), true);
     await evaluate("document.querySelector('tr[data-call-id=\"read-missing\"]').click()");
     assert.equal(await evaluate("document.querySelector('aside[aria-label=\"执行步骤详情\"]').innerText.includes('missing-trajectory-file.txt')"), true);
     assert.equal(await evaluate("document.querySelector('aside[aria-label=\"执行步骤详情\"]').innerText.includes(' ms')"), true, "Recorded tool duration missing");
     await evaluate("Array.from(document.querySelectorAll('button')).find(button => button.innerText === '继续处理').click()");
     await until(() => evaluate("document.body.innerText.includes('LOCAL_TRAJECTORY_CONTINUE_OK')"), "Continue from failure did not resume the task");
-    assert.equal(modelRequests, 6, "Continuing must not silently replay prior tool calls");
+    assert.equal(modelRequests, 8, "Continuing must not silently replay prior tool calls");
     await until(() => evaluate("!document.querySelector('button[aria-label=\"停止任务\"]')"), "Continue turn did not settle");
     await evaluate("document.querySelector('#chat-tab').click()");
     await setValue("#task-composer", "Test inline command approval", "HTMLTextAreaElement");
@@ -272,10 +282,10 @@ async function main() {
     await setValue("#task-composer", "Test approving the command once", "HTMLTextAreaElement");
     await evaluate("document.querySelector('button[aria-label=\"发送\"]').click()");
     await until(() => evaluate("!!document.querySelector('section[aria-label=\"操作权限确认\"]')"), "Second permission request did not appear");
-    await evaluate("Array.from(document.querySelectorAll('section[aria-label=\"操作权限确认\"] button')).find(b=>b.innerText==='本次会话允许').click()");
+    await evaluate("Array.from(document.querySelectorAll('section[aria-label=\"操作权限确认\"] button')).find(b=>b.innerText==='仅允许这一次').click()");
     await until(() => evaluate("document.body.innerText.includes('LOCAL_PERMISSION_APPROVED') && !document.querySelector('button[aria-label=\"停止任务\"]')"), "Approved command did not finish");
     assert.equal(fs.readFileSync(path.join(workspace,"permission-result.txt"),"utf8").trim(),"PERMISSION_APPROVED");
-    assert.equal(modelRequests,10,"Approval unexpectedly replayed a model request");
+    assert.equal(modelRequests,14,"Approval unexpectedly replayed a model request");
     assert.ok(authenticatedCalls >= 3);
     const restartPort = Number([...fs.readFileSync(path.join(userData, "backend.log"), "utf8").matchAll(/Starting backend on port (\d+)/g)].at(-1)[1]);
     await evaluate("window.close()").catch(() => {});
@@ -287,13 +297,13 @@ async function main() {
     fs.writeFileSync(path.join(build, "desktop-zip-smoke.json"), JSON.stringify({
       passed: true, archive: path.basename(archive), runtimePath: env.PATH,
       sha256: fs.readFileSync(archive + ".sha256", "utf8").split(/\s+/)[0],
-      checks: ["real ZIP extraction", "Unicode and space paths", "isolated profile", "no Python/Node on PATH", "real renderer and bundled backend", "mock message roundtrip", "styled custom menu within viewport", "menu Escape preserves dialog", "all builtin providers selectable", "DeepSeek key setup and save", "key absent from UI summary, localStorage and logs", "provider persists after restart", "authenticated local provider streaming roundtrip", "transient streaming request recovery", "live public provider thinking before tools", "thinking survives history refresh", "signed thinking preserved for replay; metadata hidden from UI", "durable tool call IDs and real timing", "failed and successful tools in trajectory", "no-check verification stays out of chat", "continue from recorded failure without replay", "inline permission card above composer", "approval does not blur or block chat", "Escape cannot approve or deny", "denied command never executes", "session-scoped command executes only after approval", "cat icon embedded in both executables", "backend shutdown"],
+      checks: ["real ZIP extraction", "Unicode and space paths", "isolated profile", "no Python/Node on PATH", "real renderer and bundled backend", "mock message roundtrip", "styled custom menu within viewport", "menu Escape preserves dialog", "all builtin providers selectable", "DeepSeek key setup and save", "key absent from UI summary, localStorage and logs", "provider persists after restart", "authenticated local provider streaming roundtrip", "transient streaming request recovery", "live public provider thinking before tools", "thinking survives history refresh", "signed thinking preserved for replay; metadata hidden from UI", "durable tool call IDs and real timing", "failed and successful tools in trajectory", "artifact-only validation distinguished from behavioral verification", "continue from recorded failure without replay", "inline permission card above composer", "approval does not blur or block chat", "Escape cannot approve or deny", "denied command never executes", "single command executes only after approval", "cat icon embedded in both executables", "backend shutdown"],
     }, null, 2));
     console.log("PASS: ZIP desktop, provider setup/restart, streaming retry, durable execution trajectory, failed tools, continue without replay, cat icons and backend shutdown; no Python/Node on PATH.");
   } catch (error) {
     const logFile = path.join(userData, "backend.log");
     const backendOutput = fs.existsSync(logFile) ? fs.readFileSync(logFile, "utf8") : "No backend log was created";
-    throw new Error(`${error.message}\n${output}\n${backendOutput}`);
+    throw new Error(`${error.stack}\n${output}\n${backendOutput}`);
   } finally {
     socket?.close();
     await new Promise(resolve => api.close(resolve));
