@@ -31,7 +31,7 @@ def test_deferred_schemas_are_loaded_by_search_on_next_model_request(tmp_path):
     result = tools.execute("search_tools", {"query": "数据库", "limit": 1}, ToolContext(str(tmp_path)))
     assert result.ok and "mcp__postgres__query" in result.output
     request = json.loads(adapter._build_request("test", "system", []).data)
-    assert [tool["name"] for tool in request["tools"]] == ["read_file", "search_tools", "mcp__postgres__query"]
+    assert [tool["name"] for tool in request["tools"]] == ["read_file", "mcp__postgres__query", "search_tools"]
     assert tools.find("search_tools").is_read_only
     assert len(tools.list()) == 5  # CLI inventory is still complete.
 
@@ -55,6 +55,71 @@ def test_resume_recovers_used_tools_from_both_message_formats():
             [{"role": "assistant", "content": [{"type": "tool_use", "name": "mcp__docker__logs"}]}]
         )
     ]
+    tools.restore_loaded_tools(None)
+    assert tools.loaded_tool_names() == ["read_file", "search_tools"]
+
+
+def test_discovery_persists_unused_tool_and_stable_order(tmp_path, monkeypatch):
+    from pepsicode.core import session as sessions
+    from pepsicode.core.session_tree import recording_session
+    from pepsicode.execution.runtime import ExecutionJournal, ExecutionScope, bind_scope
+
+    monkeypatch.setattr(sessions, "PEPSI_CODE_DIR", tmp_path)
+    monkeypatch.setattr(sessions, "SESSIONS_DIR", tmp_path / "sessions")
+    session = sessions.create_new_session(str(tmp_path))
+    session.messages = [{"role": "user", "content": "find a tool"}]
+    journal = ExecutionJournal(tmp_path / "journal.jsonl")
+    scope = ExecutionScope(str(tmp_path), journal=journal)
+    original = registry()
+    from pepsicode.execution.model_requests import _begin
+    from pepsicode.execution.prefix_diff import compare_prepared
+
+    adapter = AnthropicModelAdapter({"model": "test", "baseUrl": "https://example.test", "apiKey": "test"}, original)
+    with bind_scope(scope), recording_session(session):
+        _begin(scope, adapter._build_request("test", "system", []))
+        assert original.execute(
+            "search_tools", {"query": "code_review"}, ToolContext(str(tmp_path), execution=scope)
+        ).ok
+        assert original.execute(
+            "search_tools", {"query": "code_review"}, ToolContext(str(tmp_path), execution=scope)
+        ).ok
+        _begin(scope, adapter._build_request("test", "system", []))
+    loaded = sessions.load_session(session.session_id)
+    assert loaded is not None
+    restored = registry()
+    restored.restore_loaded_tools(loaded.loaded_tools)
+    assert restored.loaded_tool_names() == original.loaded_tool_names()
+    assert "code_review" in restored.loaded_tool_names()
+    records = ExecutionJournal.read(journal.path)
+    assert len([x for x in records if x["event"] == "model/prefix-break"]) == 1
+    assert compare_prepared(records)[0]["prefix_breaks"] == [{"reason": "tool-discovery", "added_count": 1}]
+
+
+@pytest.mark.parametrize("mode", ["eager", "lazy", "auto"])
+def test_configured_tool_loading_has_stable_initial_view(tmp_path, mode):
+    from pepsicode.tools import create_default_tool_registry
+
+    tools = create_default_tool_registry(str(tmp_path), {"model": "test", "toolLoading": mode, "mcpServers": {}})
+    try:
+        if mode in {"eager", "auto"}:
+            assert tools.loaded_tool_names() == [tool.name for tool in tools.list()]
+        else:
+            assert len(tools.loaded_tool_names()) < len(tools.list())
+        assert tools.loaded_tool_names() == [tool.name for tool in tools.model_tools()]
+    finally:
+        tools.dispose()
+
+
+def test_auto_tool_loading_respects_small_configured_window(tmp_path):
+    from pepsicode.tools import create_default_tool_registry
+
+    tools = create_default_tool_registry(
+        str(tmp_path), {"model": "test", "models": [{"id": "test", "contextWindow": 300}], "toolLoading": "auto"}
+    )
+    try:
+        assert len(tools.loaded_tool_names()) < len(tools.list())
+    finally:
+        tools.dispose()
 
 
 def test_search_cannot_discover_tools_outside_filtered_registry(tmp_path):

@@ -85,6 +85,7 @@ class SessionData:
     verification_state: dict[str, Any] | None = None
     execution_state: dict[str, Any] | None = None
     task_control: dict[str, Any] = field(default_factory=dict)
+    loaded_tools: list[str] | None = None
     tree: dict[str, Any] = field(default_factory=dict)
     parent_session_id: str | None = None
     parent_entry_id: str | None = None
@@ -266,6 +267,7 @@ def _save_session_locked(session: SessionData) -> None:
         "verification_state": session.verification_state,
         "execution_state": session.execution_state,
         "task_control": session.task_control,
+        "loaded_tools": session.loaded_tools,
         "tree": session.tree,
         "parent_session_id": session.parent_session_id,
         "parent_entry_id": session.parent_entry_id,
@@ -355,6 +357,9 @@ def load_session(session_id: str) -> SessionData | None:
             verification_state=data.get("verification_state"),
             execution_state=data.get("execution_state"),
             task_control=control,
+            loaded_tools=data.get("loaded_tools")
+            if isinstance(data.get("loaded_tools"), list) and all(isinstance(x, str) for x in data["loaded_tools"])
+            else None,
             tree=data.get("tree", {}),
             parent_session_id=data.get("parent_session_id"),
             parent_entry_id=data.get("parent_entry_id"),

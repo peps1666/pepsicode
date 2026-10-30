@@ -110,6 +110,7 @@ interface SessionState {
   verification: VerificationReport | null;
   task: TaskReport | null;
   cacheHitPercentage: number | null;
+  latestUsage: { input_total: number | null; cache_read: number | null; cache_write: number | null; cost_usd: number | null } | null;
   accessMode: "read_only" | "auto" | "trust_commands" | "full_access";
   permissionUpdating: boolean;
   updatePermissions: (mode: SessionState["accessMode"]) => Promise<void>;
@@ -312,6 +313,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   verification: null,
   task: null,
   cacheHitPercentage: null,
+  latestUsage: null,
   accessMode: "auto",
   permissionUpdating: false,
   updatePermissions: async (mode) => {
@@ -603,6 +605,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         case "usage/update": {
           set((state) => ({
             cacheHitPercentage: data.cache_hit_percentage ?? null,
+            latestUsage: data.input_total == null ? null : { input_total: data.input_total, cache_read: data.cache_read ?? null, cache_write: data.cache_write ?? null, cost_usd: data.cost_usd ?? null },
             contextData: data.context ? { ...state.contextData, ...data.context } : null,
           }));
           break;

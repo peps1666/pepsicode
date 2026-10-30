@@ -1,3 +1,4 @@
+import json
 from dataclasses import asdict
 from typing import Any
 
@@ -76,7 +77,13 @@ def create_default_tool_registry(
         finally:
             mcp["dispose"]()
 
-    return ToolRegistry(
+    mode = (runtime or {}).get("toolLoading", "auto")
+    if not isinstance(mode, str) or mode not in {"auto", "eager", "lazy"}:
+        dispose()
+        raise ValueError("toolLoading must be auto, eager, or lazy")
+    if mode == "auto" and (runtime or {}).get("toolDiscoveryEnabled", True) is False:
+        mode = "eager"
+    registry = ToolRegistry(
         [
             # User interaction
             ask_user_tool,
@@ -146,7 +153,21 @@ def create_default_tool_registry(
         skills=skills,
         mcp_servers=mcp["servers"],
         disposer=dispose,
-        deferred=(runtime or {}).get("toolDiscoveryEnabled", True) is not False,
+        deferred=mode != "eager",
         core_tools=(runtime or {}).get("toolCoreTools"),
         search_aliases=(runtime or {}).get("toolSearchAliases"),
     )
+    if mode == "auto":
+        from pepsicode.context.context_manager import DEFAULT_CONTEXT_WINDOWS, estimate_tokens
+        from pepsicode.llm.model_settings import model_capabilities
+
+        model = (runtime or {}).get("model", "default")
+        window = model_capabilities(runtime or {}, model).get("contextWindow") or DEFAULT_CONTEXT_WINDOWS["default"]
+        schema_text = json.dumps(
+            [{"name": t.name, "description": t.description, "input_schema": t.input_schema} for t in registry.list()],
+            ensure_ascii=False,
+        )
+        mode = "eager" if estimate_tokens(schema_text) <= min(12_000, window * 0.15) else "lazy"
+    if mode == "eager":
+        registry.load_all_tools()
+    return registry

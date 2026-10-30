@@ -277,6 +277,14 @@ class ClientSession:
     def _rebuild_system_prompt(self) -> None:
         if not self.permissions or not self.tools:
             return
+        profile = self.session_data.profile if self.session_data else "default"
+        if (
+            self.messages
+            and self.messages[0].get("role") == "system"
+            and self.messages[0].get("_prompt_format") == 1
+            and self.messages[0].get("_prompt_profile") == profile
+        ):
+            return
         prompt = build_session_prompt(
             self.cwd,
             self.permissions.get_summary(),
@@ -285,15 +293,18 @@ class ClientSession:
             memory_manager=self.memory_manager,
             plan_mode=self.permissions.is_plan_mode,
             plan_file_path=self.permissions.plan_file_path,
+            dynamic_sections=[],
         )
-        presentation = profile_prompt(self.session_data.profile if self.session_data else "default")
+        presentation = profile_prompt(profile)
         if presentation:
             prompt += "\n\n" + presentation
         # Replace existing system prompt or prepend
         if self.messages and self.messages[0].get("role") == "system":
-            self.messages[0] = {"role": "system", "content": prompt}
+            self.messages[0] = {"role": "system", "content": prompt, "_prompt_format": 1, "_prompt_profile": profile}
         else:
-            self.messages.insert(0, {"role": "system", "content": prompt})
+            self.messages.insert(
+                0, {"role": "system", "content": prompt, "_prompt_format": 1, "_prompt_profile": profile}
+            )
 
     def snapshot(self) -> None:
         if self.session_data is None:
@@ -689,6 +700,7 @@ class PepsiCodeServer:
             session.session_data = loaded
             session.input_queue.bind_session(loaded)
             session.messages = list(loaded.messages)
+            session.tools.restore_loaded_tools(loaded.loaded_tools)
             restore_verification_state(session.tools, session.runtime, loaded.verification_state, loaded.messages)
             if loaded.model_settings and session.runtime and not isinstance(session.model, MockModelAdapter):
                 try:
@@ -1228,6 +1240,7 @@ class PepsiCodeServer:
                 session.session_data, entry_id=params.get("entry_id"), clone=method == "session/clone"
             )
         session.messages = list(session.session_data.messages)
+        session.tools.restore_loaded_tools(session.session_data.loaded_tools)
         session.input_queue.bind_session(session.session_data)
         restore_verification_state(
             session.tools, session.runtime, session.session_data.verification_state, session.messages

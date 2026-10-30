@@ -24,7 +24,7 @@ interface ComposerProps {
 export default function Composer({ onSend, disabled, running, onOpenSettings }: ComposerProps) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const permissionsRef = useRef<HTMLDetailsElement>(null);
-  const { accessMode, permissionUpdating, updatePermissions, setWorkspaceDefaultPermissions, cacheHitPercentage, contextData, pendingInputs, draft: input, setDraft: setInput, removeQueuedInput, cancelTurn, isStopping } = useSessionStore();
+  const { accessMode, permissionUpdating, updatePermissions, setWorkspaceDefaultPermissions, cacheHitPercentage, latestUsage, contextData, pendingInputs, draft: input, setDraft: setInput, removeQueuedInput, cancelTurn, isStopping } = useSessionStore();
   const [inputMode, setInputMode] = useState<InputMode>("steer");
   const [submitting, setSubmitting] = useState(false);
   const [sendError, setSendError] = useState("");
@@ -230,6 +230,7 @@ export default function Composer({ onSend, disabled, running, onOpenSettings }: 
         <div className={styles.usageStatus} aria-label="实时用量">
           <span title="最近一次模型请求：缓存读取 token / 总输入 token；— 表示接口没有返回缓存数据。">
             缓存命中<strong>{cacheHitPercentage === null ? "—" : `${cacheHitPercentage.toFixed(1)}%`}</strong>
+            {cacheHitPercentage !== null && latestUsage?.cache_read != null && latestUsage.input_total != null && `（${latestUsage.cache_read.toLocaleString()}/${latestUsage.input_total.toLocaleString()}）`}
           </span>
           <span className={styles.usageDot} aria-hidden="true" />
           <span title={contextPercent === null ? "上下文窗口数据未提供" : `${contextData.total_tokens.toLocaleString()} / ${contextData.max_tokens.toLocaleString()} tokens${estimated ? "（估算）" : ""}`}>

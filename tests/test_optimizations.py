@@ -1,5 +1,5 @@
 """Tests for the CoreCoder-pattern optimizations:
-parallel tool execution, HISTORY_SNIP, context overflow recovery, real token
+parallel tool execution, context overflow recovery, real token
 usage, LLM/heuristic summarization, opt-in governance, and the Task tool.
 """
 
@@ -7,7 +7,7 @@ import threading
 import time
 
 from pepsicode.context.context_manager import ContextManager, _heuristic_summary
-from pepsicode.core.agent_loop import _execute_calls_in_order, _snip_tool_outputs, run_agent_turn
+from pepsicode.core.agent_loop import _execute_calls_in_order, run_agent_turn
 from pepsicode.llm.anthropic_adapter import ContextOverflowError
 from pepsicode.tooling import ToolContext, ToolDefinition, ToolRegistry, ToolResult
 from pepsicode.types import AgentStep, ModelAdapter
@@ -88,38 +88,6 @@ def test_results_preserve_call_order_when_parallel():
     calls = [{"id": str(i), "toolName": "read_x", "input": {"n": i}} for i in range(3)]
     results = _execute_calls_in_order(calls, registry, ToolContext(cwd=".", permissions=None), None, None)
     assert [r.output for r in results] == ["0", "1", "2"]
-
-
-# --------------------------------------------------------------------------
-# HISTORY_SNIP
-# --------------------------------------------------------------------------
-
-
-def test_snip_trims_old_large_tool_outputs():
-    big = "\n".join(f"line {i}" for i in range(500))
-    messages = [{"role": "system", "content": "sys"}]
-    for i in range(6):
-        messages.append({"role": "assistant_tool_call", "toolUseId": str(i), "toolName": "grep", "input": {}})
-        messages.append(
-            {"role": "tool_result", "toolUseId": str(i), "toolName": "grep", "content": big, "isError": False}
-        )
-
-    out = _snip_tool_outputs([dict(m) for m in messages])
-    tool_results = [m for m in out if m.get("role") == "tool_result"]
-    # Oldest are snipped, the most recent few are untouched.
-    assert any("[snipped" in m["content"] for m in tool_results)
-    assert tool_results[-1]["content"] == big
-
-
-def test_snip_preserves_recent_and_is_idempotent():
-    big = "x" * 5000
-    messages = [{"role": "tool_result", "toolName": "t", "content": big, "isError": False} for _ in range(5)]
-    once = _snip_tool_outputs([dict(m) for m in messages])
-    twice = _snip_tool_outputs([dict(m) for m in once])
-    snipped_once = [m for m in once if "[snipped" in m["content"]]
-    snipped_twice = [m for m in twice if "[snipped" in m["content"]]
-    assert len(snipped_once) == len(snipped_twice)  # idempotent
-    assert twice[-1]["content"] == big  # most recent preserved
 
 
 # --------------------------------------------------------------------------

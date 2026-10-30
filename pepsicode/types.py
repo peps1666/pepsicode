@@ -39,6 +39,8 @@ class ChatMessage(TypedDict, total=False):
     verification: dict[str, Any]
     task: dict[str, Any]
     source: dict[str, Any]
+    _prompt_format: int
+    _prompt_profile: str
     finishReason: str
 
 

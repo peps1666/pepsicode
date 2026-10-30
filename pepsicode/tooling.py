@@ -45,7 +45,7 @@ class ToolMetadata:
     capabilities: set[ToolCapability] = field(default_factory=set)
     input_schema: dict[str, Any] = field(default_factory=dict)
     is_enabled: bool = True
-    max_result_size_chars: int = 10_000
+    max_result_size_chars: int = 4_000
     tags: list[str] = field(default_factory=list)
 
     @property
@@ -172,7 +172,7 @@ class ToolDefinition:
     validator: Validator
     run: Runner
     capabilities: set[ToolCapability] = field(default_factory=set)
-    max_result_size_chars: int = 10_000
+    max_result_size_chars: int = 4_000
     # Read-only tools with no side effects can run concurrently with each
     # other.  Tools that write files, run commands, or otherwise mutate state
     # must run exclusively (default).  See agent_loop._execute_calls.
@@ -319,6 +319,7 @@ class ToolRegistry:
                 )
             )
             self._loaded.append("search_tools")
+        self._initial_loaded = list(self._loaded)
 
     @staticmethod
     def _validate_search(value: Any) -> dict:
@@ -381,9 +382,29 @@ class ToolRegistry:
         start = value["offset"]
         selected = [tool for _, tool in ranked[start : start + value["limit"]]]
         with self._lock:
+            added = []
             for tool in selected:
                 if tool.name not in self._loaded:
                     self._loaded.append(tool.name)
+                    added.append(tool.name)
+            if added:
+                from pepsicode.core.session import save_session
+                from pepsicode.core.session_tree import current_session
+                from pepsicode.execution.runtime import current_scope
+
+                scope = current_scope()
+                session = current_session() if scope is None or scope.parent_task_id is None else None
+                if session is not None:
+                    previous = session.loaded_tools
+                    try:
+                        session.loaded_tools = self.loaded_tool_names()
+                        save_session(session)
+                    except Exception:
+                        session.loaded_tools = previous
+                        self._loaded = [name for name in self._loaded if name not in added]
+                        raise
+                if scope:
+                    scope.record("model/prefix-break", reason="tool-discovery", added_count=len(added))
         return ToolResult(
             ok=True,
             output=(
@@ -409,8 +430,39 @@ class ToolRegistry:
                 for name in names:
                     if name and name not in self._loaded and self.find(name) is not None:
                         self._loaded.append(name)
-            by_name = {tool.name: tool for tool in self._tools}
-            return [by_name[name] for name in self._loaded if name in by_name]
+            loaded = set(self._loaded)
+            result = [tool for tool in self._tools if tool.name in loaded]
+            from pepsicode.core.session import save_session
+            from pepsicode.core.session_tree import current_session
+            from pepsicode.execution.runtime import current_scope
+
+            scope = current_scope()
+            session = current_session() if scope is None or scope.parent_task_id is None else None
+            names = [tool.name for tool in result]
+            if session is not None and session.loaded_tools != names:
+                previous = session.loaded_tools
+                try:
+                    session.loaded_tools = names
+                    save_session(session)
+                except Exception:
+                    session.loaded_tools = previous
+                    raise
+            return result
+
+    def loaded_tool_names(self) -> list[str]:
+        with self._lock:
+            loaded = set(self._loaded)
+            return [tool.name for tool in self._tools if tool.name in loaded]
+
+    def restore_loaded_tools(self, names: list[str] | None) -> None:
+        with self._lock:
+            available = {tool.name for tool in self._tools}
+            self._loaded = [name for name in (self._initial_loaded if names is None else names) if name in available]
+
+    def load_all_tools(self) -> None:
+        with self._lock:
+            self._loaded = [tool.name for tool in self._tools]
+            self._initial_loaded = list(self._loaded)
 
     def list(self) -> list[ToolDefinition]:
         return list(self._tools)

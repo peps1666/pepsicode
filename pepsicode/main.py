@@ -338,6 +338,7 @@ def main() -> None:
     messages: list[ChatMessage] = [
         {
             "role": "system",
+            "_prompt_format": 1,
             "content": build_session_prompt(
                 cwd,
                 permissions.get_summary(),
@@ -347,6 +348,7 @@ def main() -> None:
                 governance=bool(runtime.get("governance")) if runtime else False,
                 plan_mode=permissions.is_plan_mode,
                 plan_file_path=permissions.plan_file_path,
+                dynamic_sections=[],
             ),
         }
     ]
@@ -416,6 +418,7 @@ def main() -> None:
                             )
                             print(f"Session: {pipe_session.session_id}. Draft: {draft}")
                         messages = list(pipe_session.messages)
+                        tools.restore_loaded_tools(pipe_session.loaded_tools)
                         if context_mgr:
                             context_mgr.select_branch(messages, cwd, permissions)
                         if runtime:
@@ -500,19 +503,6 @@ def main() -> None:
                 messages.append(prompt_message or {"role": "user", "content": user_input})
                 history.append(user_input)
                 save_history_entries(history)
-                messages[0] = {
-                    "role": "system",
-                    "content": build_session_prompt(
-                        cwd,
-                        permissions.get_summary(),
-                        skills=tools.get_skills(),
-                        mcp_servers=tools.get_mcp_servers(),
-                        memory_manager=memory_mgr,
-                        governance=bool(runtime.get("governance")) if runtime else False,
-                        plan_mode=permissions.is_plan_mode,
-                        plan_file_path=permissions.plan_file_path,
-                    ),
-                }
                 permissions.begin_turn()
                 # 执行一个代理回合，传入当前消息、工具、权限和上下文管理器，获取新的消息列表
                 with recording_session(pipe_session):

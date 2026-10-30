@@ -28,57 +28,6 @@ logger = get_logger("agent_loop")
 # Upper bound on concurrent read-only tool execution within a single batch.
 MAX_PARALLEL_TOOLS = 8
 
-# HISTORY_SNIP (context-compression layer 1): large tool outputs are the most
-# common source of context bloat.  Once a tool result is no longer among the
-# most recent few, we keep only its head and tail lines and replace the middle
-# with a marker.  This is the cheapest compression layer - no LLM call.
-SNIP_CHAR_THRESHOLD = 2000
-SNIP_HEAD_LINES = 12
-SNIP_TAIL_LINES = 8
-SNIP_PROTECT_RECENT = 3  # never snip the N most recent tool results
-_SNIP_MARKER = "[snipped"
-
-
-def _snip_tool_outputs(messages: list[ChatMessage]) -> list[ChatMessage]:
-    """Trim oversized older tool_result outputs in place, keeping head+tail.
-
-    Idempotent: already-snipped results stay small and are skipped on
-    subsequent passes.  The most recent ``SNIP_PROTECT_RECENT`` tool results
-    are left at full fidelity so the model sees what it just did.
-    """
-    tool_result_indices = [i for i, m in enumerate(messages) if m.get("role") == "tool_result"]
-    if len(tool_result_indices) <= SNIP_PROTECT_RECENT:
-        return messages
-    protected = set(tool_result_indices[-SNIP_PROTECT_RECENT:])
-    for i in tool_result_indices:
-        if i in protected:
-            continue
-        content = messages[i].get("content", "")
-        if not isinstance(content, str) or len(content) <= SNIP_CHAR_THRESHOLD:
-            continue
-        if _SNIP_MARKER in content:
-            continue
-        lines = content.splitlines()
-        if len(lines) <= SNIP_HEAD_LINES + SNIP_TAIL_LINES:
-            # Long single block without many newlines: hard-trim by chars.
-            head = content[: SNIP_CHAR_THRESHOLD // 2]
-            tail = content[-SNIP_CHAR_THRESHOLD // 2 :]
-            removed = len(content) - len(head) - len(tail)
-            messages[i] = {
-                **messages[i],
-                "content": f"{head}\n[snipped {removed} chars]\n{tail}",
-            }
-            continue
-        head = lines[:SNIP_HEAD_LINES]
-        tail = lines[-SNIP_TAIL_LINES:]
-        removed = len(lines) - SNIP_HEAD_LINES - SNIP_TAIL_LINES
-        messages[i] = {
-            **messages[i],
-            "content": "\n".join([*head, f"[snipped {removed} lines]", *tail]),
-        }
-    return messages
-
-
 # Constants: reusable nudge/prompt text
 NUDGE_CONTINUE = (
     "Continue immediately from your <progress> update with concrete tool calls, "
@@ -252,18 +201,104 @@ def _emit_hook(
         logger.warning("Hook event %s failed: %s", event.value, error)
 
 
-def _messages_for_model(messages: list[ChatMessage], hook_engine: HookEngine | None) -> list[ChatMessage]:
+def _messages_for_model(
+    messages: list[ChatMessage],
+    hook_engine: HookEngine | None,
+    *,
+    cwd: str | None = None,
+    permissions: PermissionManager | None = None,
+    tools: ToolRegistry | None = None,
+    memory: Any | None = None,
+    runtime: dict | None = None,
+) -> list[ChatMessage]:
     from pepsicode.core.task_control import task_context
 
+    if messages and messages[0].get("_prompt_format") == 1 and cwd is not None and tools is not None:
+        from pepsicode.context.prompt import build_session_prompt
+
+        sections: list[str] = []
+        build_session_prompt(
+            cwd,
+            permissions.get_summary() if permissions else [],
+            skills=tools.get_skills(),
+            mcp_servers=tools.get_mcp_servers(),
+            memory_manager=memory,
+            governance=bool((runtime or {}).get("governance")),
+            plan_mode=permissions.is_plan_mode if permissions else False,
+            plan_file_path=permissions.plan_file_path if permissions else None,
+            dynamic_sections=sections,
+        )
+        session_text = (
+            '<system-reminder kind="session-context">\n'
+            "The latest session-context reminder replaces all earlier session-context reminders.\n"
+            + "\n\n".join(sections)
+            + "\n</system-reminder>"
+        )
+        prior_session = next(
+            (
+                m
+                for m in reversed(messages)
+                if isinstance(m.get("source"), dict) and m["source"].get("kind") == "session-context-projection"
+            ),
+            None,
+        )
+        prior_index = next((i for i in range(len(messages) - 1, -1, -1) if messages[i] is prior_session), -1)
+        new_human_input = any(m.get("role") == "user" and not m.get("internal") for m in messages[prior_index + 1 :])
+        if prior_session is None or prior_session.get("content") != session_text or new_human_input:
+            messages.append(
+                cast(
+                    ChatMessage,
+                    {
+                        "role": "user",
+                        "internal": True,
+                        "content": session_text,
+                        "source": {"kind": "session-context-projection"},
+                    },
+                )
+            )
+
     contract = task_context()
-    if contract:
-        messages = [contract, *messages]
-    if hook_engine is None:
-        return messages
-    hook_context = hook_engine.drain_context_messages()
-    if not hook_context:
-        return messages
-    return [*messages, cast(ChatMessage, {"role": "system", "content": "\n\n".join(hook_context)})]
+    previous = next(
+        (
+            m
+            for m in reversed(messages)
+            if isinstance(m.get("source"), dict) and m["source"].get("kind") == "task-policy-projection"
+        ),
+        None,
+    )
+    content = contract["content"] if contract else "No task contract is currently active."
+    text = (
+        '<system-reminder kind="task-contract">\n'
+        "Host task state follows; the latest task-contract reminder supersedes earlier ones.\n"
+        f"{content}\n</system-reminder>"
+    )
+    previous_index = next((i for i in range(len(messages) - 1, -1, -1) if messages[i] is previous), -1)
+    new_human_input = any(m.get("role") == "user" and not m.get("internal") for m in messages[previous_index + 1 :])
+    if (contract or previous) and (previous is None or previous.get("content") != text or new_human_input):
+        messages.append(
+            cast(
+                ChatMessage,
+                {"role": "user", "internal": True, "content": text, "source": {"kind": "task-policy-projection"}},
+            )
+        )
+    if hook_engine is not None:
+        hook_context = hook_engine.drain_context_messages()
+        if hook_context:
+            messages.append(
+                cast(
+                    ChatMessage,
+                    {
+                        "role": "user",
+                        "internal": True,
+                        "content": '<system-reminder kind="hook-context">\n'
+                        + "\n\n".join(hook_context)
+                        + "\n</system-reminder>",
+                        "source": {"kind": "hook-context"},
+                    },
+                )
+            )
+    checkpoint_messages(messages)
+    return messages
 
 
 def _finish_hook_turn(
@@ -562,9 +597,6 @@ def run_agent_turn(
                 agent_scope=agent_scope,
             )
         next_step: AgentStep
-        # Layer 1 compression: trim oversized older tool outputs before the
-        # model sees them.  Cheap and lossless for recent context.
-        current_messages = _snip_tool_outputs(current_messages)
         if context_manager is not None:
             context_manager.messages = cast(list[dict[str, Any]], current_messages)
             if context_manager.should_auto_compact():
@@ -581,7 +613,17 @@ def run_agent_turn(
                     )
         try:
             raise_if_cancelled()
-            next_step = model.next(_messages_for_model(current_messages, hook_engine))
+            next_step = model.next(
+                _messages_for_model(
+                    current_messages,
+                    hook_engine,
+                    cwd=cwd,
+                    permissions=permissions,
+                    tools=tools,
+                    memory=memory,
+                    runtime=getattr(model, "runtime", None),
+                )
+            )
             raise_if_cancelled()
         except TurnCancelledError:
             return _finish_cancelled_turn(
@@ -938,7 +980,7 @@ def run_agent_turn(
             bounded_output = prepare_tool_result(
                 tool_name=call["toolName"],
                 output=result.output,
-                budget_chars=tool.max_result_size_chars if tool is not None else 10_000,
+                budget_chars=tool.max_result_size_chars if tool is not None else 4_000,
                 artifact_store=artifact_store,
             )
             current_messages.append(
@@ -1190,7 +1232,6 @@ def run_agent_turn_stream(
                 hook_engine=hook_engine,
                 agent_scope=agent_scope,
             )
-        current_messages = _snip_tool_outputs(current_messages)
 
         # ------ Stream the model response ------
         if context_manager is not None:
@@ -1240,7 +1281,17 @@ def run_agent_turn_stream(
                     if on_token is not None:
                         on_token(token)
 
-                token_stream = model.next_stream(_messages_for_model(current_messages, hook_engine))
+                token_stream = model.next_stream(
+                    _messages_for_model(
+                        current_messages,
+                        hook_engine,
+                        cwd=cwd,
+                        permissions=permissions,
+                        tools=tools,
+                        memory=memory,
+                        runtime=getattr(model, "runtime", None),
+                    )
+                )
                 with closing(token_stream) if hasattr(token_stream, "close") else nullcontext(token_stream):
                     text_content, parsed_calls = _accumulate_stream_tokens(
                         token_stream,
@@ -1249,7 +1300,17 @@ def run_agent_turn_stream(
                     )
             else:
                 # Fallback non-stream (kept as reference; can be removed later)
-                next_step = model.next(_messages_for_model(current_messages, hook_engine))
+                next_step = model.next(
+                    _messages_for_model(
+                        current_messages,
+                        hook_engine,
+                        cwd=cwd,
+                        permissions=permissions,
+                        tools=tools,
+                        memory=memory,
+                        runtime=getattr(model, "runtime", None),
+                    )
+                )
                 text_content = next_step.content
                 parsed_calls = (
                     [{"id": c["id"], "toolName": c["toolName"], "input": c.get("input")} for c in next_step.calls]
@@ -1461,7 +1522,7 @@ def run_agent_turn_stream(
                 bounded_output = prepare_tool_result(
                     tool_name=call["toolName"],
                     output=result.output,
-                    budget_chars=tool.max_result_size_chars if tool is not None else 10_000,
+                    budget_chars=tool.max_result_size_chars if tool is not None else 4_000,
                     artifact_store=artifact_store,
                 )
                 current_messages.append(

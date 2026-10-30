@@ -280,7 +280,8 @@ def test_model_log_reconstructs_hook_context_and_schemas_without_auth_headers(tm
     journal_path = next(execution_journal_dir(str(tmp_path)).glob("*.jsonl"))
     records = ExecutionJournal.read(journal_path)
     request = next(record for record in records if record["event"] == "model/prepared")
-    assert "HOOK_CONTEXT_SENTINEL" in request["body"]["system"]
+    assert "HOOK_CONTEXT_SENTINEL" not in request["body"]["system"]
+    assert "HOOK_CONTEXT_SENTINEL" in json.dumps(request["body"]["messages"])
     assert request["body"]["tools"][0]["name"] == "read_file"
     assert "HEADER_SECRET" not in journal_path.read_text(encoding="utf-8")
     assert tracker.get_total_calls() == 1

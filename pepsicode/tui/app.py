@@ -687,6 +687,7 @@ def _restore_session_into_state(
     if not same_workspace(args.cwd, session.workspace):
         raise ValueError(f"Session belongs to {session.workspace}. Change to that directory before resuming it.")
     args.messages = list(session.messages)
+    args.tools.restore_loaded_tools(session.loaded_tools)
     restore_verification_state(args.tools, args.runtime, session.verification_state, session.messages)
     state.latest_usage = None
     state.usage_stats_key = None
@@ -2428,20 +2429,21 @@ def _handle_input(
     aggregated_edit_by_key: dict[str, AggregatedEditProgress] = {}
     aggregated_edit_by_entry_id: dict[int, AggregatedEditProgress] = {}
 
-    # Refresh system prompt
-    args.messages[0] = {
-        "role": "system",
-        "content": build_session_prompt(
-            args.cwd,
-            args.permissions.get_summary(),
-            skills=args.tools.get_skills(),
-            mcp_servers=args.tools.get_mcp_servers(),
-            memory_manager=args.memory,
-            governance=bool(args.runtime.get("governance")) if args.runtime else False,
-            plan_mode=args.permissions.is_plan_mode,
-            plan_file_path=args.permissions.plan_file_path,
-        ),
-    }
+    # Migrate old sessions once; subsequent turns keep the stable prompt.
+    if not args.messages or args.messages[0].get("_prompt_format") != 1:
+        system = {
+            "role": "system",
+            "_prompt_format": 1,
+            "content": build_session_prompt(
+                args.cwd,
+                governance=bool(args.runtime.get("governance")) if args.runtime else False,
+                dynamic_sections=[],
+            ),
+        }
+        if args.messages and args.messages[0].get("role") == "system":
+            args.messages[0] = system
+        else:
+            args.messages.insert(0, system)
     args.messages.append(prompt_message or {"role": "user", "content": input_text})
     if state.session is None:
         state.session = create_new_session(args.cwd)

@@ -58,6 +58,14 @@ async function session() {
   };
 }
 
+test("usage update preserves cache token counts and clears them when unavailable", async () => {
+  const api = await session();
+  api.event("usage/update", {cache_hit_percentage: 80, input_total: 100, cache_read: 80, cache_write: 0, cost_usd: null, context: null});
+  assert.deepEqual(api.store.getState().latestUsage, {input_total: 100, cache_read: 80, cache_write: 0, cost_usd: null});
+  api.event("usage/update", {cache_hit_percentage: null, input_total: null, context: null});
+  assert.equal(api.store.getState().latestUsage, null);
+});
+
 test("thinking streams independently, closes on cancellation, and survives history replacement", async () => {
   const api = await session();
   api.event("thinking/start", {id:"thought-1"});

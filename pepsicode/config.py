@@ -233,6 +233,7 @@ def load_runtime_config(cwd: str | Path | None = None) -> dict[str, Any]:
         "verificationNoProgressLimit": effective.get("verificationNoProgressLimit", 2),
         "verificationTimeout": effective.get("verificationTimeout", 120),
         "toolDiscoveryEnabled": effective.get("toolDiscoveryEnabled", True),
+        "toolLoading": effective.get("toolLoading", "auto"),
         "toolCoreTools": effective.get("toolCoreTools"),
         "toolSearchAliases": effective.get("toolSearchAliases"),
         "promptCaching": effective.get("promptCaching", False),

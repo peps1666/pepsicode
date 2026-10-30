@@ -88,9 +88,9 @@ python -m pip install -e ".[intelligence]"
 
 ## 3. 按需加载工具
 
-默认 `toolDiscoveryEnabled: true`，首次请求仅发送文件读写、命令、交互、代码导航等核心工具定义。模型通过 `search_tools` 按任务、关键词或准确名称搜索，匹配到的工具定义从下一次请求起提供。工具清单仍可完整查看；恢复会话时，历史中使用过的工具会重新加载。
+默认 `toolLoading: "auto"` 根据完整工具定义的估算 token 数与上下文窗口决定：不超过 12,000 且不超过窗口的 15% 时预加载，否则按需加载。窗口缺少可靠配置时使用默认窗口估算，估算并非服务商实际 token 数。也可设置 `"eager"` 固定完整工具集或 `"lazy"` 按需发现。按需模式通过 `search_tools` 搜索，工具定义从下一次请求起提供；新增工具会使工具前缀变化，并写入执行日志。已加载列表随会话保存，旧会话则根据历史中已使用工具恢复。
 
-可以直接要求代理“搜索数据库工具”“查找 Git 工具”或“查找 rename_symbol”。设为 `false` 可恢复每次请求发送完整工具定义的行为。此机制减少发送给模型的 schema，不延迟 MCP 服务器连接，也不改变权限规则。
+可以直接要求代理“搜索数据库工具”“查找 Git 工具”或“查找 rename_symbol”。旧配置 `toolDiscoveryEnabled: false` 在自动模式下仍表示预加载；显式 `toolLoading` 优先。此机制不延迟 MCP 服务器连接，也不改变权限规则。工具注册或配置发生变化时，恢复后的工具视图可能不同。
 
 需求尚未收敛时，`search_tools` 可用 `{"query":"*","limit":5,"offset":0}` 浏览全部能力，按 `offset` 翻页，不必命中预设关键词。工具名称、描述、参数名、`tags`、`aliases` 均参与搜索。`toolCoreTools` 可覆盖初始工具名单，`toolSearchAliases` 可扩展领域术语：
 

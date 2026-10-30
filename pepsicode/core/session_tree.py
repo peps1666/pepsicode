@@ -214,6 +214,7 @@ def copy_session(session: SessionData, *, entry_id: str | None = None, clone: bo
             "verification_state",
             "execution_state",
             "task_control",
+            "loaded_tools",
         ):
             setattr(child, name, copy.deepcopy(getattr(session, name)))
         child.access_mode, child.permission_mode, child.plan_file_path = (

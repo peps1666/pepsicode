@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import html
 import json
+import logging
 import math
 import random
 import re
@@ -342,6 +343,8 @@ def _to_anthropic_messages(messages: list[ChatMessage]) -> tuple[str, list[dict[
     # so cast to dict[str, Any] for keyed access (same shape _to_assistant_text
     # already expects).
     raw_messages = cast(list[dict[str, Any]], messages)
+    if sum(message.get("role") == "system" for message in raw_messages) > 1:
+        logging.getLogger(__name__).warning("Multiple system messages will be merged, changing the provider prefix")
     system = "\n\n".join(message["content"] for message in raw_messages if message["role"] == "system")
     converted: list[dict[str, Any]] = []
     for message in raw_messages:
