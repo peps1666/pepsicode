@@ -44,7 +44,9 @@ def test_server_workspace_default_does_not_change_current_session(tmp_path):
     client.permissions = PermissionManager(str(tmp_path), mode="auto")
 
     server = PepsiCodeServer()
-    dispatch = server._dispatch("permissions/set_workspace_default", {"mode": "trust_commands"}, client, None, None, None)
+    dispatch = server._dispatch(
+        "permissions/set_workspace_default", {"mode": "trust_commands"}, client, None, None, None
+    )
     with pytest.raises(StopIteration) as completed:
         dispatch.send(None)
     assert completed.value.value == {"workspace_default": "trust_commands"}

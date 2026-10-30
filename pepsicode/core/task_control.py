@@ -138,6 +138,19 @@ def classify_intent(text):
         )
     )
     normalized = re.sub(r"^(?:请你|请|帮我|帮忙|麻烦你)[，,\s]*", "", text.strip())
+    # A narrowly bounded project inventory is an observation request, even
+    # when introduced by a polite "帮我".  Full matching prevents a later
+    # implementation instruction from inheriting this read-only boundary.
+    subject = r"(?:这个|当前|本)?项目(?:里|里面|中)?"
+    predicate = r"(?:(?:有啥|有什么|都有啥|都有什么|有哪些)(?:文件|内容|东西|功能|模块)?|是什么|是做什么的)"
+    overview = bool(
+        re.fullmatch(
+            rf"(?:(?:看看?|看一下|了解(?:一下)?|介绍(?:一下)?|说说|告诉我)\s*{subject}(?:{predicate})?"
+            rf"|{subject}{predicate})[？?。！!\s]*",
+            normalized,
+        )
+    )
+    only = only or overview
     question = bool(
         re.search(
             r"^(?:如何|怎么|为什么|解释|分析|审查|对比|what\b|why\b|how\b|explain\b|review\b|compare\b)",
@@ -165,6 +178,7 @@ def classify_intent(text):
         "source": "rule",
         "locked": only or (kind == "change" and (explicit_action or mixed)),
         "read_only_request": only,
+        **({"project_overview": True} if overview else {}),
     }
 
 

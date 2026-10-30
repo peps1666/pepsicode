@@ -71,6 +71,7 @@ _TOOL_LABELS = {
 
 
 _DIFF_TOOLS = frozenset({"edit_file", "patch_file", "write_file", "diff_viewer"})
+_PATH_TOOLS = frozenset({"read_file", "write_file", "edit_file", "patch_file", "list_files", "file_tree"})
 
 
 def _tool_status(entry: TranscriptEntry) -> tuple[str, str, str]:
@@ -93,6 +94,39 @@ def _tool_summary(entry: TranscriptEntry, name: str) -> str:
     if summary.startswith(name + " "):
         summary = summary[len(name) + 1 :]
     return summary.removeprefix("path=").strip()
+
+
+def _truncate_target(name: str, target: str, width: int) -> str:
+    """Keep both the beginning and filename of a long path visible."""
+    if name not in _PATH_TOOLS or string_display_width(target) <= width:
+        return truncate_plain(target, width)
+    # Structured input summaries may add these fields after a path. Keep them
+    # when possible, while reserving room for the actual filename.
+    path, extras = target, ""
+    for marker in (" offset=", " limit=", " replacements="):
+        if marker in path:
+            path, tail = path.split(marker, 1)
+            extras = marker + tail
+            break
+    separator = max(path.rfind("/"), path.rfind("\\"))
+    if separator < 0:
+        return truncate_plain(target, width)
+    filename = path[separator + 1 :]
+    if not filename:
+        return truncate_plain(target, width)
+    suffix = filename + extras
+    if string_display_width(suffix) > width - 2:
+        suffix = filename
+    suffix_width = string_display_width(suffix)
+    if suffix_width > width - 2:
+        return truncate_plain(filename, width)
+    prefix_budget = width - suffix_width - 2  # ellipsis and path separator
+    prefix = ""
+    for char in path[:separator]:
+        if string_display_width(prefix + char) > prefix_budget:
+            break
+        prefix += char
+    return f"{prefix}…{path[separator]}{suffix}"
 
 
 def _render_tool_header(
@@ -135,8 +169,8 @@ def _render_tool_header(
             target = summary
             if name == "run_command" and not target.startswith("$"):
                 target = f"$ {target}"
-            target = truncate_plain(target, target_budget)
-            style = ACCENT if name == "run_command" else SUBTLE
+            target = _truncate_target(name, target, target_budget)
+            style = ACCENT if name == "run_command" else CYAN if name in _PATH_TOOLS else SUBTLE
             left += f"  {style}{target}{RESET}"
     if string_display_width(left) > left_budget:
         left = truncate_plain(left, left_budget)

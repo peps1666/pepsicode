@@ -127,12 +127,11 @@ def test_success_tool_entry_collapses_to_summary() -> None:
 def test_stream_input_uses_opencode_style_prompt_card() -> None:
     state = type("State", (), {"input": "", "cursor_offset": 0})()
 
-    rendered = "\n".join(_render_stream_input(state, "claude-test", 100))
+    rendered = "\n".join(_render_stream_input(state, 100))
     plain = strip_ansi(rendered)
 
     assert ">" in plain
     assert "Ask anything..." in plain
-    assert "claude-test" in plain
 
 
 def test_stream_transcript_renders_conversation_timeline() -> None:
@@ -197,14 +196,16 @@ def test_stream_screen_anchors_input_and_limits_menu(monkeypatch, capsys) -> Non
     monkeypatch.setattr(app, "_get_terminal_size", lambda: (40, 12))
     monkeypatch.setattr(chrome, "_cached_terminal_size", lambda: (40, 12))
     args = SimpleNamespace(
-        runtime={"model": "test-model"}, cwd="E:/Code/demo", permissions=SimpleNamespace(is_plan_mode=False, access_mode=SimpleNamespace(value="auto"))
+        runtime={"model": "test-model"},
+        cwd="E:/Code/demo",
+        permissions=SimpleNamespace(is_plan_mode=False, access_mode=SimpleNamespace(value="auto")),
     )
     state = app.ScreenState(input="/", transcript=[TranscriptEntry(id=1, kind="user", body="hello")])
     app._render_stream_screen(args, state)
     frame = _initial_frame_text(capsys.readouterr().out)
     assert len(frame.splitlines()) == 12
     assert "demo" in frame.splitlines()[-1]
-    assert "mode: auto" in frame.splitlines()[-1]
+    assert "BUILD auto" in frame.splitlines()[-2]
     assert "> /" in frame
 
 
@@ -213,10 +214,36 @@ def test_stream_footer_shows_trusted_mode_during_plan(monkeypatch, capsys):
 
     monkeypatch.setattr(app, "_get_terminal_size", lambda: (80, 15))
     monkeypatch.setattr(chrome, "_cached_terminal_size", lambda: (80, 15))
-    args = SimpleNamespace(runtime={"model": "test-model"}, cwd="E:/Code/demo", permissions=SimpleNamespace(
-        is_plan_mode=True, access_mode=SimpleNamespace(value="trust_commands")
-    ))
+    args = SimpleNamespace(
+        runtime={"model": "test-model"},
+        cwd="E:/Code/demo",
+        permissions=SimpleNamespace(is_plan_mode=True, access_mode=SimpleNamespace(value="trust_commands")),
+    )
     state = app.ScreenState()
     app._render_stream_screen(args, state)
     frame = _initial_frame_text(capsys.readouterr().out)
-    assert "mode: trust_commands 高风险 PLAN" in frame.splitlines()[-1]
+    assert "PLAN trust_commands 高风险" in frame.splitlines()[-2]
+
+
+@pytest.mark.parametrize("transcript", [False, True])
+@pytest.mark.parametrize("cols", [32, 80, 120])
+def test_composer_status_is_compact_and_keeps_trust_warning(monkeypatch, capsys, transcript, cols):
+    from pepsicode.tui import app, chrome
+
+    monkeypatch.setattr(app, "_get_terminal_size", lambda: (cols, 18))
+    monkeypatch.setattr(chrome, "_cached_terminal_size", lambda: (cols, 18))
+    args = SimpleNamespace(
+        runtime={"model": "test-model"},
+        cwd="D:/小论文/1014",
+        permissions=SimpleNamespace(is_plan_mode=False, access_mode=SimpleNamespace(value="trust_commands")),
+    )
+    state = app.ScreenState(transcript=[TranscriptEntry(id=1, kind="user", body="hello")] if transcript else [])
+    app._render_stream_screen(args, state)
+    lines = _initial_frame_text(capsys.readouterr().out).splitlines()
+    assert "BUILD trust_commands 高风险" in lines[-2]
+    assert "1014" in lines[-1]
+    assert "Ask anything..." in lines[-3]
+    assert all(chrome.string_display_width(line) <= cols for line in lines)
+    if cols >= 80:
+        assert "test-model" in lines[-2]
+        assert "上下文" in lines[-1]

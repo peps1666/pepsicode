@@ -251,6 +251,14 @@ class PermissionManager:
         assert self.plan_file_path is not None
         return self.plan_file_path
 
+    def leave_plan_mode(self) -> None:
+        """Leave Plan without approving or executing it; retain the file on disk."""
+        if self.is_plan_mode:
+            self._task_command_grants.clear()
+            self.mode = self.previous_mode
+            self.plan_file_path = None
+            self._plan_followup = None
+
     def restore_plan_state(self, mode: str | None, plan_file_path: str | None) -> None:
         """Restore a persisted plan state after validating its workspace path."""
         if mode != PermissionMode.PLAN.value or not plan_file_path:

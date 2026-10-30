@@ -509,16 +509,22 @@ def render_tool_panel(
 
 
 def render_footer_bar(
-    status: str | None, tools_enabled: bool, skills_enabled: bool, background_tasks: list[dict[str, Any]] | None = None,
-    mode: str = "auto", plan: bool = False,
+    status: str | None,
+    tools_enabled: bool,
+    skills_enabled: bool,
+    background_tasks: list[dict[str, Any]] | None = None,
+    mode: str = "auto",
+    plan: bool = False,
 ) -> str:
     """Claude-style: minimal single-line footer."""
     if background_tasks is None:
         background_tasks = []
     width, _ = _cached_terminal_size()
     risk = " 高风险" if mode == "trust_commands" else ""
-    plan_label = " PLAN" if plan else ""
-    left = f"{YELLOW}mode: {mode}{risk}{plan_label}{RESET}  {render_status_line(status)}"
+    color = YELLOW if mode in {"trust_commands", "full_access"} else SUBTLE
+    left = (
+        f"{ACCENT}{'PLAN' if plan else 'BUILD'}{RESET} {color}mode: {mode}{risk}{RESET}  {render_status_line(status)}"
+    )
 
     parts = []
     if tools_enabled:

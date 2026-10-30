@@ -65,6 +65,21 @@ def test_ctrl_clear_and_history_from_raw_input(terminal):
     assert state.input == "" and state.cursor_offset == 0
 
 
+def test_wheel_scrolls_transcript_without_changing_draft_or_history(terminal, monkeypatch):
+    args, state = terminal
+    state.input, state.cursor_offset = "draft", 5
+    state.history, state.history_index = ["previous"], 1
+    monkeypatch.setattr(app, "_get_stream_max_scroll_offset", lambda *_: 20)
+    dispatch(args, state, "\x1b[<64;10;10M")
+    assert state.transcript_scroll_offset > 0
+    assert (state.input, state.cursor_offset, state.history_index) == ("draft", 5, 1)
+    dispatch(args, state, "\x1b[<65;10;10M")
+    assert state.transcript_scroll_offset == 0
+    assert (state.input, state.cursor_offset, state.history_index) == ("draft", 5, 1)
+    dispatch(args, state, "\x1b[A")
+    assert state.input == "previous"
+
+
 def test_busy_enter_keeps_draft_and_never_submits(terminal):
     args, state = terminal
     state.is_busy = True

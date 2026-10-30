@@ -27,6 +27,7 @@ def test_mouse_capture_is_on_by_default_for_wheel_and_drag(terminal_screen, monk
     output = capsys.readouterr().out
     assert output == (
         terminal_screen.DISABLE_MOUSE_TRACKING
+        + terminal_screen.SAVE_DISABLE_ALTERNATE_SCROLL
         + terminal_screen.ENTER_ALT_SCREEN
         + terminal_screen.ERASE_SCREEN_AND_HOME
         + terminal_screen.ENABLE_MOUSE_TRACKING
@@ -49,7 +50,10 @@ def test_exit_disables_mouse_capture(terminal_screen, monkeypatch, capsys):
     terminal_screen.exit_alternate_screen()
     assert (
         capsys.readouterr().out
-        == "\x1b[?2004l" + terminal_screen.DISABLE_MOUSE_TRACKING + terminal_screen.EXIT_ALT_SCREEN
+        == "\x1b[?2004l"
+        + terminal_screen.DISABLE_MOUSE_TRACKING
+        + terminal_screen.EXIT_ALT_SCREEN
+        + terminal_screen.RESTORE_ALTERNATE_SCROLL
     )
 
 
@@ -193,9 +197,8 @@ def test_streaming_updates_keep_footer_and_input_on_their_rows(monkeypatch, caps
         terminal.apply(capsys.readouterr().out)
         lines = terminal.lines()
         assert "demo" in lines[-1]
-        assert "Cache" in lines[-2] and "Ctx" in lines[-2]
-        assert "test-model" in lines[-3]
-        assert ">" in lines[-4] and "..." not in lines[-4]
+        assert "BUILD auto" in lines[-2] and "test-model" in lines[-2]
+        assert ">" in lines[-3] and "..." not in lines[-3]
 
 
 def test_display_width_is_consistent_for_combining_marks_and_hangul():
@@ -426,14 +429,14 @@ def test_home_composer_fills_width_and_stays_at_bottom(monkeypatch, capsys, cols
         terminal.apply(capsys.readouterr().out)
         lines = terminal.lines()
         assert len(lines) == rows
-        assert lines[rows - 7].strip() == "─" * (cols - 4)
-        assert lines[rows - 6].startswith("   > ")
-        assert lines[rows - 5].strip() == "─" * (cols - 4)
-        assert "/exit" in lines[-1]
+        assert lines[rows - 4].strip() == "─" * (cols - 4)
+        assert lines[rows - 3].startswith("   > ")
+        assert "BUILD auto" in lines[-2]
+        assert "demo" in lines[-1]
         assert all(string_display_width(line) <= cols for line in lines)
         if user_input == "/permissions":
             # The selected command remains visible directly above the input.
-            assert "/permissions" in "\n".join(lines[: rows - 7])
+            assert "/permissions" in "\n".join(lines[: rows - 4])
 
 
 def test_home_resize_reflows_input_and_clears_old_positions(monkeypatch, capsys):
@@ -448,6 +451,7 @@ def test_home_resize_reflows_input_and_clears_old_positions(monkeypatch, capsys)
         terminal = TerminalGrid(cols, rows)
         terminal.apply(capsys.readouterr().out)
         lines = terminal.lines()
-        assert lines[rows - 7].strip() == "─" * (cols - 4)
-        assert "> /permissions" in lines[rows - 6]
-        assert "/exit" in lines[-1]
+        assert lines[rows - 4].strip() == "─" * (cols - 4)
+        assert "> /permissions" in lines[rows - 3]
+        assert "BUILD auto" in lines[-2]
+        assert "demo" in lines[-1]

@@ -152,6 +152,7 @@ def _memory_strategy() -> str:
 
 ### 总原则
 代码、git、CLAUDE.md 已记录的内容**绝不重复记录**。只记"重新发现或重新决策会花费力气"的东西。每次记录前自问:**5 个会话后这条记忆还有用吗?** 答案为否则跳过。
+简单的项目概览或只读问答默认不写记忆；先直接回答，除非用户明确要求保存或确有持久且不可替代的发现。
 
 ### 触发时机(按场景)
 
@@ -210,7 +211,8 @@ def build_system_prompt(
         "Default behavior: inspect the repository, use tools, make code changes when appropriate, and explain results clearly.",
         "Prefer reading files, searching code, editing files, and running verification commands over giving purely theoretical advice.",
         "For routine project exploration, prefer list_files, grep_files, and read_file over running shell commands. Do not run Git commands unless repository information is relevant to the task; listing or reading a project alone does not require Git.",
-        "For open-ended requests, inspect existing conventions, state material assumptions, and use ask_user when a missing requirement determines the design. Keep domain rules, language support and workflow choices configurable instead of encoding the current example as a universal rule. Passing checks only verifies the behavior they exercise; it does not replace the user's acceptance criteria.",
+        "Match investigation depth to the request. For a simple question about what is in a project, inspect the directory and a few relevant overview or entry files, then answer directly with the main items and what is uncertain. Expand the investigation when needed for the question or explicitly requested. Do not create or edit files, invent acceptance criteria, run project verification, or persist memory merely to answer an inventory question.",
+        "For open-ended implementation requests, inspect existing conventions, state material assumptions, and use ask_user when a missing requirement determines the design. Keep domain rules, language support and workflow choices configurable instead of encoding the current example as a universal rule. Passing checks only verifies the behavior they exercise; it does not replace the user's acceptance criteria.",
         "When search_tools is available, additional tools are deferred: search by capability, service or exact name to load them before calling. Do not assume a capability is missing because its tool schema has not been loaded yet.",
         "Use code_intelligence for definitions, scope-resolved references and diagnostics when available. Its fallback results are lexical candidates, not semantic proof. Use rename_symbol for semantic renames; it requires a language server and edit approval.",
         f"Current cwd: {cwd}",

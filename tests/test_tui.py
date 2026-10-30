@@ -37,6 +37,77 @@ def test_render_transcript_shows_tool_entry() -> None:
     assert "done" in rendered
 
 
+@pytest.mark.parametrize("path", ["src/a/very/long/directory/module.py", r"C:\\项目\\很长的目录\\module.py"])
+def test_tool_header_keeps_filename_visible_for_long_paths(path) -> None:
+    from pepsicode.tui.chrome import string_display_width, strip_ansi
+    from pepsicode.tui.transcript import render_tool_activity
+
+    entry = TranscriptEntry(
+        id=1, kind="tool", body="", toolName="read_file", toolSummary=f"read_file path={path}", status="success"
+    )
+    header = render_tool_activity(entry, 38)[0]
+    assert "module.py" in strip_ansi(header)
+    assert "…" in strip_ansi(header)
+    assert string_display_width(header) <= 37
+
+
+def test_command_target_keeps_prefix_when_truncated() -> None:
+    from pepsicode.tui.chrome import strip_ansi
+    from pepsicode.tui.transcript import render_tool_activity
+
+    entry = TranscriptEntry(
+        id=1,
+        kind="tool",
+        body="",
+        toolName="run_command",
+        toolSummary="run_command git status --porcelain=2",
+        status="running",
+    )
+    assert "$ git" in strip_ansi(render_tool_activity(entry, 28)[0])
+
+
+def test_tool_target_preserves_filename_before_optional_fields() -> None:
+    from pepsicode.tui.chrome import string_display_width, strip_ansi
+    from pepsicode.tui.transcript import render_tool_activity
+
+    entry = TranscriptEntry(
+        id=1,
+        kind="tool",
+        body="",
+        toolName="read_file",
+        status="success",
+        toolSummary="read_file path=src/very long/目录/module.py offset=100 limit=200",
+    )
+    for width in (36, 44, 80):
+        header = render_tool_activity(entry, width)[0]
+        assert "module.py" in strip_ansi(header)
+        assert string_display_width(header) <= width - 1
+    assert "offset=100 limit=200" in strip_ansi(render_tool_activity(entry, 80)[0])
+
+
+@pytest.mark.parametrize("no_color", [False, True])
+def test_tool_path_color_respects_terminal_color_settings(no_color) -> None:
+    environment = os.environ.copy()
+    environment.update(CLICOLOR_FORCE="1", TERM="xterm", PYTHONIOENCODING="utf-8")
+    if no_color:
+        environment["NO_COLOR"] = "1"
+    else:
+        environment.pop("NO_COLOR", None)
+    code = (
+        "from pepsicode.tui.transcript import render_tool_activity; "
+        "from pepsicode.tui.types import TranscriptEntry; "
+        "print(render_tool_activity(TranscriptEntry(id=1, kind='tool', body='', "
+        "toolName='read_file', toolSummary='read_file path=src/module.py', status='success'), 80)[0])"
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", code], capture_output=True, text=True, encoding="utf-8", env=environment, check=True
+    )
+    assert "src/module.py" in result.stdout
+    assert ("\x1b[36m" in result.stdout) is not no_color
+    if no_color:
+        assert "\x1b[32m" not in result.stdout
+
+
 def test_render_transcript_shows_intermediate_collapse_phase() -> None:
     transcript = [
         TranscriptEntry(

@@ -141,6 +141,11 @@ ERASE_SCREEN_AND_HOME = "\u001b[2J\u001b[H"
 # mouse back to the terminal (native selection, but no wheel scrolling).
 ENABLE_MOUSE_TRACKING = "\u001b[?1000h\u001b[?1002h\u001b[?1006h"
 DISABLE_MOUSE_TRACKING = "\u001b[?1006l\u001b[?1002l\u001b[?1000l"
+# Some terminals translate wheel motion in the alternate screen into up/down
+# keys when mouse tracking is unavailable. Those keys recall input history.
+# Save and disable alternate-scroll while the TUI is active, then restore it.
+SAVE_DISABLE_ALTERNATE_SCROLL = "\u001b[?1007s\u001b[?1007l"
+RESTORE_ALTERNATE_SCROLL = "\u001b[?1007r"
 
 # Terminal types that do not support alternate screen or mouse tracking.
 _DUMB_TERMS = frozenset({"dumb", "linux", ""})
@@ -265,14 +270,21 @@ def enter_alternate_screen() -> None:
         # don't support alternate screen or mouse tracking.
         return
     mouse_tracking = ENABLE_MOUSE_TRACKING if mouse_tracking_enabled() else ""
-    sys.stdout.write(DISABLE_MOUSE_TRACKING + ENTER_ALT_SCREEN + ERASE_SCREEN_AND_HOME + mouse_tracking + "\x1b[?2004h")
+    sys.stdout.write(
+        DISABLE_MOUSE_TRACKING
+        + SAVE_DISABLE_ALTERNATE_SCROLL
+        + ENTER_ALT_SCREEN
+        + ERASE_SCREEN_AND_HOME
+        + mouse_tracking
+        + "\x1b[?2004h"
+    )
     sys.stdout.flush()
 
 
 def exit_alternate_screen() -> None:
     if _is_dumb_terminal():
         return
-    sys.stdout.write("\x1b[?2004l" + DISABLE_MOUSE_TRACKING + EXIT_ALT_SCREEN)
+    sys.stdout.write("\x1b[?2004l" + DISABLE_MOUSE_TRACKING + EXIT_ALT_SCREEN + RESTORE_ALTERNATE_SCROLL)
     sys.stdout.flush()
     _restore_windows_console_mode()
 

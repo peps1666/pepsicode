@@ -74,6 +74,12 @@ pepsicode
 
 > 默认使用 `auto`。`命令免确认` 会以当前用户权限放行任意本地程序，只在信任当前任务时启用；详见 [权限与安全](docs/permissions.md)。
 
+### 接入 QQ 私聊
+
+通过独立的 OneBot v11 消息通道，可以在 QQ 好友私聊中与 Pepsi 连续对话、处理配置好的本地项目，并在 QQ 中确认需要审批的操作。通道只接收配置的用户发来的好友私聊，目前支持文字，不支持群聊、图片或语音。
+
+需要 Node.js 22+、Python 3.11+、已配置的模型，以及单独安装并登录的 OneBot v11 网关。配置 QQ 账号、项目路径和网关令牌后，在 `integrations/qq` 目录运行 `npm ci`、`npm run check` 和 `npm start`；具体步骤见 [QQ 接入指南](integrations/qq/README.md)。非官方 QQ 网关可能导致账号受限，请先查看指南中的说明。
+
 ## 功能速览
 
 | 能力 | 说明 | 详情 |
@@ -83,6 +89,7 @@ pepsicode
 | 自动验证闭环 | 发现 tests / lint / build，失败回送模型修复，报告可追溯 | [质量闭环](docs/features.md#质量闭环) |
 | 权限与 Plan | 四档权限（含命令免确认）、只读 Plan、工作区默认、外部路径/MCP 审批 | [权限与安全](docs/permissions.md) |
 | 扩展与自动化 | Hooks v2、MCP、Skills、四类子代理、Markdown 自定义命令 | [Hooks v2](docs/hooks.md) · [扩展](docs/extensions.md) |
+| QQ 私聊 | OneBot v11 通道，支持文字对话、任务排队、QQ 内审批及断线恢复 | [QQ 接入指南](integrations/qq/README.md) |
 | 上下文与会话 | artifact、压缩、分支/恢复、持久记忆、成本与用量 | [模型、上下文与配置](docs/configuration.md) |
 
 ## 文档
@@ -96,6 +103,7 @@ pepsicode
 | [模型、上下文与配置](docs/configuration.md) | 服务商、模型、思考档位、环境变量、上下文管理 |
 | [Hooks v2](docs/hooks.md) | 配置层级、事件、动作、条件模板、管理命令、Python API |
 | [扩展与自动化](docs/extensions.md) | Markdown 自定义命令、Skills 与 MCP |
+| [QQ 接入指南](integrations/qq/README.md) | OneBot 网关配置、私聊命令、审批与断线恢复 |
 | [桌面客户端](docs/desktop.md) | 架构、开发模式、模型配置、Windows ZIP 构建 |
 | [命令速查](docs/commands.md) | 终端与桌面共用的常用斜杠命令 |
 | [设计与开发](docs/development.md) | 设计取舍、测试、构建、真实任务评测 |

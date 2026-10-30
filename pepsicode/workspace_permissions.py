@@ -47,7 +47,9 @@ def set_workspace_default(workspace: str, mode: str) -> None:
     WORKSPACE_PERMISSIONS_PATH.parent.mkdir(parents=True, exist_ok=True)
     temporary = None
     try:
-        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=WORKSPACE_PERMISSIONS_PATH.parent, delete=False) as handle:
+        with tempfile.NamedTemporaryFile(
+            mode="w", encoding="utf-8", dir=WORKSPACE_PERMISSIONS_PATH.parent, delete=False
+        ) as handle:
             temporary = Path(handle.name)
             json.dump(data, handle, ensure_ascii=False, indent=2)
             handle.write("\n")

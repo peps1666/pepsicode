@@ -1229,8 +1229,36 @@ def _permission_mode_label(args: TtyAppArgs) -> str:
     permissions = getattr(args, "permissions", None)
     mode = getattr(getattr(permissions, "access_mode", None), "value", "auto")
     risk = " 高风险" if mode == "trust_commands" else ""
-    plan = " PLAN" if getattr(permissions, "is_plan_mode", False) else ""
-    return f"{YELLOW}mode: {mode}{risk}{plan}{RESET}"
+    plan = getattr(permissions, "is_plan_mode", False)
+    color = YELLOW if mode in {"trust_commands", "full_access"} else SUBTLE
+    return f"{ACCENT}{'PLAN' if plan else 'BUILD'}{RESET} {color}{mode}{risk}{RESET}"
+
+
+def _composer_status_lines(args: TtyAppArgs, state: ScreenState, model: str, cols: int) -> list[str]:
+    """Keep the active mode prominent and fit secondary details around it."""
+    width = max(1, cols - 4)
+    mode = _permission_mode_label(args)
+    remaining = width - _visible_width(mode) - 3
+    first = mode
+    if remaining > 0:
+        first += f" {SUBTLE}· {truncate_plain(model, remaining)}{RESET}"
+    hint = "Tab 切换"
+    if not state.is_busy and _visible_width(first) + _visible_width(hint) + 3 <= width:
+        first += f" {SUBTLE}· {hint}{RESET}"
+
+    if state.exit_requested_at is not None:
+        second = f"{YELLOW}Press Ctrl+C again to exit{RESET}"
+    else:
+        path = str(args.cwd)
+        if _visible_width(path) > width // 2:
+            path = Path(args.cwd).name or path
+        path = truncate_plain(path, width)
+        free = width - _visible_width(path) - 2
+        second = f"{SUBTLE}{path}{RESET}"
+        if free >= 18:
+            usage = _render_usage_status(args, state, free)
+            second += " " * max(2, width - _visible_width(path) - _visible_width(usage)) + usage
+    return ["  " + truncate_plain(first, width), "  " + truncate_plain(second, width)]
 
 
 def _render_home_screen(args: TtyAppArgs, state: ScreenState, cols: int, rows: int) -> None:
@@ -1252,28 +1280,22 @@ def _render_home_screen(args: TtyAppArgs, state: ScreenState, cols: int, rows: i
     composer = [
         f"{SUBTLE}{'─' * block_width}{RESET}",
         render_input_prompt(state.input, state.cursor_offset, width=block_width),
-        f"{SUBTLE}{'─' * block_width}{RESET}",
-        f"{SUBTLE}{model}{RESET}",
-        _render_usage_status(args, state, block_width),
     ]
+    status_lines = _composer_status_lines(args, state, model, cols)
     menu: list[str] = []
     if visible_commands and state.input:
         # Expand upward so opening/filtering the menu does not move the input.
         menu = render_slash_menu(
             visible_commands,
             min(state.selected_slash_index, len(visible_commands) - 1),
-            max_rows=max(1, min(10, rows - len(composer) - 2)),
+            max_rows=max(1, min(10, rows - len(composer) - len(status_lines))),
             width=block_width,
         ).splitlines()
-    welcome_height = max(0, rows - len(composer) - len(menu) - 2)
+    welcome_height = max(0, rows - len(composer) - len(menu) - len(status_lines))
     frame = [margin + line for line in content[:welcome_height]]
     frame += [""] * (welcome_height - len(frame))
     frame += [margin + line for line in menu + composer]
-    frame.append(f"  {SUBTLE}{Path(args.cwd)}{RESET}")
-    exit_hint = (
-        "Press Ctrl+C again to exit" if state.exit_requested_at is not None else "/help for commands · /exit to quit"
-    )
-    frame.append(f"  {_permission_mode_label(args)}  {SUBTLE}{exit_hint}{RESET}")
+    frame += status_lines
     frame = _truncate_frame_lines(frame, cols, rows)
     state.frame_renderer.draw(frame, cols, rows)
 
@@ -1343,7 +1365,7 @@ def _render_resume_picker_lines(
     return _truncate_frame_lines(lines, cols, rows)
 
 
-def _render_stream_input(state: ScreenState, model: str, cols: int, visible_commands: list | None = None) -> list[str]:
+def _render_stream_input(state: ScreenState, cols: int, visible_commands: list | None = None) -> list[str]:
     """Claude-style: clean amber > prompt line with slash hints."""
     prompt = " " + render_input_prompt(state.input, state.cursor_offset, width=max(5, cols - 2))
 
@@ -1364,9 +1386,6 @@ def _render_stream_input(state: ScreenState, model: str, cols: int, visible_comm
         lines.append(f"  {ACCENT}{ICON_DOT}{RESET} {YELLOW}Thinking{dots}{RESET}")
         queued = len(getattr(state, "pending_inputs", []))
         lines.append(f"  {SUBTLE}Enter: steer · Alt+Enter or /queue: follow-up · {queued} queued · Ctrl+C: stop{RESET}")
-    else:
-        lines.append(f"  {SUBTLE}{model}{RESET}")
-
     return lines
 
 
@@ -1459,7 +1478,7 @@ def _build_stream_transcript_lines(
             label = f"{BRIGHT_RED}{BOLD}Error{RESET}" if entry.status == "error" else f"{BOLD}pepsicode{RESET}"
             rendered.append(f"  {ACCENT}{ICON_DOT}{RESET} {label}")
             content, _ = parse_assistant_text(entry.body)
-            for line in render_markdownish(content).splitlines() or [""]:
+            for line in render_markdownish(content, width=max(2, cols - 4)).splitlines() or [""]:
                 rendered.extend(f"  {part}" for part in wrap_text(line, max(2, cols - 4)).split("\n"))
             rendered.append("")
             continue
@@ -1587,7 +1606,7 @@ def _render_stream_screen(args: TtyAppArgs, state: ScreenState) -> None:
         ).splitlines()
     else:
         visible_commands = _get_visible_commands(state.input, args.cwd)
-        input_lines = _render_stream_input(state, model_name, cols, visible_commands)
+        input_lines = _render_stream_input(state, cols, visible_commands)
 
         # Render slash menu if visible
         if visible_commands and state.input:
@@ -1600,23 +1619,16 @@ def _render_stream_screen(args: TtyAppArgs, state: ScreenState) -> None:
             input_lines.append("")
             input_lines.extend(menu.splitlines())
 
-    input_lines.append("  " + _render_usage_status(args, state, max(4, cols - 4)))
-
-    msg_count = len(state.transcript)
     sep = f"  {SUBTLE}{'─' * max(1, cols - 4)}{RESET}"
+    status_lines = _composer_status_lines(args, state, model_name, cols)
+    if state.selection_notice and state.exit_requested_at is None:
+        status_lines[-1] = f"  {ACCENT}{truncate_plain(state.selection_notice, max(1, cols - 4))}{RESET}"
 
-    cwd_name = Path(args.cwd).name or args.cwd
-    mode_label = _permission_mode_label(args)
-    notice = f"  {ACCENT}{state.selection_notice}{RESET}" if state.selection_notice else ""
-    footer = f"  {mode_label}  {SUBTLE}{cwd_name}{RESET}  {SUBTLE}{msg_count} events{RESET}  {SUBTLE}{DISPLAY_VERSION}{RESET}{notice}"
-    if state.exit_requested_at is not None:
-        footer = f"  {mode_label}  {YELLOW}Press Ctrl+C again within 2s to exit · /exit to quit{RESET}"
-
-    reserved = len(input_lines) + 2
+    reserved = len(input_lines) + 1 + len(status_lines)
     transcript_height = rows - reserved
     if transcript_height < 1:
         # A prompt taller than the screen keeps its bottom (the choices) visible.
-        state.frame_renderer.draw(_truncate_frame_lines((input_lines + [footer])[-rows:], cols, rows), cols, rows)
+        state.frame_renderer.draw(_truncate_frame_lines((input_lines + status_lines)[-rows:], cols, rows), cols, rows)
         return
 
     header_lines: dict[int, int] = {}
@@ -1650,7 +1662,7 @@ def _render_stream_screen(args: TtyAppArgs, state: ScreenState) -> None:
     # Anchor the composer while new output streams in.
     transcript_lines += [""] * max(0, transcript_height - len(transcript_lines))
 
-    frame = _truncate_frame_lines(transcript_lines, cols, transcript_height) + [sep] + input_lines + [footer]
+    frame = _truncate_frame_lines(transcript_lines, cols, transcript_height) + [sep] + input_lines + status_lines
     frame = _truncate_frame_lines(frame, cols, rows)
 
     state.frame_renderer.draw(frame, cols, rows)
@@ -1696,7 +1708,16 @@ def _render_screen(args: TtyAppArgs, state: ScreenState) -> None:
             )
         )
         buf.append("\n\n")
-        buf.append(_render_footer_cached(state.status, True, has_skills, background_tasks, args.permissions.access_mode.value, args.permissions.is_plan_mode))
+        buf.append(
+            _render_footer_cached(
+                state.status,
+                True,
+                has_skills,
+                background_tasks,
+                args.permissions.access_mode.value,
+                args.permissions.is_plan_mode,
+            )
+        )
         state.frame_renderer.draw("".join(buf).splitlines(), cols, rows)
         return
 
@@ -1724,7 +1745,16 @@ def _render_screen(args: TtyAppArgs, state: ScreenState) -> None:
     buf.append("\n\n")
 
     # Footer (cached)
-    buf.append(_render_footer_cached(state.status, True, has_skills, background_tasks, args.permissions.access_mode.value, args.permissions.is_plan_mode))
+    buf.append(
+        _render_footer_cached(
+            state.status,
+            True,
+            has_skills,
+            background_tasks,
+            args.permissions.access_mode.value,
+            args.permissions.is_plan_mode,
+        )
+    )
 
     # Contextual help line
     if contextual_help:
@@ -3323,6 +3353,29 @@ def _handle_normal_mode_key(
     # Tab -> autocomplete slash command
     if event.name == "tab" and visible_commands:
         _handle_normal_mode_tab(state, visible_commands, rerender)
+        return True
+
+    # Plain Tab switches between planning and normal work without submitting
+    # the draft or approving a plan. Slash commands retain their completion.
+    if event.name == "tab" and not event.ctrl and not event.meta:
+        if state.is_busy or state.input.lstrip().startswith("/"):
+            return True
+        try:
+            if args.permissions.is_plan_mode:
+                args.permissions.leave_plan_mode()
+                state.status = "Build mode · plan not approved"
+            else:
+                args.permissions.enter_plan_mode()
+                state.status = "Plan mode"
+            if state.session:
+                state.session.access_mode = args.permissions.access_mode.value
+                state.session.permission_mode = args.permissions.mode.value
+                state.session.plan_file_path = args.permissions.plan_file_path
+                if state.autosave:
+                    state.autosave.mark_dirty()
+        except (OSError, RuntimeError) as error:
+            state.status = f"Unable to switch mode: {error}"
+        rerender()
         return True
 
     # Navigation and editing keys

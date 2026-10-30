@@ -69,6 +69,10 @@ def _run(value, context):
                 )
                 return ToolResult(True, json.dumps(task, ensure_ascii=False))
             classification = task.get("classification", {"locked": True})
+            if task["kind"] == "answer" and classification.get("project_overview") and value["criteria"]:
+                raise PermissionError(
+                    "A project overview does not require model-defined acceptance checks; answer from observed files"
+                )
             if value["kind"] == "answer" and task["kind"] != "answer":
                 if value["action"] != "classify" or classification.get("locked", True) or task["criteria"]:
                     raise PermissionError("The current actionable task cannot be downgraded to an answer")

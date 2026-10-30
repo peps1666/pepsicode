@@ -9,6 +9,7 @@ from typing import Literal, Union
 _SGR_MOUSE_RE = re.compile(r"^\x1b\[<(\d+);(\d+);(\d+)([Mm])")
 _CSI_CURSOR_RE = re.compile(r"^\x1b\[(?:1;(\d+))?([A-DF-H])")
 _CSI_TILDE_RE = re.compile(r"^\x1b\[(\d+)~")
+_CSI_OTHER_RE = re.compile(r"^\x1b\[[\x30-\x3f]*[\x20-\x2f]*[\x40-\x7e]")
 _SS3_RE = re.compile(r"^\x1bO([A-DF-H])")
 _ESC_CHAR_RE = re.compile(r"^\x1b([^\x1b\[O])")
 
@@ -116,22 +117,19 @@ def maybe_need_more_for_escape_sequence(chunk: str) -> bool:
 
     # CSI
     if chunk[1] == "[":
-        # SGR Mouse: ESC[<button;x;yM/m
-        if len(chunk) >= 3 and chunk[2] == "<":
-            return not any(c in "Mm" for c in chunk[3:])
         # Legacy Mouse: ESC[M...
         if len(chunk) >= 3 and chunk[2] == "M":
             return len(chunk) < 6
-        # CSI cursor/tilde: look for terminator char (A-Z, a-z, ~)
-        # Only digits, semicolons, and '?' are valid intermediate/parameter bytes
-        for i in range(2, len(chunk)):
-            c = chunk[i]
-            if "A" <= c <= "Z" or "a" <= c <= "z" or c == "~":
+        # CSI parameter bytes (0x30-0x3f) precede intermediate bytes
+        # (0x20-0x2f); a final byte in 0x40-0x7e completes the sequence.
+        intermediate = False
+        for c in chunk[2:]:
+            if "\x40" <= c <= "\x7e":
                 return False
-            if c not in "0123456789;?":
-                # Invalid character in CSI — not a valid sequence, stop waiting
+            if "\x20" <= c <= "\x2f":
+                intermediate = True
+            elif not ("\x30" <= c <= "\x3f" and not intermediate):
                 return False
-        # All chars so far are parameter bytes, still waiting for terminator
         return True
 
     # SS3
@@ -190,6 +188,12 @@ def parse_escape_sequence(chunk: str) -> tuple[ParsedInputEvent | None, int]:
         if n in tilde_map:
             return KeyEvent(name=tilde_map[n], ctrl=False, meta=False), csi_tilde_match.end()
         return None, csi_tilde_match.end()
+
+    # Unknown complete CSI is a terminal control sequence, not user text.
+    # Consume it whole so its parameters cannot leak into the input draft.
+    csi_other_match = _CSI_OTHER_RE.match(chunk)
+    if csi_other_match:
+        return None, csi_other_match.end()
 
     # SS3: ESC O A/B/C/D/H/F
     ss3_match = _SS3_RE.match(chunk)
