@@ -115,7 +115,7 @@ def test_failed_tool_results_include_recovery_guidance_without_replaying_writes(
                 "Edit",
                 {},
                 lambda x: x,
-                lambda data, ctx: (invoked.append(data) or ToolResult(False, "File changed")),
+                lambda data, ctx: invoked.append(data) or ToolResult(False, "File changed"),
             )
         ]
     )

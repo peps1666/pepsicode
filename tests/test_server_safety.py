@@ -229,8 +229,8 @@ def test_cleanup_waits_for_executor_thread_even_if_async_wrapper_has_finished(is
         thread = threading.Thread(target=worker)
         thread.start()
         session.tools = Mock()
-        session.tools.dispose.side_effect = lambda: thread_exited.is_set() or pytest.fail(
-            "tools disposed while worker still active"
+        session.tools.dispose.side_effect = lambda: (
+            thread_exited.is_set() or pytest.fail("tools disposed while worker still active")
         )
 
         async def emit(name, data):
