@@ -135,6 +135,7 @@ class ScriptedModel:
 
 @pytest.mark.parametrize("runner", [run_agent_turn, run_agent_turn_stream])
 def test_steering_waits_for_entire_tool_batch(tmp_path, runner):
+    (tmp_path / "AGENTS.md").write_text("Queue project rule", encoding="utf-8")
     queue = TurnInputQueue()
     queue.start()
     executed = []
@@ -164,12 +165,14 @@ def test_steering_waits_for_entire_tool_batch(tmp_path, runner):
     assert executed == [1, 2]
     assert [message["role"] for message in model.requests[1]] == [
         "user",
+        "user",
         "assistant_tool_call",
         "assistant_tool_call",
         "tool_result",
         "tool_result",
         "user",
     ]
+    assert model.requests[1][1]["source"]["kind"] == "agent-instructions-projection"
     assert model.requests[1][-1]["content"] == "avoid database changes"
     assert result[-1]["content"] == "adjusted"
 

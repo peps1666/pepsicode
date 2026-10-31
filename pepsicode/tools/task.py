@@ -191,8 +191,13 @@ def create_task_tool(
                     usage.get("output_tokens", 0),
                 )
 
+        from pepsicode.prompts import load_harness_instructions
+
         sub_messages: list[ChatMessage] = [
-            {"role": "system", "content": definition.system_prompt_template},
+            {
+                "role": "system",
+                "content": load_harness_instructions() + "\n\n## Sub-agent role\n" + definition.system_prompt_template,
+            },
             {"role": "user", "content": parsed["task"]},
         ]
         try:

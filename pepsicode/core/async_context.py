@@ -1,6 +1,6 @@
 """Async context collector for pepsicode Python.
 
-Parallelizes expensive I/O operations (git status, CLAUDE.md loading, etc.)
+Parallelizes expensive I/O operations (git status, AGENTS.md loading, etc.)
 and caches results with invalidation support.
 
 Inspired by Claude Code's memoized async context providers.
@@ -13,6 +13,8 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+
+from pepsicode.context.instructions import load_agent_instructions
 
 # ---------------------------------------------------------------------------
 # Context collector
@@ -36,7 +38,7 @@ class AsyncContextCollector:
 
     Inspired by Claude Code's memoized async context providers:
     - getSystemContext() - git status, system info
-    - getUserContext() - CLAUDE.md, user preferences
+    - getUserContext() - AGENTS.md, user preferences
 
     Parallelizes expensive I/O and provides cache invalidation.
     """
@@ -93,27 +95,14 @@ class AsyncContextCollector:
         return result
 
     async def get_user_context(self) -> dict[str, str]:
-        """Get user context (CLAUDE.md, preferences) with caching."""
-        cache_key = f"user_context:{self.cwd}"
-
-        # Check cache
-        if cache_key in self._cache and not self._cache[cache_key].is_expired():
-            return self._cache[cache_key].value
-
-        # Collect (parallelized)
-        claude_md = await self._load_claude_md()
+        """Refresh AGENTS.md guidance so edits do not wait for the Git cache TTL."""
+        agents_md = await asyncio.to_thread(load_agent_instructions, str(self.cwd))
 
         result = {
             "current_date": self._get_current_date(),
         }
-        if claude_md:
-            result["claude_md"] = claude_md
-
-        # Cache result
-        self._cache[cache_key] = ContextCache(
-            value=result,
-            ttl_seconds=self.cache_ttl,
-        )
+        if agents_md:
+            result["agents_md"] = agents_md
 
         return result
 
@@ -224,16 +213,6 @@ class AsyncContextCollector:
             pass
         return "unknown"
 
-    async def _load_claude_md(self) -> str | None:
-        """Load CLAUDE.md file if exists."""
-        claude_md_path = self.cwd / "CLAUDE.md"
-        if claude_md_path.exists():
-            try:
-                return claude_md_path.read_text(encoding="utf-8")
-            except Exception:
-                pass
-        return None
-
     def _get_current_date(self) -> str:
         """Get current date string."""
         from datetime import datetime
@@ -262,12 +241,12 @@ class AsyncContextCollector:
                 ]
             )
 
-        if "claude_md" in context:
+        if "agents_md" in context:
             lines.extend(
                 [
-                    "### Project Instructions (CLAUDE.md)",
+                    "### Project Instructions (AGENTS.md)",
                     "",
-                    context["claude_md"],
+                    context["agents_md"],
                     "",
                 ]
             )

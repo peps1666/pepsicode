@@ -33,7 +33,7 @@ from pepsicode.cli.local_tool_shortcuts import parse_local_tool_shortcut
 from pepsicode.cli.model_commands import update_session_model_settings
 from pepsicode.context.context_manager import ContextManager
 from pepsicode.context.history import load_history_entries, save_history_entries
-from pepsicode.context.prompt import build_session_prompt
+from pepsicode.context.prompt import PROMPT_FORMAT_VERSION, build_session_prompt
 from pepsicode.core.agent_loop import run_agent_turn_stream
 from pepsicode.core.background_tasks import list_background_tasks
 from pepsicode.core.input_queue import InputMode, TurnInputQueue
@@ -2430,10 +2430,10 @@ def _handle_input(
     aggregated_edit_by_entry_id: dict[int, AggregatedEditProgress] = {}
 
     # Migrate old sessions once; subsequent turns keep the stable prompt.
-    if not args.messages or args.messages[0].get("_prompt_format") != 1:
+    if not args.messages or args.messages[0].get("_prompt_format") != PROMPT_FORMAT_VERSION:
         system = {
             "role": "system",
-            "_prompt_format": 1,
+            "_prompt_format": PROMPT_FORMAT_VERSION,
             "content": build_session_prompt(
                 args.cwd,
                 governance=bool(args.runtime.get("governance")) if args.runtime else False,

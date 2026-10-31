@@ -11,7 +11,7 @@ from pepsicode.cli.local_tool_shortcuts import parse_local_tool_shortcut
 from pepsicode.cli.manage_cli import maybe_handle_management_command
 from pepsicode.config import load_runtime_config
 from pepsicode.context.history import load_history_entries, save_history_entries
-from pepsicode.context.prompt import build_session_prompt
+from pepsicode.context.prompt import PROMPT_FORMAT_VERSION, build_session_prompt
 from pepsicode.core.agent_loop import run_agent_turn
 from pepsicode.core.session import create_new_session, save_session
 from pepsicode.core.session_tree import (
@@ -338,7 +338,7 @@ def main() -> None:
     messages: list[ChatMessage] = [
         {
             "role": "system",
-            "_prompt_format": 1,
+            "_prompt_format": PROMPT_FORMAT_VERSION,
             "content": build_session_prompt(
                 cwd,
                 permissions.get_summary(),

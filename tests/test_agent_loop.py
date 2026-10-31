@@ -131,9 +131,13 @@ def test_agent_turn_keeps_thinking_adjacent_to_tool_call_after_progress() -> Non
         cwd=".",
     )
     roles = [message["role"] for message in messages]
+    thinking_index = roles.index("assistant_thinking")
 
-    assert roles[:4] == ["system", "assistant_thinking", "assistant_progress", "assistant_tool_call"]
-    assert "user" not in roles[:4]
+    assert roles[thinking_index : thinking_index + 3] == [
+        "assistant_thinking",
+        "assistant_progress",
+        "assistant_tool_call",
+    ]
 
 
 def test_agent_turn_records_all_tool_calls_before_tool_results() -> None:
@@ -172,14 +176,14 @@ def test_agent_turn_records_all_tool_calls_before_tool_results() -> None:
         cwd=".",
     )
     roles = [message["role"] for message in messages]
+    thinking_index = roles.index("assistant_thinking")
 
-    assert roles[:4] == [
-        "system",
+    assert roles[thinking_index : thinking_index + 3] == [
         "assistant_thinking",
         "assistant_tool_call",
         "assistant_tool_call",
     ]
-    assert roles[4:6] == ["tool_result", "tool_result"]
+    assert roles[thinking_index + 3 : thinking_index + 5] == ["tool_result", "tool_result"]
 
 
 def test_agent_turn_retries_empty_response_then_continues() -> None:

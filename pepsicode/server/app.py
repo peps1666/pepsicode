@@ -32,7 +32,7 @@ from pepsicode.approval import ApprovalBackend, ApprovalDecision, ApprovalOutcom
 from pepsicode.cli.cli_commands import expand_prompt_command, get_slash_commands, prompt_catalog
 from pepsicode.config import load_runtime_config, save_mini_code_settings
 from pepsicode.context.context_manager import ContextManager
-from pepsicode.context.prompt import build_session_prompt
+from pepsicode.context.prompt import PROMPT_FORMAT_VERSION, build_session_prompt
 from pepsicode.core.agent_loop import run_agent_turn_stream
 from pepsicode.core.input_queue import TurnInputQueue
 from pepsicode.core.session import (
@@ -281,7 +281,7 @@ class ClientSession:
         if (
             self.messages
             and self.messages[0].get("role") == "system"
-            and self.messages[0].get("_prompt_format") == 1
+            and self.messages[0].get("_prompt_format") == PROMPT_FORMAT_VERSION
             and self.messages[0].get("_prompt_profile") == profile
         ):
             return
@@ -300,10 +300,21 @@ class ClientSession:
             prompt += "\n\n" + presentation
         # Replace existing system prompt or prepend
         if self.messages and self.messages[0].get("role") == "system":
-            self.messages[0] = {"role": "system", "content": prompt, "_prompt_format": 1, "_prompt_profile": profile}
+            self.messages[0] = {
+                "role": "system",
+                "content": prompt,
+                "_prompt_format": PROMPT_FORMAT_VERSION,
+                "_prompt_profile": profile,
+            }
         else:
             self.messages.insert(
-                0, {"role": "system", "content": prompt, "_prompt_format": 1, "_prompt_profile": profile}
+                0,
+                {
+                    "role": "system",
+                    "content": prompt,
+                    "_prompt_format": PROMPT_FORMAT_VERSION,
+                    "_prompt_profile": profile,
+                },
             )
 
     def snapshot(self) -> None:

@@ -213,9 +213,48 @@ def _messages_for_model(
 ) -> list[ChatMessage]:
     from pepsicode.core.task_control import task_context
 
-    if messages and messages[0].get("_prompt_format") == 1 and cwd is not None and tools is not None:
-        from pepsicode.context.prompt import build_session_prompt
+    if cwd is not None:
+        from pepsicode.context.instructions import load_agent_instructions
 
+        instructions = load_agent_instructions(cwd)
+        prior_instructions = next(
+            (
+                message
+                for message in reversed(messages)
+                if isinstance(message.get("source"), dict)
+                and message["source"].get("kind") == "agent-instructions-projection"
+            ),
+            None,
+        )
+        instruction_text = (
+            '<system-reminder kind="agent-instructions">\n'
+            "The latest agent-instructions reminder replaces all earlier agent-instructions reminders.\n"
+            + (instructions or "No AGENTS.md instructions apply. Previously loaded file instructions no longer apply.")
+            + "\n</system-reminder>"
+        )
+        if (instructions or prior_instructions) and (
+            prior_instructions is None or prior_instructions.get("content") != instruction_text
+        ):
+            messages.append(
+                cast(
+                    ChatMessage,
+                    {
+                        "role": "user",
+                        "internal": True,
+                        "content": instruction_text,
+                        "source": {"kind": "agent-instructions-projection"},
+                    },
+                )
+            )
+
+    from pepsicode.context.prompt import PROMPT_FORMAT_VERSION, build_session_prompt
+
+    if (
+        messages
+        and messages[0].get("_prompt_format") == PROMPT_FORMAT_VERSION
+        and cwd is not None
+        and tools is not None
+    ):
         sections: list[str] = []
         build_session_prompt(
             cwd,

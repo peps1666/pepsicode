@@ -1,5 +1,6 @@
 import json
 
+from pepsicode.context.prompt import PROMPT_FORMAT_VERSION
 from pepsicode.execution.model_requests import _begin
 from pepsicode.execution.prefix_diff import compare_prepared, first_difference, load_journals
 from pepsicode.llm.anthropic_adapter import AnthropicModelAdapter, _to_anthropic_messages
@@ -307,7 +308,10 @@ def test_plan_mode_switch_projects_latest_context_without_rewriting_system(tmp_p
     permissions = PermissionManager(str(tmp_path))
     registry = ToolRegistry([])
     system = build_session_prompt(str(tmp_path), dynamic_sections=[])
-    messages = [{"role": "system", "content": system, "_prompt_format": 1}, {"role": "user", "content": "start"}]
+    messages = [
+        {"role": "system", "content": system, "_prompt_format": PROMPT_FORMAT_VERSION},
+        {"role": "user", "content": "start"},
+    ]
     bodies = []
     for action in ("off", "enter", "exit"):
         if action == "enter":
@@ -337,7 +341,11 @@ def test_session_projection_is_deduplicated_and_follows_tool_batch(tmp_path):
     registry = ToolRegistry([])
     permissions = PermissionManager(str(tmp_path))
     messages = [
-        {"role": "system", "content": build_session_prompt(str(tmp_path), dynamic_sections=[]), "_prompt_format": 1},
+        {
+            "role": "system",
+            "content": build_session_prompt(str(tmp_path), dynamic_sections=[]),
+            "_prompt_format": PROMPT_FORMAT_VERSION,
+        },
         {"role": "user", "content": "start"},
     ]
     _messages_for_model(messages, None, cwd=str(tmp_path), permissions=permissions, tools=registry)
@@ -376,4 +384,4 @@ def test_desktop_session_keeps_stable_prompt_across_plan_switch(tmp_path):
     session.permissions.enter_plan_mode()
     session._rebuild_system_prompt()
     assert session.messages[0]["content"] == original
-    assert session.messages[0]["_prompt_format"] == 1
+    assert session.messages[0]["_prompt_format"] == PROMPT_FORMAT_VERSION

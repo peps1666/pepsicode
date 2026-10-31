@@ -7,7 +7,14 @@ from pepsicode.types import AgentStep, StreamToken
 
 
 def _last_user_message(messages):
-    return next((message["content"] for message in reversed(messages) if message["role"] == "user"), "")
+    return next(
+        (
+            message["content"]
+            for message in reversed(messages)
+            if message["role"] == "user" and not message.get("internal")
+        ),
+        "",
+    )
 
 
 def _last_tool_message(messages):

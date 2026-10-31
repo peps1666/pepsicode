@@ -16,6 +16,9 @@ def main() -> None:
         names = [name for name in ("explore", "plan", "general", "verification") if agents.get(name)]
         if len(names) != 4:
             raise RuntimeError("The bundled agent definitions are incomplete")
+        from pepsicode.prompts import load_harness_instructions
+
+        load_harness_instructions()
         from pepsicode.build_info import build_identity
 
         print(json.dumps({"frozen": bool(getattr(sys, "frozen", False)), "agents": names, "build": build_identity()}))
