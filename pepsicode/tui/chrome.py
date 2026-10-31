@@ -522,9 +522,7 @@ def render_footer_bar(
     width, _ = _cached_terminal_size()
     risk = " 高风险" if mode == "trust_commands" else ""
     color = YELLOW if mode in {"trust_commands", "full_access"} else SUBTLE
-    left = (
-        f"{ACCENT}{'PLAN' if plan else 'BUILD'}{RESET} {color}mode: {mode}{risk}{RESET}  {render_status_line(status)}"
-    )
+    left = f"{BRIGHT_CYAN if plan else ACCENT}{'PLAN' if plan else 'BUILD'}{RESET} {color}mode: {mode}{risk}{RESET}  {render_status_line(status)}"
 
     parts = []
     if tools_enabled:

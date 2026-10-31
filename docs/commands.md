@@ -14,6 +14,10 @@
 | `/effort [档位] [--save]` | 查看或调整当前模型的思考深度 |
 | `/permissions [模式]` | 查看或切换权限模式；`default <模式>` 设置当前工作区的新会话默认 |
 | `/plan [task]` | 进入只读 Plan 模式 |
+| `/image <路径> [问题]` | 终端 TUI 发送本地 PNG、JPEG、GIF 或 WebP 图片；路径有空格时加引号，最大 5 MB |
+| `/paste-image` | 终端 TUI 从 Windows 剪贴板附加图片；可用 `Ctrl+V` 或 `Alt+V`，然后输入问题并按 Enter。若终端拦截 `Ctrl+V`，使用 `Alt+V` 或本命令 |
+
+粘贴本地图片文件路径时，TUI 会读取文件并附加图片数据，不把路径当作给模型的文字。附加后输入区显示 `[图片 ×数量]`，不显示缩略图。按 `Ctrl+G` 可删除最近附加的一张图片并保留已输入的文字；输入光标在开头时也可按 Backspace 删除图片。`Esc` 会清空整条草稿及所有图片。模型必须支持图片输入；DeepSeek 的 `deepseek-v4-pro` 会丢弃图片，请切换到 `deepseek-flash`。
 | `/hooks` | 查看 Hooks v2 状态、信任、启停 |
 | `/tools` | 列出工具 |
 | `/skills` | 列出 Skills |

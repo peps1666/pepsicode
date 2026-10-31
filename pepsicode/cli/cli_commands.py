@@ -27,6 +27,8 @@ class SlashCommand:
 
     @property
     def completion_text(self) -> str:
+        if self.name == "/image":
+            return "/image "
         if self.is_prompt or self.name in {"/tree", "/fork", "/resume", "/hooks"}:
             return self.name
         return self.usage
@@ -45,6 +47,8 @@ SLASH_COMMANDS = [
     SlashCommand("/plan", "/plan [task]", "Enter read-only Plan mode.", "Session"),
     SlashCommand("/resume", "/resume", "选择并恢复已保存的会话。", "Session"),
     SlashCommand("/transcript-save", "/transcript-save <path>", "Save transcript to a text file.", "Session"),
+    SlashCommand("/image", "/image <path> [question]", "Send a local image with an optional question.", "Session"),
+    SlashCommand("/paste-image", "/paste-image", "Attach an image from the local clipboard.", "Session"),
     # Tools
     SlashCommand("/tools", "/tools", "List tools available to the coding agent.", "Tools"),
     SlashCommand("/hooks", "/hooks", "选择查看或管理 Hooks。", "Tools"),

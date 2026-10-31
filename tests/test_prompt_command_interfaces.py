@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from pepsicode.core.session import create_new_session, load_session
+from pepsicode.core.session import create_new_session, load_session, save_session
 from pepsicode.llm.mock_model import MockModelAdapter
 from pepsicode.permissions import PermissionManager
 from pepsicode.server.app import ClientSession, PepsiCodeServer
@@ -28,6 +28,7 @@ def project(tmp_path, monkeypatch):
     )
     monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
     monkeypatch.setattr(app, "save_history_entries", lambda entries: None)
+    monkeypatch.setattr("pepsicode.config.PEPSI_CODE_DIR", home)
     monkeypatch.setattr("pepsicode.core.session.PEPSI_CODE_DIR", home)
     monkeypatch.setattr("pepsicode.core.session.SESSIONS_DIR", home / "sessions")
     return root
@@ -76,6 +77,115 @@ def test_real_terminal_input_completes_command_without_inserting_hints_or_swallo
     assert human["content"] == "Review 2."
     assert human["displayContent"] == "/review 2"
     assert state.transcript[0].body == "/review 2"
+
+
+def test_terminal_image_command_reaches_model_as_image(project):
+    (project / "screenshot.png").write_bytes(b"\x89PNG\r\n\x1a\n" + b"test")
+    model = CapturingModel()
+    args, state = terminal(project, model)
+    app._handle_input(args, state, lambda: None, "/image screenshot.png 解释这张图")
+    state.agent_thread.join(5)
+    assert not state.agent_thread.is_alive()
+    assert model.requests, [(entry.kind, entry.body) for entry in state.transcript]
+    human = next(m for m in reversed(model.requests[0]) if m.get("role") == "user" and not m.get("internal"))
+    assert human["content"] == "解释这张图"
+    assert human["images"][0]["media_type"] == "image/png"
+    assert human["displayContent"] == "/image screenshot.png 解释这张图"
+    assert state.transcript[0].body.endswith("[图片 ×1]")
+    app._snapshot_session(args, state)
+    save_session(state.session)
+    restored = load_session(state.session.session_id)
+    assert any(message.get("images") == human["images"] for message in restored.messages)
+
+
+def test_ctrl_v_attaches_clipboard_image_to_draft(project, monkeypatch, capsys):
+    payload = {"media_type": "image/png", "data": "aGVsbG8="}
+    monkeypatch.setattr(app, "read_clipboard_image", lambda: payload)
+    model = CapturingModel()
+    args, state = terminal(project, model)
+    dispatch(args, state, "\x16")
+    assert state.pending_images == [payload]
+    assert "[图片 ×1]" in "\n".join(app._render_stream_input(state, 80))
+    assert "[图片 ×1]" in app._render_prompt_panel(state, str(project))
+    args.runtime["model"] = "demo"
+    app._render_home_screen(args, state, 80, 24)
+    assert "[图片 ×1]" in capsys.readouterr().out
+    assert not model.requests
+    dispatch(args, state, "看一下这张图\r")
+    state.agent_thread.join(5)
+    assert not state.agent_thread.is_alive()
+    human = next(m for m in reversed(model.requests[0]) if m.get("role") == "user" and not m.get("internal"))
+    assert human["content"] == "看一下这张图"
+    assert human["images"] == [payload]
+    assert state.pending_images == []
+
+
+def test_ctrl_g_removes_latest_image_without_erasing_draft(project, monkeypatch):
+    images = iter(
+        [
+            {"media_type": "image/png", "data": "Zmlyc3Q="},
+            {"media_type": "image/png", "data": "c2Vjb25k"},
+        ]
+    )
+    monkeypatch.setattr(app, "read_clipboard_image", lambda: next(images))
+    args, state = terminal(project, CapturingModel())
+    dispatch(args, state, "问题\x16\x16")
+    assert len(state.pending_images) == 2
+    dispatch(args, state, "\x07")
+    assert state.input == "问题"
+    assert [image["data"] for image in state.pending_images] == ["Zmlyc3Q="]
+    assert "[图片 ×1]" in "\n".join(app._render_stream_input(state, 80))
+
+    dispatch(args, state, "\x01\x7f")
+    assert state.input == "问题"
+    assert state.pending_images == []
+
+
+def test_paste_image_command_attaches_without_sending(project, monkeypatch):
+    payload = {"media_type": "image/png", "data": "aGVsbG8="}
+    monkeypatch.setattr(app, "read_clipboard_image", lambda: payload)
+    model = CapturingModel()
+    args, state = terminal(project, model)
+    dispatch(args, state, "/paste-image\r")
+    assert state.pending_images == [payload]
+    assert not model.requests
+
+
+def test_pasted_local_image_path_attaches_bytes_instead_of_text(project):
+    image = project / "copied.png"
+    image.write_bytes(b"\x89PNG\r\n\x1a\n" + b"copied")
+    model = CapturingModel()
+    args, state = terminal(project, model)
+    dispatch(args, state, "\x1b[200~copied.png\x1b[201~")
+    assert state.input == ""
+    assert len(state.pending_images) == 1
+    dispatch(args, state, "这是什么？\r")
+    state.agent_thread.join(2)
+    human = next(m for m in reversed(model.requests[0]) if m.get("role") == "user" and not m.get("internal"))
+    assert human["content"] == "这是什么？"
+    assert human["images"][0]["data"]
+
+
+def test_plain_image_path_is_not_sent_as_path_only(project):
+    (project / "photo.png").write_bytes(b"\x89PNG\r\n\x1a\n" + b"photo")
+    model = CapturingModel()
+    args, state = terminal(project, model)
+    app._handle_input(args, state, lambda: None, "photo.png")
+    state.agent_thread.join(2)
+    human = next(m for m in reversed(model.requests[0]) if m.get("role") == "user" and not m.get("internal"))
+    assert human["content"] != "photo.png"
+    assert human["images"][0]["media_type"] == "image/png"
+
+
+def test_deepseek_pro_image_is_rejected_without_sending(project):
+    model = CapturingModel()
+    args, state = terminal(project, model)
+    args.runtime = {"provider": "deepseek", "model": "deepseek-v4-pro"}
+    state.pending_images.append({"media_type": "image/png", "data": "aGVsbG8="})
+    app._handle_input(args, state, lambda: None, "看这张图")
+    assert not model.requests
+    assert state.pending_images
+    assert any("deepseek-flash" in entry.body for entry in state.transcript)
 
 
 @pytest.mark.parametrize("cancel", [False, True])

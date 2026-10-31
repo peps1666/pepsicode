@@ -4,6 +4,7 @@ from unittest.mock import Mock
 import pytest
 
 from pepsicode.core.session import create_new_session, load_session, save_session
+from pepsicode.main import _prepare_tty_startup_permissions
 from pepsicode.permissions import PermissionManager, PermissionMode
 from pepsicode.tooling import ToolRegistry
 from pepsicode.tui import app
@@ -24,6 +25,63 @@ def terminal(tmp_path, monkeypatch):
 
 def press_tab(args, state):
     app._handle_event(args, state, KeyEvent("tab", False, False), lambda: None, threading.Event(), {})
+
+
+def test_new_tty_session_starts_in_plan_without_saving_an_empty_session(tmp_path, monkeypatch):
+    monkeypatch.setattr("pepsicode.core.session.PEPSI_CODE_DIR", tmp_path / "session-state")
+    monkeypatch.setattr("pepsicode.core.session.SESSIONS_DIR", tmp_path / "session-state" / "sessions")
+    session = create_new_session(str(tmp_path))
+    permissions = PermissionManager(str(tmp_path), mode="auto")
+
+    app._initialize_tty_session_permissions(permissions, session, fresh=True)
+
+    assert permissions.is_plan_mode
+    assert permissions.access_mode.value == session.access_mode
+    assert session.permission_mode == "plan"
+    assert session.plan_file_path == permissions.plan_file_path
+    save_session(session)
+    assert load_session(session.session_id) is None
+
+
+def test_existing_tty_session_keeps_its_saved_mode(tmp_path):
+    session = create_new_session(str(tmp_path))
+    permissions = PermissionManager(str(tmp_path), mode="auto")
+    app._initialize_tty_session_permissions(permissions, session, fresh=False)
+    assert not permissions.is_plan_mode
+
+    session.plan_file_path = permissions.enter_plan_mode()
+    session.permission_mode = "plan"
+    restored = PermissionManager(str(tmp_path), mode="auto")
+    app._initialize_tty_session_permissions(restored, session, fresh=False)
+    assert restored.is_plan_mode
+    assert restored.plan_file_path == session.plan_file_path
+
+
+def test_startup_permissions_match_new_and_resumed_tty_sessions(tmp_path, monkeypatch):
+    fresh = PermissionManager(str(tmp_path), mode="auto")
+    _prepare_tty_startup_permissions(fresh, str(tmp_path), None)
+    assert fresh.is_plan_mode
+
+    saved = create_new_session(str(tmp_path))
+    monkeypatch.setattr("pepsicode.main.load_session", lambda _: saved)
+    restored = PermissionManager(str(tmp_path), mode="auto")
+    _prepare_tty_startup_permissions(restored, str(tmp_path), saved.session_id)
+    assert not restored.is_plan_mode
+
+
+def test_plan_and_build_labels_use_distinct_colors(terminal, monkeypatch):
+    from pepsicode.tui import chrome
+
+    args, _ = terminal
+    monkeypatch.setattr(app, "BRIGHT_CYAN", "<plan>")
+    monkeypatch.setattr(app, "ACCENT", "<build>")
+    monkeypatch.setattr(chrome, "BRIGHT_CYAN", "<plan>")
+    monkeypatch.setattr(chrome, "ACCENT", "<build>")
+    assert app._permission_mode_label(args).startswith("<build>BUILD")
+    assert chrome.render_footer_bar(None, False, False).startswith("<build>BUILD")
+    args.permissions.enter_plan_mode()
+    assert app._permission_mode_label(args).startswith("<plan>PLAN")
+    assert chrome.render_footer_bar(None, False, False, plan=True).startswith("<plan>PLAN")
 
 
 @pytest.mark.parametrize("access", ["auto", "read_only", "trust_commands", "full_access"])

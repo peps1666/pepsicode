@@ -61,6 +61,21 @@ def model_selection_error(runtime: dict[str, Any], model: str | None = None) -> 
     )
 
 
+def image_input_error(runtime: dict[str, Any], model: str | None = None) -> str | None:
+    """Reject known text-only models before an image can be silently discarded."""
+    model = model or runtime.get("model", "")
+    modalities = model_capabilities(runtime, model).get("inputModalities")
+    if isinstance(modalities, list):
+        if "image" in modalities:
+            return None
+        return f"模型 {model} 的能力列表不包含图片输入；请先切换支持图片的模型。"
+    # DeepSeek's Anthropic endpoint explicitly replaces images with
+    # '[Unsupported Image]' for V4 Pro, instead of returning an API error.
+    if runtime.get("provider") == "deepseek" and model == "deepseek-v4-pro":
+        return "deepseek-v4-pro 不处理图片；请用 /model 切换到 deepseek-flash 后重发。"
+    return None
+
+
 def model_capabilities(runtime: dict[str, Any], model: str) -> dict[str, Any]:
     """Use API metadata first; configuration may explicitly fill missing metadata."""
     configured = next(

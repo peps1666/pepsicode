@@ -13,7 +13,7 @@ from pepsicode.config import load_runtime_config
 from pepsicode.context.history import load_history_entries, save_history_entries
 from pepsicode.context.prompt import PROMPT_FORMAT_VERSION, build_session_prompt
 from pepsicode.core.agent_loop import run_agent_turn
-from pepsicode.core.session import create_new_session, save_session
+from pepsicode.core.session import create_new_session, get_latest_session, load_session, same_workspace, save_session
 from pepsicode.core.session_tree import (
     checkout_entry,
     copy_session,
@@ -74,6 +74,21 @@ def _print_hook_notifications(hook_engine) -> None:
     for notification in hook_engine.drain_notifications():
         marker = "ok" if notification.success else "error"
         print(f"[hook:{notification.hook_id} {marker}] {notification.output}")
+
+
+def _prepare_tty_startup_permissions(permissions: PermissionManager, cwd: str, resume_session: str | None) -> None:
+    """Set the effective mode before startup hooks and the welcome banner run."""
+    if resume_session:
+        session = (
+            get_latest_session(workspace=str(Path(cwd).resolve()))
+            if resume_session == "latest"
+            else load_session(resume_session)
+        )
+        if session is not None and same_workspace(cwd, session.workspace):
+            permissions.set_access_mode(session.access_mode)
+            permissions.restore_plan_state(session.permission_mode, session.plan_file_path)
+            return
+    permissions.enter_plan_mode()
 
 
 # 渲染欢迎横幅，显示模型、当前工作目录、权限摘要和工具统计信息（如果在详细模式下）
@@ -268,6 +283,8 @@ def main() -> None:
         mode=get_workspace_default(cwd),
         process_sandbox_mode=(runtime or {}).get("processSandboxMode", "danger-full-access"),
     )
+    if sys.stdin.isatty() and not args.list_sessions:
+        _prepare_tty_startup_permissions(permissions, cwd, args.resume)
     hook_engine = create_hook_engine(cwd, permissions)
     hook_engine.emit(
         HookEvent.STARTUP,

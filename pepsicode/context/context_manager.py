@@ -113,6 +113,8 @@ def estimate_message_tokens(message: dict[str, Any]) -> int:
     content = message.get("content", "")
     if isinstance(content, str):
         tokens += estimate_tokens(content)
+    # Base64 is transport encoding, not text seen by the model.
+    tokens += 1600 * len(message.get("images", []))
 
     # Tool call input/output
     if "input" in message:

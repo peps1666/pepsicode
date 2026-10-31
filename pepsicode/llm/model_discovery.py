@@ -143,6 +143,9 @@ def parse_model_metadata(item: dict[str, Any]) -> dict[str, Any]:
         "supportsThinkingOff": _supported(types.get("disabled")) or effort.get("supports_disabled") is True,
         "capabilitySource": "api",
     }
+    modalities = item.get("input_modalities", capabilities.get("input_modalities"))
+    if isinstance(modalities, list) and all(isinstance(value, str) for value in modalities):
+        profile["inputModalities"] = modalities
     if isinstance(effort.get("default_level"), str) and effort["default_level"] in levels:
         profile["defaultEffort"] = effort["default_level"]
     display_name = item.get("name") or item.get("display_name")

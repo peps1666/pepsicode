@@ -89,6 +89,7 @@ class SessionData:
     tree: dict[str, Any] = field(default_factory=dict)
     parent_session_id: str | None = None
     parent_entry_id: str | None = None
+    _default_plan_start: bool = field(default=False, repr=False, compare=False)
     _tree_lock: Any = field(default_factory=threading.RLock, repr=False, compare=False)
     metadata: SessionMetadata = field(default=None)
 
@@ -212,7 +213,11 @@ def _has_recoverable_content(session: SessionData, *, include_service: bool = Tr
         return True
     # The QQ bridge stores the session ID immediately after creation and must
     # be able to resume it after a restart even before the first message.
-    if session.execution_state or session.plan_file_path or (include_service and session.profile != "default"):
+    if (
+        session.execution_state
+        or (session.plan_file_path and (not session._default_plan_start or Path(session.plan_file_path).is_file()))
+        or (include_service and session.profile != "default")
+    ):
         return True
     if session.verification_state and (
         session.verification_state.get("pending") or session.verification_state.get("last_report")

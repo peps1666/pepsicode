@@ -20,6 +20,7 @@ class ChatMessage(TypedDict, total=False):
         "tool_result",
     ]
     content: str
+    images: list[dict[str, str]]
     displayContent: str
     commandPath: str
     entryId: str

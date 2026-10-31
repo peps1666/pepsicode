@@ -16,6 +16,7 @@ from pepsicode.cancellation import cancellable_response, cancellation_event, rai
 from pepsicode.execution.model_requests import model_timeout, recorded_request, recorded_stream
 from pepsicode.llm.assistant_text import parse_assistant_text
 from pepsicode.llm.model_settings import (
+    image_input_error,
     model_capabilities,
     model_selection_error,
     reasoning_request_fields,
@@ -353,6 +354,15 @@ def _to_anthropic_messages(messages: list[ChatMessage]) -> tuple[str, list[dict[
             continue
         if role == "user":
             _push_anthropic_message(converted, "user", _to_text_block(message["content"]))
+            for image in message.get("images", []):
+                _push_anthropic_message(
+                    converted,
+                    "user",
+                    {
+                        "type": "image",
+                        "source": {"type": "base64", "media_type": image["media_type"], "data": image["data"]},
+                    },
+                )
             continue
         if role in {"assistant", "assistant_progress"}:
             _push_anthropic_message(converted, "assistant", _to_text_block(_to_assistant_text(message)))
@@ -399,8 +409,31 @@ class AnthropicModelAdapter:
         window = model_capabilities(self.runtime, model).get("contextWindow")
         if not isinstance(window, int) or isinstance(window, bool) or window <= 0:
             return
-        prompt = json.dumps({key: body.get(key) for key in ("system", "messages", "tools")}, ensure_ascii=False)
-        estimated = math.ceil(estimate_tokens(prompt) * 1.15)
+        messages_for_estimate = [
+            {
+                **message,
+                "content": (
+                    [
+                        {"type": "image", "estimated_tokens": 1600} if block.get("type") == "image" else block
+                        for block in message["content"]
+                    ]
+                    if isinstance(message["content"], list)
+                    else message["content"]
+                ),
+            }
+            for message in body["messages"]
+        ]
+        prompt = json.dumps(
+            {"system": body.get("system"), "messages": messages_for_estimate, "tools": body.get("tools")},
+            ensure_ascii=False,
+        )
+        image_count = sum(
+            block.get("type") == "image"
+            for message in body["messages"]
+            if isinstance(message["content"], list)
+            for block in message["content"]
+        )
+        estimated = math.ceil(estimate_tokens(prompt) * 1.15) + 1600 * image_count
         room = math.floor(window * 0.99) - estimated
         thinking = body.get("thinking", {})
         thinking_budget = thinking.get("budget_tokens", 0) if isinstance(thinking, dict) else 0
@@ -413,6 +446,15 @@ class AnthropicModelAdapter:
     def _build_request(
         self, model: str, system_message: str, converted_messages: list[dict[str, Any]]
     ) -> urllib.request.Request:
+        if any(
+            block.get("type") == "image"
+            for message in converted_messages
+            if isinstance(message["content"], list)
+            for block in message["content"]
+        ):
+            problem = image_input_error(self.runtime, model)
+            if problem:
+                raise ValueError(problem)
         request_body = {
             "model": model,
             "system": system_message,
@@ -452,6 +494,15 @@ class AnthropicModelAdapter:
         flag in the body - everything else (auth, tools, max_tokens) is
         identical so a stream and a non-stream request remain comparable.
         """
+        if any(
+            block.get("type") == "image"
+            for message in converted_messages
+            if isinstance(message["content"], list)
+            for block in message["content"]
+        ):
+            problem = image_input_error(self.runtime, model)
+            if problem:
+                raise ValueError(problem)
         request_body = {
             "model": model,
             "system": system_message,

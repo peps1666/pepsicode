@@ -70,6 +70,7 @@ from pepsicode.llm.mock_model import MockModelAdapter
 from pepsicode.llm.model_discovery import refresh_model_catalog
 from pepsicode.llm.model_settings import (
     apply_model_settings,
+    image_input_error,
     model_display_name,
     model_selection_error,
     update_context_window,
@@ -82,6 +83,7 @@ from pepsicode.tools import create_default_tool_registry
 from pepsicode.tui.chrome import (
     ACCENT,
     BOLD,
+    BRIGHT_CYAN,
     BRIGHT_RED,
     BRIGHT_WHITE,
     DIM,
@@ -105,7 +107,9 @@ from pepsicode.tui.chrome import (
     wrap_text,
 )
 from pepsicode.tui.clipboard import copy_to_clipboard
+from pepsicode.tui.clipboard_image import read_clipboard_image
 from pepsicode.tui.command_picker import CommandOption, CommandPicker, render_command_picker
+from pepsicode.tui.image_input import image_message, pasted_image_path
 from pepsicode.tui.input import render_input_prompt
 from pepsicode.tui.input_parser import (
     KeyEvent,
@@ -301,6 +305,7 @@ class ScreenState:
     usage_stats_key: tuple | None = None
     usage_stats: dict | None = None
     input: str = ""
+    pending_images: list[dict[str, str]] = field(default_factory=list)
     cursor_offset: int = 0
     transcript: list[TranscriptEntry] = field(default_factory=list)
     transcript_scroll_offset: int = 0
@@ -659,6 +664,11 @@ def _push_transcript_entry(state: ScreenState, **kwargs: Any) -> int:
     return entry_id
 
 
+def _restore_transcript_entry(data: dict[str, Any]) -> TranscriptEntry:
+    # Sessions saved while thumbnails were enabled may still contain this field.
+    return TranscriptEntry(**{key: value for key, value in data.items() if key != "imagePreviews"})
+
+
 def _session_rows_for_picker(cwd: str) -> list[SessionMetadata]:
     return list_sessions(workspace=cwd)
 
@@ -677,6 +687,16 @@ def _restore_model_settings(args: TtyAppArgs, session: SessionData) -> None:
     except (KeyError, ValueError) as error:
         # A removed provider profile must not make an old conversation impossible to open.
         logging.getLogger(__name__).warning("Could not restore session model settings: %s", error)
+
+
+def _initialize_tty_session_permissions(permissions: PermissionManager, session: SessionData, *, fresh: bool) -> None:
+    permissions.set_access_mode(session.access_mode)
+    if fresh:
+        session.plan_file_path = permissions.enter_plan_mode()
+        session.permission_mode = permissions.mode.value
+        session._default_plan_start = True
+    else:
+        permissions.restore_plan_state(session.permission_mode, session.plan_file_path)
 
 
 def _restore_session_into_state(
@@ -702,7 +722,7 @@ def _restore_session_into_state(
     state.autosave = AutosaveManager(session)
     if not session.transcript_entries and session.messages:
         rebuild_transcript(session)
-    state.transcript = [TranscriptEntry(**entry) for entry in session.transcript_entries]
+    state.transcript = [_restore_transcript_entry(entry) for entry in session.transcript_entries]
     state.next_entry_id = max((entry.id for entry in state.transcript), default=0) + 1
     state.expanded_activity_groups.clear()
     state.activity_anchor = None
@@ -1159,6 +1179,9 @@ def _render_prompt_panel(state: ScreenState, cwd: str | None = None) -> str:
     commands = _get_visible_commands(state.input, cwd)
     cols, _ = _get_terminal_size()
     prompt_body = render_input_prompt(state.input, state.cursor_offset, width=max(5, cols - 4))
+    pending_image_count = len(getattr(state, "pending_images", []))
+    if pending_image_count:
+        prompt_body += f"\n  [图片 ×{pending_image_count}] · Ctrl+G 删除最近一张"
     if commands:
         prompt_body += "\n" + render_slash_menu(
             commands,
@@ -1244,7 +1267,8 @@ def _permission_mode_label(args: TtyAppArgs) -> str:
     risk = " 高风险" if mode == "trust_commands" else ""
     plan = getattr(permissions, "is_plan_mode", False)
     color = YELLOW if mode in {"trust_commands", "full_access"} else SUBTLE
-    return f"{ACCENT}{'PLAN' if plan else 'BUILD'}{RESET} {color}{mode}{risk}{RESET}"
+    label_color = BRIGHT_CYAN if plan else ACCENT
+    return f"{label_color}{'PLAN' if plan else 'BUILD'}{RESET} {color}{mode}{risk}{RESET}"
 
 
 def _composer_status_lines(args: TtyAppArgs, state: ScreenState, model: str, cols: int) -> list[str]:
@@ -1294,6 +1318,9 @@ def _render_home_screen(args: TtyAppArgs, state: ScreenState, cols: int, rows: i
         f"{SUBTLE}{'─' * block_width}{RESET}",
         render_input_prompt(state.input, state.cursor_offset, width=block_width),
     ]
+    pending_image_count = len(getattr(state, "pending_images", []))
+    if pending_image_count:
+        composer.append(f"  {SUBTLE}[图片 ×{pending_image_count}] · Ctrl+G 删除最近一张{RESET}")
     status_lines = _composer_status_lines(args, state, model, cols)
     menu: list[str] = []
     if visible_commands and state.input:
@@ -1379,6 +1406,9 @@ def _render_stream_input(state: ScreenState, cols: int, visible_commands: list |
     prompt = " " + render_input_prompt(state.input, state.cursor_offset, width=max(5, cols - 2))
 
     lines = [prompt]
+    pending_image_count = len(getattr(state, "pending_images", []))
+    if pending_image_count:
+        lines.append(f"  {SUBTLE}[图片 ×{pending_image_count}] · Ctrl+G 删除最近一张{RESET}")
 
     # Slash command hints
     if visible_commands:
@@ -2196,10 +2226,18 @@ def _handle_input(
     _collect_agent_result(args, state)
     input_text = (submitted_raw_input if submitted_raw_input is not None else state.input).strip()
     if state.is_busy:
+        if input_text == "/paste-image" or input_text == "/image" or input_text.startswith("/image "):
+            state.status = "Wait for the current response before sending an image"
+            return False
         _enqueue_tty_input(args, state, input_text, input_mode)
         return False
 
+    if not input_text and state.pending_images:
+        input_text = "请描述这张图片。"
     if not input_text:
+        return False
+    if input_text == "/paste-image":
+        _paste_clipboard_image(state, rerender)
         return False
     if input_text == "/exit":
         return True
@@ -2236,7 +2274,7 @@ def _handle_input(
                 if args.context_manager:
                     args.context_manager.select_branch(args.messages, args.cwd, args.permissions)
                 rebuild_transcript(state.session)
-                state.transcript = [TranscriptEntry(**entry) for entry in state.session.transcript_entries]
+                state.transcript = [_restore_transcript_entry(entry) for entry in state.session.transcript_entries]
                 state.next_entry_id = len(state.transcript) + 1
                 input_text = regenerated_prompt.get("displayContent", regenerated_prompt["content"])
                 if args.runtime is not None:
@@ -2292,10 +2330,32 @@ def _handle_input(
         input_text = task
 
     try:
-        prompt_message = regenerated_prompt or expand_prompt_command(input_text, args.cwd)
+        if regenerated_prompt:
+            prompt_message = regenerated_prompt
+        elif input_text == "/image" or input_text.startswith("/image "):
+            prompt_message = image_message(input_text, args.cwd)
+        else:
+            pasted_image = pasted_image_path(input_text, args.cwd)
+            prompt_message = (
+                {"role": "user", "content": "请描述这张图片。", "displayContent": input_text, "images": [pasted_image]}
+                if pasted_image
+                else expand_prompt_command(input_text, args.cwd)
+            )
     except ValueError as error:
         _push_transcript_entry(state, kind="assistant", body=str(error), status="error")
         return False
+
+    if state.pending_images and input_text.startswith("/"):
+        _push_transcript_entry(
+            state, kind="assistant", body="Send the pasted image with a regular message.", status="error"
+        )
+        return False
+
+    if (state.pending_images or (prompt_message and prompt_message.get("images"))) and args.runtime:
+        problem = image_input_error(args.runtime)
+        if problem:
+            _push_transcript_entry(state, kind="assistant", body=problem, status="error")
+            return False
 
     if input_text.startswith("/"):
         try:
@@ -2410,7 +2470,15 @@ def _handle_input(
         return False
 
     # Agent turn
-    _push_transcript_entry(state, kind="user", body=input_text)
+    if state.pending_images:
+        prompt_message = {
+            "role": "user",
+            "content": prompt_message["content"] if prompt_message and prompt_message.get("images") else input_text,
+            "images": [*(prompt_message.get("images", []) if prompt_message else []), *state.pending_images],
+        }
+    images = prompt_message.get("images", []) if prompt_message else []
+    display_input = f"{input_text} [图片 ×{len(images)}]" if images else input_text
+    _push_transcript_entry(state, kind="user", body=display_input)
     state.transcript_scroll_offset = 0
     state.user_scrolled_away = False
     state.status = "Thinking..."
@@ -2445,6 +2513,7 @@ def _handle_input(
         else:
             args.messages.insert(0, system)
     args.messages.append(prompt_message or {"role": "user", "content": input_text})
+    state.pending_images.clear()
     if state.session is None:
         state.session = create_new_session(args.cwd)
     record_messages(state.session, args.messages)
@@ -2845,7 +2914,6 @@ def run_tty_app(
                 print(format_session_resume(session))
             else:
                 print("No previous session found for this workspace.")
-                session = create_new_session(workspace=str(Path(cwd).resolve()))
         else:
             session = load_session(resume_session)
             if not session:
@@ -2864,11 +2932,11 @@ def run_tty_app(
             print("Use --resume to continue, or starting fresh session.")
             session = None
 
-    if not session:
+    fresh_session = session is None
+    if fresh_session:
         session = create_new_session(workspace=str(Path(cwd).resolve()))
 
-    permissions.set_access_mode(session.access_mode)
-    permissions.restore_plan_state(session.permission_mode, session.plan_file_path)
+    _initialize_tty_session_permissions(permissions, session, fresh=fresh_session)
     restore_verification_state(args.tools, args.runtime, session.verification_state, session.messages)
     _restore_model_settings(args, session)
 
@@ -2910,7 +2978,7 @@ def run_tty_app(
 
         # Restore transcript entries
         for entry_data in session.transcript_entries:
-            entry = TranscriptEntry(**entry_data)
+            entry = _restore_transcript_entry(entry_data)
             state.transcript.append(entry)
 
         print(f"Restored {len(session.messages)} messages, {len(state.transcript)} transcript entries.")
@@ -3186,8 +3254,18 @@ def _handle_event(
         elif state.provider_wizard is not None:
             _handle_provider_wizard_event(args, state, TextEvent(text.strip(), False, False), rerender)
         elif state.settings_picker is None and state.command_picker is None and state.resume_picker_sessions is None:
-            state.input = state.input[: state.cursor_offset] + text + state.input[state.cursor_offset :]
-            state.cursor_offset += len(text)
+            try:
+                image = pasted_image_path(text, args.cwd)
+            except ValueError as error:
+                state.status = str(error)
+                rerender()
+                return
+            if image is not None:
+                state.pending_images.append(image)
+                state.status = f"Image attached ({len(state.pending_images)}); type a message and press Enter"
+            else:
+                state.input = state.input[: state.cursor_offset] + text + state.input[state.cursor_offset :]
+                state.cursor_offset += len(text)
         rerender()
         return
 
@@ -3481,6 +3559,12 @@ def _handle_normal_mode_key(
     rerender: Callable[[], None],
 ) -> bool:
     """Handle key events in normal mode. Returns True if handled."""
+    if event.ctrl and event.name == "g":
+        _remove_pending_image(state, rerender)
+        return True
+    if event.ctrl and event.name == "v":
+        _paste_clipboard_image(state, rerender)
+        return True
     if event.ctrl and event.name in {"a", "e", "u", "p", "n"}:
         return _handle_normal_mode_text(
             args, state, TextEvent(text=event.name, ctrl=True, meta=event.meta), visible_commands, rerender
@@ -3562,6 +3646,29 @@ def _handle_normal_mode_key(
     return False
 
 
+def _paste_clipboard_image(state: ScreenState, rerender: Callable[[], None]) -> None:
+    if state.is_busy:
+        state.status = "Wait for the current response before pasting an image"
+    else:
+        try:
+            image = read_clipboard_image()
+            if image is None:
+                state.status = "No image in the clipboard"
+            else:
+                state.pending_images.append(image)
+                state.status = f"Image attached ({len(state.pending_images)}); type a message and press Enter"
+        except ValueError as error:
+            state.status = str(error)
+    rerender()
+
+
+def _remove_pending_image(state: ScreenState, rerender: Callable[[], None]) -> None:
+    if state.pending_images:
+        state.pending_images.pop()
+        state.status = f"Image removed ({len(state.pending_images)} remaining)"
+    rerender()
+
+
 def _handle_normal_mode_return(
     args: TtyAppArgs,
     state: ScreenState,
@@ -3641,6 +3748,9 @@ def _handle_normal_mode_navigation(
     rerender: Callable[[], None],
 ) -> bool:
     """Handle navigation and editing keys. Returns True if handled."""
+    if event.name == "backspace" and state.cursor_offset == 0 and state.pending_images:
+        _remove_pending_image(state, rerender)
+        return True
     if event.name == "backspace" and state.cursor_offset > 0:
         state.input = state.input[: state.cursor_offset - 1] + state.input[state.cursor_offset :]
         state.cursor_offset -= 1
@@ -3676,6 +3786,7 @@ def _handle_normal_mode_navigation(
 
     if event.name == "escape":
         state.input = ""
+        state.pending_images.clear()
         state.cursor_offset = 0
         state.selected_slash_index = 0
         rerender()
@@ -3720,6 +3831,9 @@ def _handle_normal_mode_text(
     rerender: Callable[[], None],
 ) -> bool:
     """Handle text events in normal mode. Returns True if handled."""
+    if event.meta and event.text.lower() == "v":
+        _paste_clipboard_image(state, rerender)
+        return True
     # Digit quick-select for slash commands (1-9)
     if visible_commands and event.text.isdigit() and not event.ctrl:
         idx = int(event.text) - 1
