@@ -25,6 +25,13 @@ def test_builtin_policy_is_independent_of_workspace_and_appears_once(tmp_path, m
     assert str(tmp_path) in "\n".join(dynamic)
 
 
+def test_delegation_policy_balances_independent_work_and_simple_tasks():
+    policy = load_harness_instructions()
+    assert "主代理可主动使用 task 委派" in policy
+    assert "简单问答、小改动" in policy
+    assert "用户要求不使用子代理时遵从" in policy
+
+
 @pytest.mark.parametrize(
     "content", [None, b" \n", b"\xff", b"x" * (32 * 1024 + 1)], ids=["missing", "empty", "invalid-utf8", "oversized"]
 )
