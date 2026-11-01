@@ -70,13 +70,16 @@ class ApprovalRequest:
 
     def to_payload(self) -> dict[str, Any]:
         """Convert to the wire payload consumed by the client."""
-        return {
+        payload = {
             "kind": self.kind.value,
             "summary": self.summary,
             "details": list(self.details),
             "scope": self.scope,
             "choices": list(self.choices),
         }
+        if self.metadata:
+            payload["metadata"] = dict(self.metadata)
+        return payload
 
 
 @dataclass(frozen=True)

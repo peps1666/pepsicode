@@ -50,14 +50,16 @@ def test_plan_mode_only_allows_read_only_subagent_types(tmp_path: Path, agent_ty
 
     result = registry.execute("task", {"agent_type": agent_type}, context)
     assert result.ok is False
-    assert "explore or plan" in result.output
+    assert "read-only sub-agents" in result.output
 
 
 @pytest.mark.parametrize("agent_type", ["explore", "plan"])
 def test_plan_mode_allows_explore_and_plan_subagents(tmp_path: Path, agent_type: str) -> None:
     permissions = PermissionManager(str(tmp_path))
     permissions.enter_plan_mode()
-    registry = ToolRegistry([_tool("task")])
+    task = _tool("task")
+    task.affects_workspace = lambda args: args.get("agent_type") not in {"explore", "plan"}
+    registry = ToolRegistry([task])
 
     result = registry.execute(
         "task",

@@ -57,7 +57,7 @@ def record_messages(session: SessionData, messages: list[dict]) -> None:
                 continue
             entry_id = message.get("entryId")
             if entry_id in index:
-                for key in ("source", "task", "verification", "finishReason", "isError"):
+                for key in ("source", "task", "verification", "finishReason", "isError", "turnStatus"):
                     if key in message:
                         index[entry_id]["message"][key] = copy.deepcopy(message[key])
                 parent = entry_id
@@ -73,6 +73,11 @@ def record_messages(session: SessionData, messages: list[dict]) -> None:
 
 
 def checkpoint_messages(messages: list[dict]) -> None:
+    from pepsicode.execution.runtime import current_scope
+
+    scope = current_scope()
+    if scope is not None and scope.parent_task_id is not None:
+        return
     session = _recording.get()
     if session is not None:
         record_messages(session, messages)

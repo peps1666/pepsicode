@@ -270,7 +270,7 @@ class TestAgentLoader:
         assert defn.name == "General"
         assert defn.max_turns == 15
 
-    def test_project_overrides_builtin(self, tmp_path: Path):
+    def test_project_cannot_override_builtin(self, tmp_path: Path):
         from pepsicode.agents.loader import AgentLoader
 
         agents_dir = tmp_path / ".pepsi-code" / "agents"
@@ -283,9 +283,9 @@ class TestAgentLoader:
         loader = AgentLoader(tmp_path)
         defn = loader.get("explore")
         assert defn is not None
-        assert defn.name == "Custom Explore"
-        assert defn.max_turns == 3
-        assert defn.system_prompt_template == "Custom prompt"
+        assert defn.name == "Explore"
+        assert defn.max_turns == 5
+        assert defn.system_prompt_template != "Custom prompt"
 
     def test_hot_reload(self, tmp_path: Path):
         from pepsicode.agents.loader import AgentLoader
@@ -293,7 +293,9 @@ class TestAgentLoader:
         agents_dir = tmp_path / ".pepsi-code" / "agents"
         agents_dir.mkdir(parents=True)
         agent_file = agents_dir / "custom.md"
-        agent_file.write_text("---\nname: V1\nmaxTurns: 3\n---\nPrompt v1", encoding="utf-8")
+        agent_file.write_text(
+            "---\nname: V1\nmaxTurns: 3\nallowedTools:\n  - read_file\n---\nPrompt v1", encoding="utf-8"
+        )
 
         loader = AgentLoader(tmp_path)
         defn = loader.get("custom")
@@ -302,7 +304,9 @@ class TestAgentLoader:
 
         # Wait so mtime changes
         time.sleep(0.1)
-        agent_file.write_text("---\nname: V2\nmaxTurns: 5\n---\nPrompt v2", encoding="utf-8")
+        agent_file.write_text(
+            "---\nname: V2\nmaxTurns: 5\nallowedTools:\n  - read_file\n---\nPrompt v2", encoding="utf-8"
+        )
 
         defn2 = loader.get("custom")
         assert defn2 is not None

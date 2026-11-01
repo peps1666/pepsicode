@@ -2,18 +2,15 @@
 
 Mirrors the three-level discovery pattern used by :mod:`pepsicode.context.skills`:
 
-1. **Project** -- ``<cwd>/.pepsi-code/agents/*.md``  (highest priority)
-2. **User** -- ``~/.pepsi-code/agents/*.md``
-3. **Built-in** -- ``pepsicode/agents/builtins/*.md``  (lowest priority)
+Custom definitions are discovered in project and user directories, in that order.
+Built-in names are reserved and always resolve to packaged definitions.
 
-A higher-priority file with the same base name overrides a lower one.  Each
+For custom names the project definition overrides the user definition. Each
 ``.get()`` call checks the file's mtime and reloads on change -- so editing an
 agent definition takes effect on the next sub-agent invocation without
 restarting pepsicode.
 
-The built-in definitions (explore.md, plan.md, general.md,
-verification.md) are shipped with pepsicode and can be overridden by placing a
-file with the same name in the project or user directory.
+The legacy plan and verification names remain reserved for compatibility.
 """
 
 from __future__ import annotations
@@ -121,6 +118,8 @@ class AgentLoader:
 
     def _resolve(self, name: str) -> Path | None:
         """Find the highest-priority ``<name>.md`` file."""
+        if name in _BUILTIN_TYPES:
+            return self._builtin_dir / f"{name}.md"
         for root in self._roots():
             candidate = root / f"{name}.md"
             if candidate.exists():
@@ -141,7 +140,9 @@ class AgentLoader:
             frontmatter = {}
             body = raw
 
-        return self._build_definition(name, frontmatter, body)
+        definition = self._build_definition(name, frontmatter, body)
+        definition.source = str(path)
+        return definition
 
     def _build_definition(
         self,
@@ -150,6 +151,25 @@ class AgentLoader:
         body: str,
     ) -> AgentDefinition:
         """Convert parsed frontmatter + body into an :class:`AgentDefinition`."""
+
+        valid = {
+            "name",
+            "displayName",
+            "description",
+            "model",
+            "maxTurns",
+            "max_turns",
+            "isReadOnly",
+            "is_read_only",
+            "allowedTools",
+            "allowed_tools",
+            "tools",
+            "disallowedTools",
+            "disallowed_tools",
+        }
+        unknown_fields = set(fm) - valid
+        if unknown_fields:
+            raise ValueError(f"Agent {name}: unknown fields: {', '.join(sorted(unknown_fields))}")
 
         # Map frontmatter keys (camelCase, as in mewcode) to AgentDefinition
         # fields (snake_case).  Accept both forms for flexibility.
@@ -162,17 +182,31 @@ class AgentLoader:
         display_name = str(_get("name", "displayName", default=name.title()))
         description = str(_get("description", default=""))
         model = str(_get("model", default="inherit"))
-        max_turns = int(_get("maxTurns", "max_turns", default=10))
-        is_read_only = bool(_get("isReadOnly", "is_read_only", default=False))
+        max_turns = _get("maxTurns", "max_turns", default=10)
+        is_read_only = _get("isReadOnly", "is_read_only", default=False)
+        if isinstance(max_turns, bool) or not isinstance(max_turns, int) or not 1 <= max_turns <= 100:
+            raise ValueError(f"Agent {name}: maxTurns must be an integer from 1 to 100")
+        if not isinstance(is_read_only, bool):
+            raise ValueError(f"Agent {name}: isReadOnly must be a boolean")
         allowed_tools = _get("allowedTools", "allowed_tools", "tools", default=[])
         if isinstance(allowed_tools, str):
             allowed_tools = [allowed_tools]
-        allowed_tools = [str(t) for t in allowed_tools]
+        if not isinstance(allowed_tools, list) or not all(isinstance(t, str) for t in allowed_tools):
+            raise ValueError(f"Agent {name}: allowedTools must be a list of tool names")
 
         disallowed_tools = _get("disallowedTools", "disallowed_tools", default=[])
         if isinstance(disallowed_tools, str):
             disallowed_tools = [disallowed_tools]
-        disallowed_tools = [str(t) for t in disallowed_tools]
+        if not isinstance(disallowed_tools, list) or not all(isinstance(t, str) for t in disallowed_tools):
+            raise ValueError(f"Agent {name}: disallowedTools must be a list of tool names")
+        from pepsicode.tools.task import _SUB_AGENT_TOOL_POOL
+
+        known = {tool.name for tool in _SUB_AGENT_TOOL_POOL.list()} | {"notebook_edit"}
+        unknown = (set(allowed_tools) | set(disallowed_tools)) - known
+        if unknown:
+            raise ValueError(f"Agent {name}: unknown tools: {', '.join(sorted(unknown))}")
+        if name not in _BUILTIN_TYPES and not allowed_tools:
+            raise ValueError(f"Agent {name}: custom agents must specify allowedTools")
 
         agent_type = _BUILTIN_TYPES.get(name, AgentType.GENERAL)
 

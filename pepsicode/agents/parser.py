@@ -75,6 +75,8 @@ def _parse_yaml_block(lines: list[str]) -> dict[str, Any]:
             if not key:
                 i += 1
                 continue
+            if key in result:
+                raise ValueError(f"Duplicate agent field: {key}")
 
             # Empty value -- could be a list or an empty mapping.
             if value == "":

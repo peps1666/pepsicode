@@ -55,3 +55,14 @@ def test_harness_recovery_and_preparation_settings_reach_the_shared_runtime(monk
     runtime = config_module.load_runtime_config()
     assert runtime["modelRecoveryLimit"] == 2
     assert runtime["verificationPreparationCommands"] == preparation
+
+
+def test_subagent_request_limit_reaches_runtime_and_rejects_invalid(monkeypatch):
+    import pytest
+
+    settings = {"model": "test", "env": {"ANTHROPIC_API_KEY": "test-only"}, "subagentRequestLimit": 3}
+    monkeypatch.setattr(config_module, "load_effective_settings", lambda cwd=None: settings)
+    assert config_module.load_runtime_config()["subagentRequestLimit"] == 3
+    settings["subagentRequestLimit"] = True
+    with pytest.raises(ValueError, match="subagentRequestLimit"):
+        config_module.load_runtime_config()

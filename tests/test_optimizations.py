@@ -249,7 +249,7 @@ def test_task_tool_runs_project_defined_agent(tmp_path):
     agents_dir = tmp_path / ".pepsi-code" / "agents"
     agents_dir.mkdir(parents=True)
     (agents_dir / "reviewer.md").write_text(
-        "---\nname: Reviewer\nisReadOnly: true\n---\nReview carefully.",
+        "---\nname: Reviewer\nisReadOnly: true\nallowedTools:\n  - read_file\n---\nReview carefully.",
         encoding="utf-8",
     )
     captured = {}

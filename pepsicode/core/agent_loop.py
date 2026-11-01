@@ -4,6 +4,7 @@ import time
 from collections.abc import Callable, Generator, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import closing, nullcontext
+from contextvars import copy_context
 from dataclasses import replace
 from typing import Any, cast
 
@@ -117,9 +118,15 @@ def _unfinished_step(reason, text, messages, hooks, cwd, permissions, agent_scop
     )
 
 
-def _is_concurrency_safe(tools: ToolRegistry, tool_name: str) -> bool:
+def _is_concurrency_safe(tools: ToolRegistry, tool_name: str, arguments: Any = None) -> bool:
     tool = tools.find(tool_name)
-    return bool(tool and getattr(tool, "concurrency_safe", False))
+    if not tool:
+        return False
+    policy = tool.concurrency_safe
+    try:
+        return bool(policy(tool.validator(arguments)) if callable(policy) else policy)
+    except Exception:  # Invalid input is handled by the normal execution path.
+        return False
 
 
 def _record_cost_usage(model: ModelAdapter, cost_tracker: CostTracker | None) -> None:
@@ -350,6 +357,8 @@ def _finish_hook_turn(
     status: str = "completed",
     error: str = "",
 ) -> list[ChatMessage]:
+    if agent_scope.startswith("subagent") and messages and messages[-1].get("role") == "assistant":
+        messages[-1]["turnStatus"] = status
     if status in {"error", "max_steps"} and messages and messages[-1].get("role") == "assistant":
         messages[-1]["isError"] = True
         if error.startswith(("Network error", "Model API timeout")):
@@ -394,7 +403,16 @@ def _finish_cancelled_turn(messages, hooks, cwd, permissions, scope, notify):
     messages.append({"role": "assistant", "content": message})
     if notify:
         notify(message)
-    return _finish_hook_turn(messages, hooks, cwd=cwd, permissions=permissions, agent_scope=scope, status="cancelled")
+    execution = current_scope()
+    timed_out = execution is not None and execution.deadline is not None and time.monotonic() >= execution.deadline
+    return _finish_hook_turn(
+        messages,
+        hooks,
+        cwd=cwd,
+        permissions=permissions,
+        agent_scope=scope,
+        status="timed_out" if timed_out else "cancelled",
+    )
 
 
 def append_queued_inputs(
@@ -504,6 +522,7 @@ def _execute_calls_in_order(
                 "status": status,
                 "duration_ms": duration,
                 "exit_code": result.exit_code,
+                **({"details": result.details} if result.details is not None else {}),
             },
         )
         return result
@@ -533,14 +552,14 @@ def _execute_calls_in_order(
     index = 0
     while index < len(calls):
         run, cursor = [], index
-        while cursor < len(calls) and _is_concurrency_safe(tools, calls[cursor]["toolName"]):
+        while cursor < len(calls) and _is_concurrency_safe(tools, calls[cursor]["toolName"], calls[cursor]["input"]):
             run.append(cursor)
             cursor += 1
         if len(run) > 1:
             for k in run:
                 start(k)
             with ThreadPoolExecutor(max_workers=min(MAX_PARALLEL_TOOLS, len(run))) as pool:
-                futures = {k: pool.submit(execute, k) for k in run}
+                futures = {k: pool.submit(copy_context().run, execute, k) for k in run}
                 for k in run:
                     results[k] = futures[k].result()
                     finish(k, results[k])
@@ -622,6 +641,8 @@ def run_agent_turn(
                 on_assistant_message(context_manager.get_context_summary())
 
     while max_steps is None or step < max_steps:
+        if current_scope() is not None and current_scope().parent_task_id:
+            current_scope().check_cancelled()
         step += 1
         checkpoint_messages(current_messages)
         # Budget guard: stop before doing more work once the cap is hit.
@@ -1258,6 +1279,8 @@ def run_agent_turn_stream(
                 on_assistant_message(context_manager.get_context_summary())
 
     while max_steps is None or step < max_steps:
+        if current_scope() is not None and current_scope().parent_task_id:
+            current_scope().check_cancelled()
         step += 1
         checkpoint_messages(current_messages)
         # Budget guard: stop before doing more work once the cap is hit.

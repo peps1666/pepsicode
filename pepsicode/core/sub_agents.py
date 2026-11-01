@@ -45,6 +45,7 @@ class AgentDefinition:
     model: str = "inherit"  # inherit from parent or specific model
     max_turns: int = 10
     is_read_only: bool = False
+    source: str = "built-in fallback"
 
     @classmethod
     def explore_agent(cls) -> AgentDefinition:

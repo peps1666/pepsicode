@@ -10,6 +10,7 @@ class ProviderThinkingBlock(TypedDict):
 
 
 class ChatMessage(TypedDict, total=False):
+    turnStatus: str
     role: Literal[
         "system",
         "user",

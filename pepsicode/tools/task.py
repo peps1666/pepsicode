@@ -13,8 +13,9 @@ from collections.abc import Callable
 from typing import Any
 
 from pepsicode.agents.loader import get_default_loader
-from pepsicode.agents.tool_filter import resolve_agent_tools
+from pepsicode.agents.tool_filter import READ_ONLY_TOOLS, resolve_agent_tools
 from pepsicode.agents.trace import TraceManager
+from pepsicode.cancellation import TurnCancelledError
 from pepsicode.core.sub_agents import AgentDefinition, AgentType
 from pepsicode.execution.runtime import current_scope
 from pepsicode.tooling import ToolContext, ToolDefinition, ToolRegistry, ToolResult
@@ -75,8 +76,12 @@ _FALLBACK_FACTORIES: dict[str, Callable[[], AgentDefinition]] = {
 
 def _load_agent_definition(agent_name: str, cwd: str) -> AgentDefinition | None:
     """Load a markdown definition, with safe compatibility fallbacks."""
+    if agent_name == "plan":
+        agent_name = "explore"
     definition = get_default_loader(cwd).get(agent_name)
     if definition is not None:
+        if agent_name in {"explore", "plan"}:
+            definition.is_read_only = True
         return definition
     factory = _FALLBACK_FACTORIES.get(agent_name)
     return factory() if factory is not None else None
@@ -88,6 +93,13 @@ def _runtime_for_agent(runtime: dict[str, Any], definition: AgentDefinition) -> 
     if definition.model and definition.model.lower() != "inherit":
         child_runtime["model"] = definition.model
     return child_runtime
+
+
+def _is_read_only_agent(value: dict, cwd: str) -> bool:
+    definition = _load_agent_definition(value["agent_type"], cwd)
+    if definition is None:
+        return False
+    return all(tool.name in READ_ONLY_TOOLS for tool in resolve_agent_tools(_SUB_AGENT_TOOL_POOL, definition).list())
 
 
 def create_task_tool(
@@ -126,21 +138,30 @@ def create_task_tool(
             raise ValueError("task is required")
         return {"agent_type": agent_type, "task": task.strip()}
 
-    def _run(parsed: dict, context: ToolContext) -> ToolResult:
+    def _run_inner(parsed: dict, context: ToolContext) -> ToolResult:
         # Lazy imports avoid any import cycle at module load time.
         from pepsicode.core.agent_loop import run_agent_turn
+        from pepsicode.core.task_control import snapshot
+
+        parent_task = snapshot(context).get("task") or {}
+        spawn_identity = (parent_task.get("id"), parent_task.get("revision")) if parent_task else None
 
         agent_key = parsed["agent_type"]
 
         # Load the agent definition from markdown files (hot-reloadable).
         # Falls back to the built-in AgentDefinition classmethods when the
         # loader cannot find a file, so existing behavior is preserved.
-        effective_cwd = context.cwd or cwd
-        definition = _load_agent_definition(agent_key, effective_cwd)
+        # Resolve against the same directory used by validation and permission
+        # classification, even when the caller's execution cwd differs.
+        definition = _load_agent_definition(agent_key, cwd)
         if definition is None:
             return ToolResult(ok=False, output=f"Agent definition not found: {agent_key}")
 
-        sub_registry = resolve_agent_tools(_SUB_AGENT_TOOL_POOL, definition)
+        pool = _SUB_AGENT_TOOL_POOL
+        if context.registry is not None:
+            parent_names = {tool.name for tool in context.registry.list()}
+            pool = ToolRegistry([tool for tool in _SUB_AGENT_TOOL_POOL.list() if tool.name in parent_names])
+        sub_registry = resolve_agent_tools(pool, definition)
 
         if model_factory is not None:
             sub_model = model_factory(sub_registry)
@@ -200,6 +221,7 @@ def create_task_tool(
             },
             {"role": "user", "content": parsed["task"]},
         ]
+        child_scope = []
         try:
             result_messages = run_agent_turn(
                 model=sub_model,
@@ -217,24 +239,57 @@ def create_task_tool(
                 agent_scope=f"subagent:{definition.name}",
                 memory=context.memory,
                 cancellation_event=context.cancellation_event,
+                _scope_observer=child_scope.append,
             )
+        except TurnCancelledError as error:
+            import time
+
+            scope = current_scope()
+            status = (
+                "timed_out"
+                if scope and scope.deadline is not None and time.monotonic() >= scope.deadline
+                else "cancelled"
+            )
+            if trace_manager is not None and trace_node is not None:
+                trace_manager.complete(trace_node.trace_id, status=status)
+            return ToolResult(ok=False, output=f"Sub-agent ({definition.name}) {status}: {error}", status=status)
+        except PermissionError as error:
+            if trace_manager is not None and trace_node is not None:
+                trace_manager.complete(trace_node.trace_id, status="blocked")
+            return ToolResult(ok=False, output=f"Sub-agent ({definition.name}) blocked: {error}", status="blocked")
         except Exception as error:  # noqa: BLE001
             if trace_manager is not None and trace_node is not None:
                 trace_manager.complete(trace_node.trace_id, status="failed")
             return ToolResult(ok=False, output=f"Sub-agent ({definition.name}) failed: {error}")
 
         last = result_messages[-1] if result_messages else {}
-        failed = bool(last.get("isError"))
-        waiting = bool(last.get("awaitingUser"))
+        turn_status = last.get("turnStatus") or ("failed" if last.get("isError") else "completed")
+        status = {
+            "completed": "completed",
+            "cancelled": "cancelled",
+            "timed_out": "timed_out",
+            "awaiting_user": "awaiting_user",
+            "unknown": "blocked",
+        }.get(turn_status, "failed")
+        current_task = snapshot(context).get("task") or {}
+        current_identity = (current_task.get("id"), current_task.get("revision")) if current_task else None
+        stale = spawn_identity is not None and spawn_identity != current_identity
+        if stale:
+            status = "blocked"
+        failed = status not in {"completed", "awaiting_user"}
+        waiting = status == "awaiting_user"
         if trace_manager is not None and trace_node is not None:
-            trace_manager.complete(trace_node.trace_id, status="failed" if failed else "completed")
+            trace_manager.complete(trace_node.trace_id, status=status)
 
         final = next(
             (m["content"] for m in reversed(result_messages) if m.get("role") == "assistant"),
             "",
         )
         tool_calls = sum(1 for m in result_messages if m.get("role") == "assistant_tool_call")
-        summary = f"[Sub-agent {definition.name} completed | tool calls: {tool_calls}]"
+        effective_tools = ", ".join(sorted(tool.name for tool in sub_registry.list()))
+        summary = f"[Sub-agent {definition.name} {status} | tool calls: {tool_calls}]\nDefinition: {definition.source}\nEffective tools: {effective_tools}\nChild report is not acceptance evidence."
+        if stale:
+            summary += f"\nStale result: started at {spawn_identity}, current task is {current_identity}."
         if trace_manager is not None and trace_node is not None:
             summary += " " + trace_manager.format_summary(trace_node.trace_id)
         summary += f"\n\n{final}"
@@ -242,20 +297,44 @@ def create_task_tool(
             ok=not failed,
             output=summary,
             awaitUser=waiting,
-            status="failed" if failed else "awaiting_user" if waiting else "completed",
+            status=status,
+            details={
+                "kind": "subagent",
+                "status": status,
+                "agent": definition.name,
+                "definition_source": definition.source,
+                "effective_tools": sorted(tool.name for tool in sub_registry.list()),
+                "scope_id": child_scope[0].task_id if child_scope else None,
+                "parent_task_id": spawn_identity[0] if spawn_identity else None,
+                "spawn_revision": spawn_identity[1] if spawn_identity else None,
+                "return_revision": current_identity[1] if current_identity else None,
+                "report_is_acceptance_evidence": False,
+            },
         )
+
+    def _run(parsed: dict, context: ToolContext) -> ToolResult:
+        try:
+            result = _run_inner(parsed, context)
+        except Exception as error:  # noqa: BLE001 -- preserve the child execution's own recovery records
+            result = ToolResult(ok=False, output=f"Sub-agent failed: {error}", status="failed")
+        if result.details is None:
+            result.details = {
+                "kind": "subagent",
+                "agent": parsed["agent_type"],
+                "status": result.status.value if result.status else ("completed" if result.ok else "failed"),
+                "report_is_acceptance_evidence": False,
+            }
+        return result
 
     return ToolDefinition(
         name="task",
-        affects_workspace=lambda value: (
-            not getattr(_load_agent_definition(value["agent_type"], cwd), "is_read_only", False)
-        ),
+        concurrency_safe=lambda value: value["agent_type"] in {"explore", "plan"},
+        affects_workspace=lambda value: not _is_read_only_agent(value, cwd),
         description=(
             "Delegate a scoped task to an isolated sub-agent that runs in its own "
-            "context window and returns only a summary. agent_type: 'explore' "
-            "(fast read-only search), 'plan' (thorough read-only analysis), "
-            "'general' (full read/write/exec), or 'verification' (run builds, "
-            "tests, and lint to verify a change). Use for broad codebase "
+            "context window and returns a summary. Use 'explore' for read-only "
+            "investigation or 'general' for bounded implementation. Custom agents "
+            "can provide independent review. Use for broad codebase "
             "exploration or self-contained subtasks to keep the main context lean."
         ),
         input_schema={

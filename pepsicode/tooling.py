@@ -132,6 +132,7 @@ class ToolResult:
     status: ToolStatus | None = None
     exit_code: int | None = None
     execution_id: str | None = field(default=None, compare=False)
+    details: dict[str, Any] | None = field(default=None, compare=False)
 
     def __post_init__(self):
         if self.status is not None:
@@ -158,6 +159,7 @@ class ToolContext:
     effect_state: str = "none"
     control: dict = field(default_factory=dict)
     for_verification: bool = False
+    registry: Any | None = None
 
 
 Validator = Callable[[Any], Any]
@@ -176,7 +178,7 @@ class ToolDefinition:
     # Read-only tools with no side effects can run concurrently with each
     # other.  Tools that write files, run commands, or otherwise mutate state
     # must run exclusively (default).  See agent_loop._execute_calls.
-    concurrency_safe: bool = False
+    concurrency_safe: bool | Callable[[Any], bool] = False
     # Unknown integrations conservatively trigger verification. Tools that
     # only update UI/session state can explicitly opt out.
     affects_workspace: bool | Callable[[Any], bool] | None = None
@@ -482,6 +484,7 @@ class ToolRegistry:
     def execute(self, tool_name: str, input_data: Any, context: ToolContext) -> ToolResult:
         from pepsicode.execution.runtime import bind_scope, current_scope
 
+        context.registry = self
         scope = context.execution or current_scope()
         context.execution = scope
         if scope and context.permissions is None:

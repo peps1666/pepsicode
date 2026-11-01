@@ -305,6 +305,16 @@ def task_context():
     view["evidence"] = [
         {key: value for key, value in item.items() if key not in {"output", "argv"}} for item in task["evidence"]
     ]
+    scope = current_scope()
+    if scope and scope.parent_task_id is not None:
+        return {
+            "role": "system",
+            "internal": True,
+            "source": {"kind": "task-policy"},
+            "content": "Parent task projection (read-only): "
+            + json.dumps(view, ensure_ascii=False)
+            + "\nDo not change the parent task or treat your report as acceptance evidence.",
+        }
     return {
         "role": "system",
         "internal": True,

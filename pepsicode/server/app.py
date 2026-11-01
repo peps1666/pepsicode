@@ -142,6 +142,8 @@ class RemotePermissionBridge(ApprovalBackend):
             "scope": request.get("scope", ""),
             "choices": request.get("choices", []),
         }
+        if request.get("metadata"):
+            payload["metadata"] = request["metadata"]
         asyncio.run_coroutine_threadsafe(self._emit("permission/request", payload), self._loop)
 
         # Block the worker thread until the client responds.

@@ -131,6 +131,12 @@ class RequestBudget:
         if self.requests >= self.max_requests:
             raise ModelRequestLimitError("Shared model request limit reached")
 
+    @staticmethod
+    def _allocate_child(scope):
+        if scope.request_limit is not None and scope.requests >= scope.request_limit:
+            raise ModelRequestLimitError("Sub-agent model request limit reached")
+        scope.requests += 1
+
     @contextmanager
     def request(self, scope: ExecutionScope, body: dict):
         if self.limit is None:
@@ -141,6 +147,7 @@ class RequestBudget:
             try:
                 scope.check_cancelled()
                 self.check()
+                self._allocate_child(scope)
                 self.requests += 1
             finally:
                 self._lock.release()
@@ -163,6 +170,7 @@ class RequestBudget:
                 ) / 1_000_000
                 if self.tracker.total_cost_usd + projected > self.limit:
                     raise BudgetExceededError(self.limit, self.tracker.total_cost_usd + projected)
+            self._allocate_child(scope)
             self.requests += 1
             yield
         finally:
@@ -197,10 +205,15 @@ class ExecutionScope:
     journal: ExecutionJournal | None = None
     task_id: str = field(default_factory=lambda: uuid.uuid4().hex)
     parent_task_id: str | None = None
+    agent_scope: str = "main"
+    request_limit: int | None = None
+    requests: int = 0
     deadline: float | None = None
     state: str = "running"
     unresolved: dict = field(default_factory=dict)
     control: dict = field(default_factory=dict)
+    parent_task_reader: Any = field(default=None, repr=False)
+    parent_task_identity: tuple | None = None
     repetitions: dict = field(default_factory=dict)
     repeat_thresholds: tuple = (3, 5, 8)
     observations: dict = field(default_factory=dict)
@@ -246,6 +259,10 @@ class ExecutionScope:
         }
 
     def check_cancelled(self):
+        if self.parent_task_reader and self.parent_task_identity:
+            current = self.parent_task_reader().get("task") or {}
+            if (current.get("id"), current.get("revision")) != self.parent_task_identity:
+                raise PermissionError("Parent task revision changed; sub-agent result is stale")
         if self.cancellation_event is not None and self.cancellation_event.is_set():
             raise TurnCancelledError("Task stopped by user")
         if self.deadline is not None and time.monotonic() >= self.deadline:
@@ -258,6 +275,40 @@ class ExecutionScope:
             self.journal.append(event, task_id=self.task_id, parent_task_id=self.parent_task_id, **data)
 
     def child(self, cwd=None, permissions=None, cancellation_event=None):
+        from pepsicode.core.task_control import _fallback_lock, owner, snapshot
+
+        session, parent_control = owner()
+        initial = snapshot()
+        task = initial.get("task") or {}
+        projection = (
+            {
+                "task": {
+                    key: task[key]
+                    for key in (
+                        "id",
+                        "revision",
+                        "kind",
+                        "status",
+                        "objective",
+                        "instructions",
+                        "criteria",
+                        "classification",
+                    )
+                    if key in task
+                }
+            }
+            if task
+            else {}
+        )
+        if task:
+            projection["task"]["evidence"] = []
+
+        def read_parent():
+            import copy
+
+            with session._tree_lock if session else _fallback_lock:
+                return copy.deepcopy(session.task_control if session else parent_control)
+
         return ExecutionScope(
             cwd=cwd or self.cwd,
             permissions=permissions if permissions is not None else self.permissions,
@@ -267,6 +318,9 @@ class ExecutionScope:
             budget=self.budget,
             journal=self.journal,
             parent_task_id=self.task_id,
+            control=projection,
+            parent_task_reader=read_parent,
+            parent_task_identity=(task.get("id"), task.get("revision")) if task else None,
             deadline=self.deadline,
             unresolved=self.unresolved,
             repeat_thresholds=self.repeat_thresholds,
@@ -345,6 +399,7 @@ def scoped_turn(function):
     def wrapped(*args, **kwargs):
         from pepsicode.core.session_tree import checkpoint_execution, checkpoint_messages, previous_execution
 
+        scope_observer = kwargs.pop("_scope_observer", None)
         parent = current_scope()
         runtime = kwargs.get("runtime")
         if not isinstance(runtime, dict):
@@ -356,6 +411,11 @@ def scoped_turn(function):
             scope = parent
         elif parent is not None:
             scope = parent.child(kwargs.get("cwd"), kwargs.get("permissions"), kwargs.get("cancellation_event"))
+            scope.agent_scope = str(kwargs.get("agent_scope", "subagent"))
+            limit = runtime.get("subagentRequestLimit", kwargs.get("max_steps", 15))
+            if isinstance(limit, bool) or not isinstance(limit, int) or limit < 1:
+                raise ValueError("subagentRequestLimit must be a positive integer")
+            scope.request_limit = min(limit, kwargs.get("max_steps") or limit)
         else:
             cwd = kwargs["cwd"]
             tracker = kwargs.get("cost_tracker") or CostTracker()
@@ -390,6 +450,8 @@ def scoped_turn(function):
                     raise ValueError("taskTimeout must be a positive finite duration")
                 scope.deadline = time.monotonic() + timeout
         with bind_scope(scope):
+            if scope_observer is not None:
+                scope_observer(scope)
             if kwargs.get("input_queue") is not None:
                 scope.input_queue = kwargs["input_queue"]
             if scope.cancellation_event is None:
@@ -445,7 +507,7 @@ def scoped_turn(function):
                         "Execution has unresolved outcomes. Inspect the affected state before retrying; "
                         "use execution_status to reconcile with evidence and approval."
                     )
-                    result.append({"role": "assistant", "content": notice, "isError": True})
+                    result.append({"role": "assistant", "content": notice, "isError": True, "turnStatus": "unknown"})
                     callback = kwargs.get("on_error_message")
                     if callback:
                         callback(notice)

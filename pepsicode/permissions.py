@@ -146,6 +146,7 @@ class PermissionManager:
         self._task_command_grants = set()
         self.approval_metrics = {"requests": 0, "decisions": 0, "wait_seconds": 0.0}
         self._approval_metrics_lock = threading.Lock()
+        self._approval_prompt_lock = threading.Lock()
 
         # Plan-mode state
         self.mode = PermissionMode(mode)
@@ -286,11 +287,7 @@ class PermissionManager:
         if self.mode == PermissionMode.READ_ONLY and not is_read_only:
             if tool_name == "ask_user":
                 return
-            if (
-                tool_name == "task"
-                and isinstance(parsed, dict)
-                and parsed.get("agent_type", "explore") in {"explore", "plan"}
-            ):
+            if tool_name == "task" and isinstance(parsed, dict) and not tool.modifies_workspace(parsed):
                 return
             raise RuntimeError(f"Read-only mode denied tool '{tool_name}'. Switch to auto to make changes.")
 
@@ -309,9 +306,8 @@ class PermissionManager:
 
         if tool_name in _PLAN_CONTROL_TOOLS:
             if tool_name == "task" and isinstance(parsed, dict):
-                agent_type = str(parsed.get("agent_type", "explore")).lower()
-                if agent_type not in {"explore", "plan"}:
-                    raise RuntimeError("Plan mode only allows explore or plan sub-agents")
+                if tool.modifies_workspace(parsed):
+                    raise RuntimeError("Plan mode only allows read-only sub-agents")
             return
 
         if is_read_only:
@@ -431,11 +427,30 @@ class PermissionManager:
         self._task_command_grants.clear()
 
     def _request_approval(self, request):
+        from dataclasses import replace
+
+        from pepsicode.execution.runtime import current_scope
+
+        scope = current_scope()
+        if scope and scope.parent_task_id:
+            request = replace(
+                request,
+                details=[f"Sub-agent: {scope.agent_scope} (execution {scope.task_id})", *request.details],
+                metadata={**request.metadata, "agent_scope": scope.agent_scope, "execution_id": scope.task_id},
+            )
         started = time.monotonic()
         with self._approval_metrics_lock:
             self.approval_metrics["requests"] += 1
         try:
-            outcome = self.approval.request(request)
+            while not self._approval_prompt_lock.acquire(timeout=0.05):
+                if scope:
+                    scope.check_cancelled()
+            try:
+                if scope:
+                    scope.check_cancelled()
+                outcome = self.approval.request(request)
+            finally:
+                self._approval_prompt_lock.release()
             if not outcome.is_unavailable:
                 with self._approval_metrics_lock:
                     self.approval_metrics["decisions"] += 1

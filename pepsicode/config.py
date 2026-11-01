@@ -184,6 +184,13 @@ def load_runtime_config(cwd: str | Path | None = None) -> dict[str, Any]:
     request_limit = effective.get("modelRequestLimit", 200)
     if isinstance(request_limit, bool) or not isinstance(request_limit, int) or request_limit < 1:
         raise ValueError("modelRequestLimit must be a positive integer")
+    subagent_request_limit = effective.get("subagentRequestLimit")
+    if subagent_request_limit is not None and (
+        isinstance(subagent_request_limit, bool)
+        or not isinstance(subagent_request_limit, int)
+        or subagent_request_limit < 1
+    ):
+        raise ValueError("subagentRequestLimit must be a positive integer")
     task_timeout = effective.get("taskTimeout")
     if task_timeout is not None and (
         isinstance(task_timeout, bool)
@@ -217,6 +224,7 @@ def load_runtime_config(cwd: str | Path | None = None) -> dict[str, Any]:
         "mcpServers": effective.get("mcpServers", {}),
         "budgetLimitUsd": budget_limit_usd,
         "modelRequestLimit": request_limit,
+        **({"subagentRequestLimit": subagent_request_limit} if subagent_request_limit is not None else {}),
         "repeatToolThresholds": effective.get("repeatToolThresholds", [3, 5, 8]),
         "taskTimeout": task_timeout,
         "processSandboxMode": sandbox_mode,
