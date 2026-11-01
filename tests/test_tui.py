@@ -37,6 +37,79 @@ def test_render_transcript_shows_tool_entry() -> None:
     assert "done" in rendered
 
 
+def test_stream_transcript_wraps_a_user_turn_inside_the_card() -> None:
+    from pepsicode.tui.app import _build_stream_transcript_lines
+    from pepsicode.tui.chrome import string_display_width, strip_ansi
+
+    body = "把项目里的 lint 配置换成 ruff，然后确认 CI 里的命令在 pre-commit 之后仍然可用。"
+    lines = _build_stream_transcript_lines([TranscriptEntry(id=1, kind="user", body=body)], 40)
+    plain = [strip_ansi(line) for line in lines]
+
+    # The card opens and closes with a blank padded row, so nothing collides.
+    assert plain[0] == ""
+    question = [line for line in plain[1:-1] if line.strip()]
+    assert len(question) >= 2
+    assert all(line.startswith("  ") for line in question)
+    assert "ruff" in "".join(question)
+    assert all("─" not in line for line in plain)
+    assert all(string_display_width(line) <= 39 for line in lines)
+
+
+def test_user_turn_is_painted_and_model_output_is_not() -> None:
+    environment = os.environ.copy()
+    environment.update(CLICOLOR_FORCE="1", TERM="xterm", PYTHONIOENCODING="utf-8")
+    environment.pop("NO_COLOR", None)
+    code = (
+        "import json;"
+        "from pepsicode.tui.app import _build_stream_transcript_lines as build;"
+        "from pepsicode.tui.chrome import USER_BG, string_display_width, strip_ansi;"
+        "from pepsicode.tui.types import TranscriptEntry as Entry;"
+        "lines = build(["
+        " Entry(id=1, kind='user', body='先看 lint 配置'),"
+        " Entry(id=2, kind='assistant', body='配置在 `pyproject.toml` 里。'),"
+        " Entry(id=3, kind='user', body='改成 ruff')], 60);"
+        "print(json.dumps(["
+        "[line.startswith(USER_BG), strip_ansi(line), string_display_width(line)]"
+        " for line in lines], ensure_ascii=False))"
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", code], capture_output=True, text=True, encoding="utf-8", env=environment, check=True
+    )
+    rows = json.loads(result.stdout)
+
+    painted = [index for index, (filled, _, _) in enumerate(rows) if filled]
+    runs: list[list[int]] = []
+    for index in painted:
+        if runs and index == runs[-1][-1] + 1:
+            runs[-1].append(index)
+        else:
+            runs.append([index])
+    assert len(runs) == 2, "one card per user turn"
+    assert "先看 lint 配置" in "".join(rows[index][1] for index in runs[0])
+    assert "改成 ruff" in "".join(rows[index][1] for index in runs[1])
+    for run in runs:
+        assert len(run) == 3, "padding row, text row, padding row"
+        assert not rows[run[0]][1].strip() and not rows[run[-1]][1].strip()
+    assert all(width <= 59 for _, _, width in rows)
+    label = next(index for index, (_, text, _) in enumerate(rows) if text.startswith("  · "))
+    assert not rows[label][0], "model output keeps the plain background"
+
+
+def test_legacy_transcript_keeps_the_user_card_inside_the_panel(monkeypatch) -> None:
+    from pepsicode.tui import transcript
+    from pepsicode.tui.chrome import string_display_width, strip_ansi
+
+    monkeypatch.setattr(transcript, "_cached_terminal_size", lambda: (60, 24))
+    entry = TranscriptEntry(id=1, kind="user", body="这是一段很长的提问，" * 6)
+    rendered = transcript.render_transcript([entry], scroll_offset=0, window_size=24)
+
+    lines = rendered.splitlines()
+    text = [line for line in lines if strip_ansi(line).strip()]
+    assert text and "这是一段很长的提问" in "".join(strip_ansi(line) for line in text)
+    assert all(line.startswith("  ") for line in text)
+    assert all(string_display_width(line) <= 59 for line in lines)
+
+
 @pytest.mark.parametrize("path", ["src/a/very/long/directory/module.py", r"C:\\项目\\很长的目录\\module.py"])
 def test_tool_header_keeps_filename_visible_for_long_paths(path) -> None:
     from pepsicode.tui.chrome import string_display_width, strip_ansi

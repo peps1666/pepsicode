@@ -35,6 +35,7 @@ from .theme import (  # noqa: F401
     REVERSE,
     SUBTLE,
     UNDERLINE,
+    USER_BG,
     YELLOW,
 )
 
@@ -309,6 +310,16 @@ def pad_plain(text: str, width: int) -> str:
     """Right-pad to width, CJK aware."""
     display_w = string_display_width(text)
     return text + (" " * max(0, width - display_w))
+
+
+def paint_row(text: str, width: int, background: str) -> str:
+    """Fill a row with a background color without losing the text's own styles."""
+    if not background:
+        return text
+    # Re-arm the fill after every reset so styled spans keep their own colors.
+    painted = text.replace(RESET, RESET + background) if RESET else text
+    padding = " " * max(0, width - string_display_width(text))
+    return f"{background}{painted}{padding}{RESET}"
 
 
 def truncate_path_middle(path: str, width: int) -> str:

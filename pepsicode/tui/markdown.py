@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 
-from .chrome import string_display_width
+from .chrome import string_display_width, strip_ansi
 from .theme import (
     BOLD,
     CODE_BG,
@@ -14,7 +14,6 @@ from .theme import (
     QUOTE_BAR,
     RESET,
     SUBTLE,
-    UNDERLINE,
 )
 
 # Pre-compiled regexes for markdown parsing
@@ -134,6 +133,11 @@ def render_markdownish(input_text: str, width: int | None = None) -> str:
     in_code_block = False
     result_lines: list[str] = []
 
+    def separate_section() -> None:
+        """Give a heading its own row instead of gluing it to the text above."""
+        if result_lines and strip_ansi(result_lines[-1]).strip():
+            result_lines.append("")
+
     skip_until = 0
     for index, line in enumerate(lines):
         if index < skip_until:
@@ -177,18 +181,22 @@ def render_markdownish(input_text: str, width: int | None = None) -> str:
             result_lines.extend(_render_table(header, rows, width))
             continue
 
-        # Headings with visual accent
+        # Headings rely on color and weight for hierarchy: underlining the accent
+        # color doubles the emphasis and reads like a link, so no decoration here.
         if line.startswith("### "):
             style = f"{HEADING_ACCENT}{BOLD}"
-            result_lines.append(f"{style}  {_inline(line[4:], style)}{RESET}")
+            separate_section()
+            result_lines.append(f"  {style}{_inline(line[4:], style)}{RESET}")
             continue
         if line.startswith("## "):
-            style = f"{HEADING_ACCENT}{BOLD}{UNDERLINE}"
-            result_lines.append(f"{style} {_inline(line[3:], style)}{RESET}")
+            style = f"{HEADING_ACCENT}{BOLD}"
+            separate_section()
+            result_lines.append(f"{style}{_inline(line[3:], style)}{RESET}")
             continue
         if line.startswith("# "):
-            style = f"{HEADING_ACCENT}{BOLD}{UNDERLINE}"
-            result_lines.append(f"{style} {_inline(line[2:], style)}{RESET}")
+            style = f"{HEADING_ACCENT}{BOLD}"
+            separate_section()
+            result_lines.append(f"{style}{_inline(line[2:], style)}{RESET}")
             continue
 
         # Blockquote with visual bar

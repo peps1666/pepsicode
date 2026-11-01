@@ -15,8 +15,10 @@ from .chrome import (
     RED,
     RESET,
     SUBTLE,
+    USER_BG,
     YELLOW,
     _cached_terminal_size,
+    paint_row,
     string_display_width,
     strip_ansi,
     truncate_plain,
@@ -268,11 +270,25 @@ def render_tool_activity(entry: TranscriptEntry, cols: int) -> list[str]:
     return lines
 
 
+def _render_user_entry(entry: TranscriptEntry) -> str:
+    """A user turn reads as a raised card so it stands apart from model output."""
+    cols, _ = _cached_terminal_size()
+    # The panel indents two more columns and pads to its inner width, so stop
+    # the card short of the edge.
+    width = max(8, cols - 6)
+    body_width = max(2, width - 4)
+    rows = [""]
+    for raw in (entry.body or "").splitlines() or [""]:
+        for part in wrap_text(raw, body_width).split("\n") or [""]:
+            rows.append(f"  {part}" if part else "")
+    rows.append("")
+    return "\n".join(paint_row(row, width, USER_BG) for row in rows)
+
+
 def _render_transcript_entry(entry: TranscriptEntry) -> str:
     """Claude-style: minimal icons, clean labels."""
     if entry.kind == "user":
-        label = f"{ACCENT}>{RESET} {BOLD}you{RESET}"
-        return f"{label}\n{_indent_block(entry.body)}"
+        return _render_user_entry(entry)
 
     if entry.kind == "assistant":
         if entry.status == "error":
@@ -321,7 +337,7 @@ def _get_entry_lines(entry: TranscriptEntry) -> list[str]:
         entry.collapsedSummary,
         entry.toolName,
         entry.toolSummary,
-        _cached_terminal_size()[0] if entry.kind == "tool" else None,
+        _cached_terminal_size()[0] if entry.kind in ("tool", "user") else None,
     )
 
     entry_id = id(entry)
@@ -358,7 +374,7 @@ def _get_entry_line_count(entry: TranscriptEntry) -> int:
         entry.collapsedSummary,
         entry.toolName,
         entry.toolSummary,
-        _cached_terminal_size()[0] if entry.kind == "tool" else None,
+        _cached_terminal_size()[0] if entry.kind in ("tool", "user") else None,
     )
     entry_id = id(entry)
 

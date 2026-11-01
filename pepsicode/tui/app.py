@@ -88,14 +88,15 @@ from pepsicode.tui.chrome import (
     BRIGHT_WHITE,
     DIM,
     HIGHLIGHT_BG,
-    ICON_ARROW,
     ICON_DOT,
     ITALIC,
     RESET,
     SUBTLE,
+    USER_BG,
     YELLOW,
     _cached_terminal_size,
     get_permission_prompt_max_scroll_offset,
+    paint_row,
     render_banner,
     render_footer_bar,
     render_panel,
@@ -1462,6 +1463,23 @@ def _finished_activity_groups(
     return groups
 
 
+def _render_user_turn(entry: TranscriptEntry, cols: int) -> list[str]:
+    """Draw a user turn as a raised card, without any label or marker.
+
+    The tinted surface alone separates the prompt from model output, so a long
+    session stays calm while the question still reads as one block.
+    """
+    width = max(8, cols - 1)
+    # Two columns of inner padding, plus a gap before the card's right edge.
+    body_width = max(2, width - 4)
+    rows = [""]
+    for raw in (entry.body or "").splitlines() or [""]:
+        for part in wrap_text(raw, body_width).split("\n") or [""]:
+            rows.append(f"  {part}" if part else "")
+    rows.append("")
+    return [paint_row(row, width, USER_BG) for row in rows]
+
+
 def _render_activity_header(group: list[TranscriptEntry], expanded: bool, cols: int) -> str:
     tools = sum(entry.kind == "tool" for entry in group)
     thoughts = len(group) - tools
@@ -1507,14 +1525,12 @@ def _build_stream_transcript_lines(
 
         body_lines = (entry.body or "").splitlines() or [""]
         if entry.kind == "user":
-            rendered.append(f"  {ACCENT}{ICON_ARROW}{RESET} {BOLD}You{RESET}")
-            for line in body_lines:
-                rendered.extend(f"     {part}" for part in wrap_text(line, max(2, cols - 7)).split("\n"))
+            rendered.extend(_render_user_turn(entry, cols))
             rendered.append("")
             continue
 
         if entry.kind == "assistant":
-            label = f"{BRIGHT_RED}{BOLD}Error{RESET}" if entry.status == "error" else f"{BOLD}pepsicode{RESET}"
+            label = f"{BRIGHT_RED}{BOLD}Error{RESET}" if entry.status == "error" else f"{SUBTLE}{BOLD}pepsicode{RESET}"
             rendered.append(f"  {ACCENT}{ICON_DOT}{RESET} {label}")
             content, _ = parse_assistant_text(entry.body)
             for line in render_markdownish(content, width=max(2, cols - 4)).splitlines() or [""]:

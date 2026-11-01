@@ -375,7 +375,7 @@ def test_scrolling_reaches_the_first_transcript_line(monkeypatch, capsys):
         app._render_stream_screen(args, state)
     terminal = TerminalGrid(40, 12)
     terminal.apply(capsys.readouterr().out)
-    assert any("You" in line for line in terminal.lines()[:3])
+    assert any("first question" in line for line in terminal.lines()[:4])
 
 
 def test_finished_tool_output_is_never_drawn_expanded():

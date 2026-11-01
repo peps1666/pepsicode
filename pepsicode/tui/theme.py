@@ -41,6 +41,9 @@ BORDER_DIM = _sgr("38;5;237", color=True)
 SUBTLE = _sgr("38;5;245", color=True)
 HIGHLIGHT_BG = _sgr("48;5;237", color=True)
 CODE_BG = _sgr("48;5;236", color=True)
+# Raised surface behind a user turn: one step above the terminal background, so
+# the block reads as a card without competing with code blocks or selections.
+USER_BG = _sgr("48;5;236", color=True)
 CODE_FG = ACCENT
 QUOTE_BAR = SUBTLE
 HEADING_ACCENT = ACCENT

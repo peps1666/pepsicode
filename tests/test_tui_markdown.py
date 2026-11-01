@@ -63,6 +63,27 @@ def test_stream_transcript_uses_available_width_for_table():
     assert all(string_display_width(line) <= 24 for line in narrow)
 
 
+def test_heading_separates_itself_from_the_paragraph_above():
+    source = "先说明现状。\n## 小节\n正文"
+    assert strip_ansi(render_markdownish(source)).splitlines() == ["先说明现状。", "", "小节", "正文"]
+
+
+def test_headings_keep_accent_color_without_underlining():
+    environment = os.environ.copy()
+    environment.update(CLICOLOR_FORCE="1", TERM="xterm", PYTHONIOENCODING="utf-8")
+    environment.pop("NO_COLOR", None)
+    code = (
+        "from pepsicode.tui.markdown import render_markdownish; "
+        "print(render_markdownish('# 总结\\n## 现状\\n### 细节'))"
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", code], capture_output=True, text=True, encoding="utf-8", env=environment, check=True
+    )
+    assert "\x1b[4m" not in result.stdout
+    assert "\x1b[1m" in result.stdout and "\x1b[38;5;215m" in result.stdout
+    assert all(title in result.stdout for title in ("总结", "现状", "细节"))
+
+
 @pytest.mark.parametrize("no_color", [False, True])
 def test_inline_code_colors_and_no_color(no_color):
     environment = os.environ.copy()
