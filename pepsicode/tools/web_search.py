@@ -1,12 +1,12 @@
 from __future__ import annotations
 
-import urllib.parse
-import urllib.request
+import json
+import os
+import urllib.error
 
 from pepsicode.cancellation import cancellable_response
-from pepsicode.execution.external import urlopen
+from pepsicode.execution.external import tavily_search
 from pepsicode.tooling import ToolDefinition, ToolResult
-from pepsicode.version import VERSION
 
 MAX_RESULTS = 10
 
@@ -22,101 +22,53 @@ def _validate(input_data: dict) -> dict:
 
 
 def _run(input_data: dict, context) -> ToolResult:
-    query = input_data["query"]
-    num_results = input_data["num_results"]
+    key = os.environ.get("TAVILY_API_KEY", "").strip()
+    if not key:
+        return ToolResult(False, "Tavily API key is not configured. Set TAVILY_API_KEY and restart PepsiCode.")
 
     try:
-        # Use DuckDuckGo HTML search (no API key required)
-        search_url = f"https://html.duckduckgo.com/html/?q={urllib.parse.quote(query)}"
-
-        req = urllib.request.Request(
-            search_url,
-            headers={
-                "User-Agent": f"pepsicode/{VERSION} (Terminal Coding Assistant)",
-                "Accept": "text/html,application/xhtml+xml,text/plain;q=0.9,*/*;q=0.8",
-            },
-        )
-
-        with cancellable_response(urlopen(req, timeout=15)) as response:
-            html = response.read().decode("utf-8", errors="replace")
-
-        results = _parse_duckduckgo_results(html, num_results)
-
-        if not results:
-            return ToolResult(
-                ok=False,
-                output=f"No search results found for: {query}\n\nTry a different query or check your internet connection.",
-            )
-
-        # Format results
-        lines = [f"Search results for: {query}", "=" * 60, ""]
-
-        for i, result in enumerate(results, 1):
-            lines.extend(
-                [
-                    f"{i}. {result['title']}",
-                    f"   URL: {result['url']}",
-                    f"   {result['snippet']}",
-                    "",
-                ]
-            )
-
-        lines.append(f"Total results: {len(results)}")
-
-        return ToolResult(ok=True, output="\n".join(lines))
-
-    except urllib.error.URLError as e:
-        return ToolResult(
-            ok=False,
-            output=f"Search failed: {e.reason}\nQuery: {query}\n\nCheck your internet connection.",
-        )
-    except Exception as e:
-        return ToolResult(
-            ok=False,
-            output=f"Search error: {e}\nQuery: {query}",
-        )
-
-
-def _parse_duckduckgo_results(html: str, max_results: int) -> list[dict[str, str]]:
-    """Parse DuckDuckGo HTML search results."""
-    import re
-
-    results = []
-
-    # Find all result blocks
-    result_pattern = re.compile(
-        r'<a[^>]*class="result__a"[^>]*href="([^"]*)"[^>]*>(.*?)</a>.*?'
-        r'<a[^>]*class="result__snippet"[^>]*>(.*?)</a>',
-        re.DOTALL,
-    )
-
-    for match in result_pattern.finditer(html):
-        if len(results) >= max_results:
-            break
-
-        url = match.group(1)
-        title = re.sub(r"<[^>]+>", "", match.group(2)).strip()
-        snippet = re.sub(r"<[^>]+>", "", match.group(3)).strip()
-
-        # Clean up entities
-        title = title.replace("&amp;", "&").replace("&quot;", '"').replace("&#x27;", "'")
-        snippet = snippet.replace("&amp;", "&").replace("&quot;", '"').replace("&#x27;", "'")
-
-        if url and title:
-            results.append(
-                {
-                    "title": title,
-                    "url": url,
-                    "snippet": snippet[:200],
-                }
-            )
-
-    return results
+        with cancellable_response(
+            tavily_search(input_data["query"], input_data["num_results"], key, context=context)
+        ) as response:
+            raw = response.read(1_000_001)
+            context.effect_state = "completed"
+        if len(raw) > 1_000_000:
+            return ToolResult(False, "Tavily response exceeded the size limit.")
+        payload = json.loads(raw)
+        if not isinstance(payload, dict) or not isinstance(payload.get("results"), list):
+            return ToolResult(False, "Tavily returned an invalid response.")
+        results = payload["results"][: input_data["num_results"]]
+        lines = [f"Search results for: {input_data['query']}", ""]
+        for result in results:
+            if not isinstance(result, dict):
+                continue
+            title, url, content = result.get("title"), result.get("url"), result.get("content")
+            if not isinstance(title, str) or not isinstance(url, str) or not url.startswith(("https://", "http://")):
+                continue
+            snippet = content[:1000] if isinstance(content, str) else ""
+            lines.extend([f"{len(lines) // 4 + 1}. {title[:300]}", f"   URL: {url[:2000]}", f"   {snippet}", ""])
+        if len(lines) == 2:
+            return ToolResult(False, "Tavily returned no usable results.")
+        return ToolResult(True, "\n".join(lines))
+    except urllib.error.HTTPError as error:
+        if 400 <= error.code < 500:
+            context.effect_state = "completed"
+        explanations = {
+            401: "Invalid Tavily API key.",
+            429: "Tavily rate limit reached.",
+            432: "Tavily usage limit reached.",
+            433: "Tavily usage limit reached.",
+        }
+        return ToolResult(False, explanations.get(error.code, f"Tavily request failed (HTTP {error.code})."))
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        return ToolResult(False, "Tavily returned an invalid JSON response.")
+    except urllib.error.URLError:
+        return ToolResult(False, "Tavily request failed; check network access.")
 
 
 web_search_tool = ToolDefinition(
     name="web_search",
-    description="Search the web for information. Returns search results with titles, URLs, and snippets. No API key required.",
+    description="Search the web using Tavily. Requires TAVILY_API_KEY; searches consume Tavily credits.",
     input_schema={
         "type": "object",
         "properties": {

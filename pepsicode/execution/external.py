@@ -3,11 +3,55 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import time
 import urllib.request
 from urllib.parse import urlsplit
 
 from pepsicode.execution.runtime import current_scope, current_tool_context
+
+
+def tavily_search(query: str, num_results: int, key: str, *, context=None, timeout=30):
+    """Send the fixed Tavily basic search operation; no arbitrary POST or redirects."""
+    if (
+        not isinstance(query, str)
+        or not query.strip()
+        or not isinstance(num_results, int)
+        or not 1 <= num_results <= 10
+    ):
+        raise ValueError("Invalid Tavily search parameters")
+    if not isinstance(key, str) or not key.strip():
+        raise ValueError("Tavily API key is required")
+    context = context or current_tool_context()
+    target = "https://api.tavily.com/search"
+    body = json.dumps(
+        {
+            "query": query,
+            "max_results": num_results,
+            "search_depth": "basic",
+            "auto_parameters": False,
+            "include_raw_content": False,
+        },
+        ensure_ascii=False,
+    ).encode("utf-8")
+    request = urllib.request.Request(
+        target, data=body, headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"}, method="POST"
+    )
+    authorize(context, "Tavily search", target, mutating=False)
+
+    class NoRedirect(urllib.request.HTTPRedirectHandler):
+        def redirect_request(self, req, fp, code, msg, headers, newurl):
+            raise PermissionError("Tavily search redirects are not allowed")
+
+    scope = getattr(context, "execution", None) or current_scope()
+    if scope:
+        scope.check_cancelled()
+        if scope.deadline is not None:
+            timeout = min(timeout, max(0.01, scope.deadline - time.monotonic()))
+    response = urllib.request.build_opener(NoRedirect()).open(request, timeout=timeout)
+    if context is not None:
+        context.effect_state = "completed"
+    return response
 
 
 def authorize(context, operation: str, target: str, *, mutating: bool):

@@ -93,6 +93,8 @@
 | 版本控制 | `git`、`worktree`、`diff_viewer` |
 | 记忆 | `save_memory`、`search_memory`、`forget_memory` |
 
+`web_search` 使用 Tavily，需在启动环境中设置 `TAVILY_API_KEY`；固定的基础搜索可在 Plan 和只读模式使用，并可能消耗 Tavily 额度。详细设置见[网页搜索](configuration.md#网页搜索)。
+
 写入类工具（`write_file`、`edit_file`、`modify_file`、`patch_file`、`multi_edit`）都会先给出 diff 再落盘，审批规则由当前权限模式决定。可用 `/tools` 查看完整清单，或 `toolCoreTools` 覆盖初始工具名单。
 
 ## 子代理与后台任务

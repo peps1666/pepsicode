@@ -16,6 +16,8 @@
 
 HTTP 修改审批展示目标和操作。跨目标重定向不能继承原修改授权。`web_fetch` 继续检查初始 URL 和每次跳转的地址限制。HTTP 方法本身无法证明远端没有副作用：GET 的只读语义和 MCP `readOnlyTools` 声明都需要服务遵守。
 
+Tavily 搜索是单独的受限执行入口：固定 HTTPS 目标、基础搜索参数和 POST 请求体，不接受任意 URL 或方法，拒绝重定向，也不会记录认证头。它在 Plan 和只读模式下可调用，但会向 Tavily 发送查询并可能消耗额度；网络中断不证明未计费，工具不自动重试。普通 POST 仍必须通过外部修改审批。
+
 ### 操作系统隔离的实际范围
 
 默认 `processSandboxMode` 是 `danger-full-access`，表示**应用层审批，通过后的程序拥有当前用户的权限**。它不能阻止被批准的 Python、Shell、Git Hook 或 Docker 访问工作区外资源。
