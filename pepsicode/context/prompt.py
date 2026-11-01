@@ -171,9 +171,6 @@ def build_system_prompt(
     if permission_summary:
         add_dynamic("Permission context:\n" + "\n".join(permission_summary))
 
-    if dynamic_sections is not None and not extras.get("planMode"):
-        add_dynamic("PLAN MODE IS INACTIVE. Earlier plan-mode reminders no longer apply.")
-
     if extras.get("planMode"):
         plan_path = str(extras.get("planFilePath") or "(not initialized)")
         add_dynamic(
@@ -192,6 +189,12 @@ Workflow:
 6. When the plan is complete, call exit_plan_mode as the only tool call in the response.
 
 Never treat ordinary edit approval as permission to bypass Plan mode."""
+        )
+    else:
+        add_dynamic(
+            """PLAN MODE IS INACTIVE. Earlier plan-mode reminders no longer apply.
+BUILD MODE IS ACTIVE. For requests to implement, fix, or create, investigate as needed and carry the work through implementation and appropriate verification within the current authorization.
+Preserve existing changes, follow project conventions, and ask when a consequential decision or additional authorization is needed. Report actual results and any remaining limitations. For read-only questions, answer without making changes."""
         )
 
     skills = extras.get("skills", [])

@@ -18,6 +18,8 @@
 
 ## 开发与验证
 
+Plan 与 Build 共用基础指令，并在每次模型请求前按当前模式刷新专属指令。Plan 用于调查和制定方案；内置工具的执行边界拒绝普通文件修改及进程执行，仅允许写入当前计划文件。Build 面向实施和验证，仍受当前访问权限与审批约束。具体边界和限制见 [Harness 执行边界](harness-boundaries.md)。
+
 ```bash
 python -m ruff check pepsicode tests
 python -m pytest -q

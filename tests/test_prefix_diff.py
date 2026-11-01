@@ -331,6 +331,8 @@ def test_plan_mode_switch_projects_latest_context_without_rewriting_system(tmp_p
     assert all(c["differences"]["system"] is None and c["message_change"] == "extended_tail" for c in comparisons)
     assert "PLAN MODE IS ACTIVE" in messages[-2]["content"]
     assert "PLAN MODE IS INACTIVE" in messages[-1]["content"]
+    assert "BUILD MODE IS ACTIVE" not in messages[-2]["content"]
+    assert "BUILD MODE IS ACTIVE" in messages[-1]["content"]
 
 
 def test_session_projection_is_deduplicated_and_follows_tool_batch(tmp_path):

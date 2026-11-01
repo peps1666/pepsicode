@@ -84,6 +84,23 @@ def test_plan_and_build_labels_use_distinct_colors(terminal, monkeypatch):
     assert chrome.render_footer_bar(None, False, False, plan=True).startswith("<plan>PLAN")
 
 
+def test_plan_and_build_labels_keep_following_content_aligned(terminal):
+    from pepsicode.tui import chrome
+
+    args, _ = terminal
+    build_label = app._permission_mode_label(args)
+    build_footer = chrome.render_footer_bar(None, False, False)
+    args.permissions.enter_plan_mode()
+    plan_label = app._permission_mode_label(args)
+    plan_footer = chrome.render_footer_bar(None, False, False, plan=True)
+    assert chrome.string_display_width(build_label.split("auto")[0]) == chrome.string_display_width(
+        plan_label.split("auto")[0]
+    )
+    assert chrome.string_display_width(build_footer.split("mode:")[0]) == chrome.string_display_width(
+        plan_footer.split("mode:")[0]
+    )
+
+
 @pytest.mark.parametrize("access", ["auto", "read_only", "trust_commands", "full_access"])
 def test_tab_toggles_without_approving_and_preserves_draft_and_access(terminal, access):
     args, state = terminal

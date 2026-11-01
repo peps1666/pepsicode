@@ -1268,7 +1268,7 @@ def _permission_mode_label(args: TtyAppArgs) -> str:
     plan = getattr(permissions, "is_plan_mode", False)
     color = YELLOW if mode in {"trust_commands", "full_access"} else SUBTLE
     label_color = BRIGHT_CYAN if plan else ACCENT
-    return f"{label_color}{'PLAN' if plan else 'BUILD'}{RESET} {color}{mode}{risk}{RESET}"
+    return f"{label_color}{'PLAN ' if plan else 'BUILD'}{RESET} {color}{mode}{risk}{RESET}"
 
 
 def _composer_status_lines(args: TtyAppArgs, state: ScreenState, model: str, cols: int) -> list[str]:
