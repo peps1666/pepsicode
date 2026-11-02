@@ -33,7 +33,7 @@
       <sub><b>终端 TUI</b></sub>
     </td>
     <td align="center" valign="top">
-      <a href="assets/desktop-client.png"><img src="assets/desktop-client.png" width="373" height="240" alt="pepsicode 桌面客户端"></a>
+      <a href="assets/desktop-client.png"><img src="assets/desktop-client.png" width="386" height="240" alt="pepsicode 桌面客户端"></a>
       <br>
       <sub><b>桌面客户端</b></sub>
     </td>
