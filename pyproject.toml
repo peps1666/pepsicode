@@ -85,7 +85,7 @@ fail_under = 60
 package-dir = {"" = "."}
 
 [tool.setuptools.package-data]
-pepsicode = ["agents/builtins/*.md", "prompts/*.md"]
+pepsicode = ["agents/builtins/*.md", "prompts/*.md", "tui/assets/*.txt"]
 
 [tool.setuptools.packages.find]
 where = ["."]

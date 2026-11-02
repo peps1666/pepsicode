@@ -111,6 +111,7 @@ from pepsicode.tui.chrome import (
 from pepsicode.tui.clipboard import copy_to_clipboard
 from pepsicode.tui.clipboard_image import read_clipboard_image
 from pepsicode.tui.command_picker import CommandOption, CommandPicker, render_command_picker
+from pepsicode.tui.idle_sharks import IdleSharks, can_render
 from pepsicode.tui.image_input import image_message, pasted_image_path
 from pepsicode.tui.input import render_input_prompt
 from pepsicode.tui.input_parser import (
@@ -355,6 +356,8 @@ class ScreenState:
     # The model's reasoning streams into its own entry, separate from answer text.
     thinking_entry_id: int | None = None
     frame_renderer: FrameRenderer = field(default_factory=FrameRenderer, repr=False)
+    home_sharks: IdleSharks = field(default_factory=IdleSharks, repr=False)
+    home_sharks_visible: bool = False
     # Mouse text selection (drawn by frame_renderer.selection).
     selection_dragging: bool = False
     selection_notice: str | None = None
@@ -1295,6 +1298,32 @@ def _composer_status_lines(args: TtyAppArgs, state: ScreenState, model: str, col
     return ["  " + truncate_plain(first, width), "  " + truncate_plain(second, width)]
 
 
+def _home_sharks_enabled(args: TtyAppArgs, state: ScreenState) -> bool:
+    return (
+        os.environ.get("PEPSI_CODE_SHARKS", "1").lower() not in {"0", "false", "off"}
+        and not state.transcript
+        and not state.is_busy
+        and not any(message.get("role") == "user" for message in getattr(args, "messages", []))
+        and not state.input.lstrip().startswith("/")
+        and state.pending_approval is None
+        and state.provider_wizard is None
+        and state.command_picker is None
+        and state.settings_picker is None
+        and state.resume_picker_sessions is None
+        and state.exit_requested_at is None
+    )
+
+
+def _home_sharks_tick_due(args: TtyAppArgs, state: ScreenState, now: float) -> bool:
+    return (
+        state.home_sharks_visible
+        and _home_sharks_enabled(args, state)
+        and not state.selection_dragging
+        and getattr(state.frame_renderer, "selection", None) is None
+        and state.home_sharks.due(now)
+    )
+
+
 def _render_home_screen(args: TtyAppArgs, state: ScreenState, cols: int, rows: int) -> None:
     """Fill the viewport with welcome content above a bottom-anchored composer."""
     runtime = args.runtime or {}
@@ -1334,6 +1363,18 @@ def _render_home_screen(args: TtyAppArgs, state: ScreenState, cols: int, rows: i
     frame += [margin + line for line in menu + composer]
     frame += status_lines
     frame = _truncate_frame_lines(frame, cols, rows)
+    state.home_sharks_visible = False
+    # FrameRenderer reserves the final column to prevent terminal autowrap.
+    ocean_width = max(1, cols - 1)
+    if _home_sharks_enabled(args, state) and can_render(ocean_width, rows):
+        now = time.monotonic()
+        if state.selection_dragging or getattr(state.frame_renderer, "selection", None) is not None:
+            now = state.home_sharks.last_frame_at if state.home_sharks.last_frame_at is not None else now
+        # The whole viewport is the ocean. Input and status retain opaque rows
+        # above it; every other foreground text span masks the layer below.
+        protected = set(range(welcome_height, rows))
+        frame = state.home_sharks.compose(frame, ocean_width, rows, now, protected)
+        state.home_sharks_visible = True
     state.frame_renderer.draw(frame, cols, rows)
 
 
@@ -1616,6 +1657,7 @@ def _render_stream_screen(args: TtyAppArgs, state: ScreenState) -> None:
     rows = max(8, rows)
     # Repopulated below only when the transcript is actually on screen.
     state.activity_header_rows = {}
+    state.home_sharks_visible = False
     if state.provider_wizard is not None:
         state.frame_renderer.draw(render_provider_wizard(state.provider_wizard, cols, rows), cols, rows)
         return
@@ -3111,6 +3153,9 @@ def run_tty_app(
                             state.autosave.mark_dirty()
                     if plan_followup and not state.is_busy:
                         _handle_input(args, state, rerender, submitted_raw_input=plan_followup)
+
+                if _home_sharks_tick_due(args, state, time.monotonic()):
+                    rerender()
 
                 # Read raw input
                 if sys.platform == "win32":
