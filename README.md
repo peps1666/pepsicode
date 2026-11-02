@@ -2,7 +2,7 @@
 
 <picture>
   <source media="(prefers-reduced-motion: reduce)" srcset="assets/logo.png">
-  <img src="assets/logo.gif" width="112" height="112" alt="pepsicode logo">
+  <img src="assets/logo.gif" width="560" height="178" alt="pepsicode：荧光绿像素终端、浮动气泡与闪烁光标">
 </picture>
 
 # pepsicode

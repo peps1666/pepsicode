@@ -17,12 +17,13 @@
 }
 
 .brand {
+  font-family: Consolas, "DejaVu Sans Mono", monospace;
   display: flex;
   align-items: center;
   gap: 9px;
   font-size: 17px;
   font-weight: 650;
-  letter-spacing: -.6px;
+  letter-spacing: 0;
 }
 
 .localBadge {

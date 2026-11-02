@@ -7,7 +7,7 @@ import ModelSettings from "./ModelSettings";
 import SessionTree from "./SessionTree";
 import styles from "./ChatView.module.css";
 import Icon, { type IconName } from "../components/Icon";
-import CatLogo from "../components/CatLogo";
+import BrandLogo from "../components/BrandLogo";
 import type { FrameControls } from "../layout/AppFrame";
 import ExecutionTrace from "./ExecutionTrace";
 import type { TraceRow } from "./trajectory";
@@ -120,7 +120,7 @@ export default function ChatView({ onSend, frameControls }: { onSend: (input: st
       </div> : <div id="conversation-content" role="tabpanel" aria-labelledby="chat-tab" className={styles.messageList} ref={scrollRef} onScroll={handleScroll}>
         {messages.length === 0 ? (
           <div className={styles.emptyState}>
-            <div className={styles.welcomeMark}><CatLogo size={54} /></div>
+            <div className={styles.welcomeMark}><BrandLogo size={54} /></div>
             <span className={styles.eyebrow}>你的本地编程搭档</span>
             <h1>想构建些什么？</h1>
             <p>从一个问题、一次修复，或一个新想法开始。</p>

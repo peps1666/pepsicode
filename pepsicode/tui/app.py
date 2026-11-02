@@ -23,6 +23,7 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
+from pepsicode.branding import terminal_mark
 from pepsicode.cli.cli_commands import (
     expand_prompt_command,
     find_matching_slash_commands,
@@ -1247,18 +1248,13 @@ def _render_home_input_card(state: ScreenState, model: str, provider: str, cols:
 
 
 def _render_home_brand(cols: int, rows: int) -> list[str]:
-    """Render a compact wordmark and terminal-safe mascot."""
+    """Render the supplied pixel-terminal identity without image protocols."""
     lines = [
-        f"{ACCENT}{BOLD}pepsicode{RESET}  {SUBTLE}{DISPLAY_VERSION}{RESET}",
+        f"{BRIGHT_WHITE}{BOLD}pepsicode{RESET}  {SUBTLE}{DISPLAY_VERSION}{RESET}",
         f"{SUBTLE}terminal coding agent{RESET}",
     ]
     if rows >= 22 and cols >= 58:
-        lines += [
-            "",
-            f"{ACCENT} /\\_/\\{RESET}",
-            f"{ACCENT}( o.o ){RESET}  {SUBTLE}Ready to explore your code.{RESET}",
-            f"{ACCENT} > ^ <{RESET}",
-        ]
+        lines += ["", *(f"{BRIGHT_WHITE}{row}{RESET}" for row in terminal_mark())]
     return lines
 
 
