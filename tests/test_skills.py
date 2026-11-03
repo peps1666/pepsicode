@@ -40,6 +40,21 @@ def test_extract_description_reads_frontmatter() -> None:
     assert extract_description(FRONTMATTER_SKILL) == "Build charts from tabular data"
 
 
+@pytest.mark.parametrize("scope", ["project", "user"])
+def test_shared_agents_directory_is_discovered_and_loadable(tmp_path, monkeypatch, scope):
+    from pepsicode.context import skills
+
+    home = tmp_path / "home"
+    monkeypatch.setattr(skills, "_home_dir", lambda: home)
+    root = tmp_path if scope == "project" else home
+    skill = root / ".agents/skills/data-viz/SKILL.md"
+    skill.parent.mkdir(parents=True)
+    skill.write_text(FRONTMATTER_SKILL, encoding="utf-8")
+    found = discover_skills(tmp_path)
+    assert [(item.name, item.source) for item in found] == [("data-viz", f"agents_{scope}")]
+    assert load_skill(tmp_path, "data-viz").content == FRONTMATTER_SKILL
+
+
 def test_extract_description_ignores_frontmatter_in_body_fallback() -> None:
     without_description = "---\nname: data-viz\n---\n\n# Title\n\nBody line\n"
     assert extract_description(without_description) == "data-viz"

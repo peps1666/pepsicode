@@ -20,7 +20,9 @@
 粘贴本地图片文件路径时，TUI 会读取文件并附加图片数据，不把路径当作给模型的文字。附加后输入区显示 `[图片 ×数量]`，不显示缩略图。按 `Ctrl+G` 可删除最近附加的一张图片并保留已输入的文字；输入光标在开头时也可按 Backspace 删除图片。`Esc` 会清空整条草稿及所有图片。模型必须支持图片输入；DeepSeek 的 `deepseek-v4-pro` 会丢弃图片，请切换到 `deepseek-flash`。
 | `/hooks` | 查看 Hooks v2 状态、信任、启停 |
 | `/tools` | 列出工具 |
-| `/skills` | 列出 Skills |
+| `/skills` | 重新扫描并列出 Skills，无需重启 |
+| `/skills install find-skills [--global]` | 安装 find-skills；省略 `--global` 时安装到当前项目 |
+| `/skills install <owner/repo 或 GitHub URL> <skill> [--global]` | 从 GitHub 安装指定 Skill |
 | `/mcp` | 查看 MCP 状态 |
 | `/commands` | 查看自定义命令来源与加载错误 |
 | `/tree`、`/fork`、`/clone`、`/retry` | 对话分支与重新生成 |
@@ -34,6 +36,16 @@
 | `/exit` | 退出并保存会话 |
 
 工具快捷命令可绕过模型直接执行：`/ls [目录]`、`/grep 模式 :: 路径`、`/read 文件`、`/write 目标 :: 内容`、`/edit 目标 :: 旧 :: 新`、`/patch 目标 :: 旧 :: 新`、`/modify 目标 :: 内容`、`/cmd 命令`。
+
+最短安装流程：输入 `/skills install find-skills`，完成后用 `/skills` 查看，再让助手使用 `find-skills`。默认仅安装到当前项目；需要所有项目共用时加 `--global`。也可输入 `/skills install https://github.com/vercel-labs/skills find-skills`。
+
+安装命令直接输入 PepsiCode 的输入行，不要带 `$` 提示符或反引号。安装需要 Build 模式和允许命令审批的权限；若当前显示 Plan，先清空输入行，在终端空闲时按 `Tab` 切到 Build，再重新输入命令。切换模式不会自动安装，也不会提高权限；`read_only` 下还需通过 `/permissions` 选择合适的权限模式。Plan 下仍可使用 `/skills` 查看列表。
+
+安装复用 [Vercel Skills CLI](https://github.com/vercel-labs/skills)，需要 Node.js（含 npm）、Git 和网络。它经过现有命令执行层审批，以非交互复制方式写入 `.claude/skills`（全局为 `~/.claude/skills`），无需 Windows 符号链接权限。TUI 和桌面端安装成功后立即刷新目录；通过其他终端安装后执行 `/skills` 即可刷新。安装前应确认来源可信。
+
+PepsiCode 兼容项目和用户主目录中的 `.pepsi-code/skills`、`.claude/skills`、`.agents/skills`，每个 Skill 使用 `<name>/SKILL.md`。同名时保持原优先级：PepsiCode 项目、PepsiCode 用户、Claude 项目、Claude 用户，然后共享 Agents 项目和用户目录。
+
+Windows 的命令执行层会自动解析 `npx.cmd`、`npm.cmd` 等批处理包装器，不需要手动添加 `cmd /c`。如果提示找不到 `npx`，安装 Node.js 后重新打开 PepsiCode，让进程获得新的 PATH。隐式批处理调用不接受引号或 Shell 控制字符参数；复杂 Shell 语法需显式指定 Shell，并经过同样审批。
 
 终端 TUI 空闲时按 `Tab` 切换 Plan / Build；斜杠命令补全优先。手动切回 Build 不会批准或自动执行计划，也不会改变原有权限模式。
 

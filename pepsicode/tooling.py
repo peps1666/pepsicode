@@ -472,6 +472,16 @@ class ToolRegistry:
     def get_skills(self) -> list[dict[str, Any]]:
         return list(self._skills)
 
+    def refresh_skills(self, cwd: str) -> list[dict[str, Any]]:
+        from dataclasses import asdict
+
+        from pepsicode.context.skills import discover_skills
+
+        skills = [asdict(skill) for skill in discover_skills(cwd)]
+        with self._lock:
+            self._skills = skills
+        return self.get_skills()
+
     def get_mcp_servers(self) -> list[dict[str, Any]]:
         return list(self._mcp_servers)
 

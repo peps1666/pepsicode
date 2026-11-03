@@ -53,6 +53,12 @@ SLASH_COMMANDS = [
     SlashCommand("/tools", "/tools", "List tools available to the coding agent.", "Tools"),
     SlashCommand("/hooks", "/hooks", "选择查看或管理 Hooks。", "Tools"),
     SlashCommand("/skills", "/skills", "List discovered SKILL.md workflows.", "Tools"),
+    SlashCommand(
+        "/skills",
+        "/skills install <owner/repo> <skill> [--global]",
+        "Install a skill; use find-skills as a shortcut.",
+        "Tools",
+    ),
     SlashCommand("/commands", "/commands [reload]", "List Markdown prompt commands and loading errors.", "Tools"),
     SlashCommand("/mcp", "/mcp", "Show MCP servers and connection state.", "Tools"),
     SlashCommand("/cmd", "/cmd [cwd::]<command> [args...]", "Run an allowed development command.", "Tools"),
@@ -256,10 +262,16 @@ def try_handle_local_command(
         return _handle_worktree_command(user_input, cwd=cwd)
 
     if user_input == "/skills":
-        skills = tools.get_skills() if tools else []
+        skills = tools.refresh_skills(cwd or str(Path.cwd())) if tools else []
         if not skills:
-            return "No skills discovered. Add skills under ~/.pepsi-code/skills/<name>/SKILL.md, .pepsi-code/skills/<name>/SKILL.md, .claude/skills/<name>/SKILL.md, or ~/.claude/skills/<name>/SKILL.md."
+            return "No skills discovered. Install with /skills install find-skills, or add <name>/SKILL.md under .pepsi-code/skills, .claude/skills or .agents/skills (project or home directory)."
         return "\n".join(f"{skill['name']}  {skill['description']}  [{skill['source']}]" for skill in skills)
+
+    if user_input.split()[:2] == ["/skills", "install"]:
+        from pepsicode.cli.local_tool_shortcuts import SKILL_INSTALL_USAGE, skill_install_shortcut
+
+        if skill_install_shortcut(user_input) is None:
+            return SKILL_INSTALL_USAGE
 
     if user_input == "/config":
         from pepsicode.config import format_config_diagnostic

@@ -105,6 +105,8 @@ def _skill_roots(cwd: str | Path) -> list[tuple[Path, str]]:
         (home / ".pepsi-code" / "skills", "user"),
         (base / ".claude" / "skills", "compat_project"),
         (home / ".claude" / "skills", "compat_user"),
+        (base / ".agents" / "skills", "agents_project"),
+        (home / ".agents" / "skills", "agents_user"),
     ]
 
 

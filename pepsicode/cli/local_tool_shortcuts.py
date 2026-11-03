@@ -1,7 +1,45 @@
 from __future__ import annotations
 
+import re
+
+SKILL_INSTALL_USAGE = (
+    "Usage: /skills install find-skills [--global] or /skills install <owner/repo|GitHub URL> <skill> [--global]"
+)
+
+
+def skill_install_shortcut(user_input: str) -> dict | None:
+    parts = user_input.split()
+    if len(parts) < 3 or parts[:2] != ["/skills", "install"]:
+        return None
+    source = parts[2]
+    options = parts[3:]
+    if source == "find-skills":
+        source, skill = "vercel-labs/skills", "find-skills"
+    else:
+        skill = None
+    source = source.removeprefix("https://github.com/").removesuffix("/").removesuffix(".git")
+    if not re.fullmatch(r"[A-Za-z0-9_][A-Za-z0-9_.-]*/[A-Za-z0-9_][A-Za-z0-9_.-]*", source):
+        return None
+    if options and options[0] not in {"--global", "-g"}:
+        skill = options.pop(0)
+        if not re.fullmatch(r"[A-Za-z0-9_][A-Za-z0-9_-]*", skill):
+            return None
+    if options not in ([], ["--global"], ["-g"]):
+        return None
+    if not skill:
+        return None
+    args = ["--yes", "skills", "add", source, "-a", "claude-code", "-y", "--copy"]
+    if skill:
+        args += ["--skill", skill]
+    if options:
+        args.append("--global")
+    return {"toolName": "run_command", "input": {"command": "npx", "args": args}}
+
 
 def parse_local_tool_shortcut(user_input: str) -> dict | None:
+    skill_install = skill_install_shortcut(user_input)
+    if skill_install:
+        return skill_install
     if user_input.startswith("/ls"):
         directory = user_input.replace("/ls", "", 1).strip()
         return {"toolName": "list_files", "input": {"path": directory} if directory else {}}

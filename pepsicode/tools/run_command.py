@@ -281,6 +281,13 @@ def _run(input_data: dict, context) -> ToolResult:
         return ToolResult(ok=completed.returncode == 0, output=output, exit_code=completed.returncode)
     except PermissionError as error:
         return ToolResult(False, str(error), status="blocked")
+    except FileNotFoundError:
+        hint = (
+            "Install Node.js (including npm), then restart PepsiCode so it picks up PATH."
+            if normalized_command.lower() in {"npx", "npx.cmd", "npm", "npm.cmd", "node", "node.exe"}
+            else "Check that the program is installed and on PATH, and that the working directory exists."
+        )
+        return ToolResult(False, f"Cannot start '{normalized_command}'. {hint}")
     except TurnCancelledError as error:
         return ToolResult(False, str(error), status="cancelled")
     except subprocess.TimeoutExpired:

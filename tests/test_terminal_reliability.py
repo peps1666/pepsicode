@@ -44,6 +44,39 @@ def dispatch(args, state, text):
         app._handle_event(args, state, event, lambda: None, threading.Event(), {})
 
 
+def test_skill_install_shortcut_refreshes_for_next_turn(terminal, monkeypatch):
+    from pathlib import Path
+
+    args, state = terminal
+
+    def install(name, data, context):
+        assert name == "run_command"
+        assert data["command"] == "npx"
+        target = Path(context.cwd) / ".claude/skills/find-skills/SKILL.md"
+        target.parent.mkdir(parents=True)
+        target.write_text("# Find Skills\n\nDiscover workflows", encoding="utf-8")
+        return ToolResult(True, "installed")
+
+    monkeypatch.setattr(args.tools, "execute", install)
+    app._handle_input(args, state, lambda: None, "/skills install find-skills")
+    state.agent_thread.join(3)
+    assert not state.agent_thread.is_alive()
+    assert "find-skills" in [skill["name"] for skill in args.tools.get_skills()]
+    assert any("Skills refreshed" in entry.body for entry in state.transcript)
+
+
+def test_skill_install_in_plan_shows_guidance_without_starting_tool(terminal, monkeypatch):
+    args, state = terminal
+    args.permissions.enter_plan_mode()
+    execute = Mock()
+    monkeypatch.setattr(args.tools, "execute", execute)
+    app._handle_input(args, state, lambda: None, "/skills install find-skills --global")
+    execute.assert_not_called()
+    assert not state.is_busy
+    assert args.permissions.is_plan_mode
+    assert any("切换到 Build" in entry.body for entry in state.transcript)
+
+
 @pytest.mark.parametrize("shortcut,cursor", [("\x01", 0), ("\x05", 5)])
 def test_ctrl_navigation_from_raw_input(terminal, shortcut, cursor):
     args, state = terminal

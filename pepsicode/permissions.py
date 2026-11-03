@@ -325,8 +325,19 @@ class PermissionManager:
 
     def ensure_local_command_allowed(self, user_input: str) -> None:
         """Block local slash-command side doors while Plan mode is active."""
+        parts = user_input.casefold().split()
+        if parts[:2] == ["/skills", "install"]:
+            if self.is_plan_mode:
+                raise RuntimeError(
+                    "当前处于 Plan（规划）模式，不能安装 Skill：安装需要执行命令并写入文件。"
+                    "请切换到 Build 后重新输入安装命令；切换模式不会自动开始安装。"
+                )
+            if self.mode == PermissionMode.READ_ONLY:
+                raise RuntimeError(
+                    "当前为 read_only（只读）权限，不能安装 Skill。"
+                    "请通过 /permissions 选择允许命令审批的权限模式后重试。"
+                )
         if self.mode == PermissionMode.READ_ONLY:
-            parts = user_input.casefold().split()
             if parts[:2] in (
                 ["/worktree", "create"],
                 ["/worktree", "exit"],

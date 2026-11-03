@@ -12,6 +12,7 @@ from pathlib import Path
 
 from pepsicode.cancellation import TurnCancelledError
 from pepsicode.execution.runtime import current_scope, current_tool_context
+from pepsicode.execution.windows import popen_args, resolve_argv
 from pepsicode.sandbox import SandboxPolicy
 from pepsicode.sandbox.backend import SandboxUnavailableError
 from pepsicode.sandbox.types import SandboxMode
@@ -61,7 +62,7 @@ def checked_argv(argv, *, context=None, cwd=None, reason=None, environment=None)
         raise TurnCancelledError("Process cancelled before dispatch")
     target = resolve_tool_path(context, str(cwd or context.cwd), "command_cwd")
     permissions = context.permissions
-    actual = list(argv)
+    actual = resolve_argv(list(argv), target, environment if environment is not None else dict(os.environ))
     enforcement = "none"
     if permissions is not None:
         mode = permissions.mode
@@ -124,7 +125,7 @@ def Popen(argv, *, context=None, reason=None, persistent=False, **kwargs):  # no
         kwargs.setdefault("start_new_session", True)
     else:
         kwargs["creationflags"] = kwargs.get("creationflags", 0) | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
-    process = subprocess.Popen(actual, cwd=cwd, **hide_window_kwargs(kwargs))
+    process = subprocess.Popen(popen_args(actual), cwd=cwd, **hide_window_kwargs(kwargs))
     process._pepsi_stop_lock = threading.RLock()
     process._pepsi_job = None
     try:

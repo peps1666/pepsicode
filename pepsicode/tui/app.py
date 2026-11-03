@@ -2075,6 +2075,8 @@ def _execute_tool_shortcut(
     tool_name: str,
     tool_input: Any,
     rerender: Callable[[], None],
+    *,
+    refresh_skills: bool = False,
 ) -> None:
     state.is_busy = True
     state.cancellation_event.clear()
@@ -2107,6 +2109,9 @@ def _execute_tool_shortcut(
             )
             state.recent_tools.append({"name": tool_name, "status": "success" if result.ok else "error"})
             output = result.output if result.ok else f"ERROR: {result.output}"
+            if result.ok and refresh_skills:
+                args.tools.refresh_skills(args.cwd)
+                output += "\nSkills refreshed. Use /skills to view them."
             _finish_tool_entry(state, entry_id, "success" if result.ok else "error", output)
             state.transcript_scroll_offset = 0
             state.user_scrolled_away = False
@@ -2506,7 +2511,14 @@ def _handle_input(
     # Tool shortcuts
     shortcut = parse_local_tool_shortcut(input_text)
     if shortcut:
-        _execute_tool_shortcut(args, state, shortcut["toolName"], shortcut["input"], rerender)
+        _execute_tool_shortcut(
+            args,
+            state,
+            shortcut["toolName"],
+            shortcut["input"],
+            rerender,
+            refresh_skills=input_text.split()[:2] == ["/skills", "install"],
+        )
         return False
 
     # Unknown slash commands

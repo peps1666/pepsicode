@@ -1272,6 +1272,28 @@ class PepsiCodeServer:
         """Handle slash commands like /plan, /hooks, /tools."""
         if session.permissions:
             session.permissions.ensure_local_command_allowed(user_input)
+        if user_input.split()[:2] == ["/skills", "install"]:
+            from pepsicode.cli.local_tool_shortcuts import SKILL_INSTALL_USAGE, skill_install_shortcut
+            from pepsicode.tooling import ToolContext
+
+            shortcut = skill_install_shortcut(user_input)
+            if shortcut is None:
+                return {"output": SKILL_INSTALL_USAGE}
+            result = await asyncio.to_thread(
+                session.tools.execute,
+                shortcut["toolName"],
+                shortcut["input"],
+                context=ToolContext(
+                    cwd=session.cwd,
+                    permissions=session.permissions,
+                    hooks=session.hook_engine,
+                    memory=session.memory_manager,
+                    cancellation_event=session._cancellation_event,
+                ),
+            )
+            if result.ok:
+                session.tools.refresh_skills(session.cwd)
+            return {"output": result.output + ("\nSkills refreshed. Use /skills to view them." if result.ok else "")}
         if user_input == "/plan" or user_input.startswith("/plan "):
             assert session.permissions is not None
             plan_path = session.permissions.enter_plan_mode()
