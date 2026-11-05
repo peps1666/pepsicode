@@ -18,7 +18,7 @@ python -m venv .venv
 
 macOS/Linux 使用 `.venv/bin/python`。必需依赖以 [pyproject.toml](pyproject.toml) 为准，目前包括 `psycopg2-binary` 和 `websockets`，安装时由 pip 解析；不是零依赖项目。开发测试使用 `pip install -e ".[dev]"`；可选语言服务使用 `pip install -e ".[intelligence]"`。
 
-配置通常放在用户目录的 `.pepsi-code/settings.json`；支持的项目设置与环境变量优先级见 [模型配置](docs/configuration.md#模型配置)。推荐通过设置界面填写服务商、模型与 API Key；配置诊断仅输出是否已配置及来源，避免把真实凭据写进示例或报告。
+配置通常放在用户目录的 `.pepsi-code/settings.json`；支持的项目设置与环境变量优先级见 [模型配置](docs/guides/configuration.md#模型配置)。推荐通过设置界面填写服务商、模型与 API Key；配置诊断仅输出是否已配置及来源，避免把真实凭据写进示例或报告。
 
 离线检查可使用 mock 模式，不调用付费接口：
 
@@ -41,11 +41,11 @@ python -m pepsicode.evals --mode smoke --output .evals/first-smoke
 ## 配置与启动故障
 
 - 源码启动缺包：用启动时的同一个 Python 执行 `-m pip install -e .`，核对虚拟环境。
-- 桌面提示缺少内置后端：重新完整解压对应 ZIP；源码开发先按 [Windows 构建说明](docs/windows-zip-tdd.md) 构建后端。
+- 桌面提示缺少内置后端：重新完整解压对应 ZIP；源码开发先按 [Windows 构建说明](docs/archive/windows-zip-tdd.md) 构建后端。
 - 连接或鉴权错误：运行 `--validate-config`，核对服务商地址、模型和凭据来源，勿直接发送配置全文。
-- 检查被拒绝、用量未知或任务未完成：查看具体原因及 [任务验收说明](docs/task-orchestration.md)，不要把进程退出当成行为已验证。
+- 检查被拒绝、用量未知或任务未完成：查看具体原因及 [任务验收说明](docs/architecture/task-orchestration.md)，不要把进程退出当成行为已验证。
 
-开发构建身份、成品验证与剩余限制见 [项目问题清单](docs/project-issues.md) 和 [执行边界](docs/harness-boundaries.md)。
+开发构建身份、成品验证与剩余限制见 [项目问题清单](docs/development/project-issues.md) 和 [执行边界](docs/architecture/harness-boundaries.md)。
 
 ## QQ 私聊入口
 

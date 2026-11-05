@@ -1,7 +1,7 @@
 # AGENTS.md
 
 PepsiCode 是本地编程代理：Python 内核供终端 TUI、Electron 桌面端和 QQ 通道共用。
-修改前阅读 `docs/development.md`；涉及权限、执行或恢复时阅读 `docs/harness-boundaries.md`。
+修改前阅读 `docs/development/development.md`；涉及权限、执行或恢复时阅读 `docs/architecture/harness-boundaries.md`。
 本文件是项目工作约定，不高于运行环境中的系统、开发者和用户指令；具体权限以实际 Harness 配置和执行层判定为准。
 
 ## 任务与授权
@@ -23,15 +23,15 @@ PepsiCode 是本地编程代理：Python 内核供终端 TUI、Electron 桌面�
 
 - 共享执行规则放在内核；修改时检查各前端和通道的调用路径。优先复用现有工具、Hook、Skills 和 MCP 接口；属于循环职责的行为才修改主循环。
 - 保留原有业务逻辑和已有工作区改动，遵循现有架构、命名和依赖约定；不夹带无关重构或依赖升级。修改协议、配置或会话格式时，同步检查消费者与旧会话恢复；用户可见行为变化，同步更新对应文档。
-- 改动任务状态、验收条件或持久会话字段时，检查任务修订号、旧记录读取和恢复后的证据有效性；保留历史记录，不把无法证明仍有效的旧证据当成通过。具体机制见 `docs/task-orchestration.md`。
-- 改动模型请求构造或注入的临时上下文时，检查执行范围内实际请求是否仍由 `model/prepared` 记录，且不记录认证请求头；请求日志用于重建输入，不代表模型输出可重现或日志防篡改。见 `docs/harness-boundaries.md`。
+- 改动任务状态、验收条件或持久会话字段时，检查任务修订号、旧记录读取和恢复后的证据有效性；保留历史记录，不把无法证明仍有效的旧证据当成通过。具体机制见 `docs/architecture/task-orchestration.md`。
+- 改动模型请求构造或注入的临时上下文时，检查执行范围内实际请求是否仍由 `model/prepared` 记录，且不记录认证请求头；请求日志用于重建输入，不代表模型输出可重现或日志防篡改。见 `docs/architecture/harness-boundaries.md`。
 - 按实际副作用选择工具：只读查询、可恢复的本地修改和可能不可逆的进程或外部调用分别评估，不凭工具名称认定安全。工具失败后检查错误与状态；重试需有新的诊断证据或不同方案。结果不明或可能已部分生效的操作先核对，不自动重放。
-- **Harness 运行时要求：**内置工具的文件、进程和外部服务副作用必须经过 `execution/` 对应入口；权限、审批、Plan 模式、路径和沙箱限制由执行层强制约束，不能只靠提示词。父子任务共用预算、取消与截止时间；工具输出和模型上下文必须有界。实现范围与局限见 `docs/harness-boundaries.md`，不得把未实现的隔离或审计能力写成现状。
+- **Harness 运行时要求：**内置工具的文件、进程和外部服务副作用必须经过 `execution/` 对应入口；权限、审批、Plan 模式、路径和沙箱限制由执行层强制约束，不能只靠提示词。父子任务共用预算、取消与截止时间；工具输出和模型上下文必须有界。实现范围与局限见 `docs/architecture/harness-boundaries.md`，不得把未实现的隔离或审计能力写成现状。
 - 模型能力使用接口或显式配置。Python 支持 3.11+，格式遵循 `pyproject.toml`；路径、进程和编码兼顾 Windows 与 POSIX。
 
 ## 验证与交付
 
-先运行受影响模块的测试；共享执行入口或跨模块改动扩大验证范围，不因文件较少而省略调用方检查。会话恢复、执行审批、任务验收和模型请求记录的改动分别选择对应回归测试（如 `tests/test_verification_resume.py`、`tests/test_execution_recovery.py`、`tests/test_task_orchestration.py`、`tests/test_execution_boundaries.py`）。行为修复应补充能复现问题的回归测试。不得伪造测试数据、删除失败用例或降低断言以掩盖问题。
+先运行受影响模块的测试；共享执行入口或跨模块改动扩大验证范围，不因文件较少而省略调用方检查。会话恢复、执行审批、任务验收和模型请求记录的改动分别选择对应回归测试（如 `tests/core/test_verification_resume.py`、`tests/execution/test_execution_recovery.py`、`tests/core/test_task_orchestration.py`、`tests/execution/test_execution_boundaries.py`）。行为修复应补充能复现问题的回归测试。不得伪造测试数据、删除失败用例或降低断言以掩盖问题。
 
 仓库根目录的验证入口，按改动范围选用；版本或入口链接变化检查 `scripts/check_project.py`：
 
