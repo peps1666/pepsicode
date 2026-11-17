@@ -12,8 +12,8 @@ from tempfile import TemporaryDirectory
 from pepsicode.core.agent_loop import append_queued_inputs
 from pepsicode.core.input_queue import TurnInputQueue
 from pepsicode.core.loop_engine import VerificationResult, run_loop
-from pepsicode.core.session_tree import checkpoint_messages
-from pepsicode.core.task_control import begin_task, edit_control, snapshot
+from pepsicode.core.session_tree import checkpoint_messages, current_session
+from pepsicode.core.task_control import begin_task, edit_control, is_continuation, pending_questions, snapshot
 from pepsicode.core.task_verification import TaskVerifier, settle_task, settle_task_failure
 from pepsicode.core.verification_discovery import Check as Check
 from pepsicode.core.verification_discovery import command_timeout, discover_checks
@@ -176,8 +176,53 @@ class ProjectVerifier:
         return VerificationResult(True, f"{len(checks)} verification check(s) passed", "\n".join(reports), "passed")
 
 
+def run_verified_turn(*, runtime, runner, **options):
+    """Select the configured session execution owner before beginning the turn."""
+    session = current_session()
+    permissions = options.get("permissions")
+    if (
+        session is None
+        or not (runtime or {}).get("orchestration", {}).get("enabled")
+        or permissions is None
+        or permissions.is_plan_mode
+        or permissions.mode == "read_only"
+    ):
+        return _run_verified_turn(runtime=runtime, runner=runner, **options)
+
+    from pepsicode.orchestration.interactive import coordinator_runner
+    from pepsicode.orchestration.runtime import own_session, own_workspace
+
+    hooks = options.get("hook_engine")
+    with own_session(session.session_id), own_workspace(session.workspace):
+        try:
+            work = (session.task_control.get("orchestration") or {}).get("effects", [])
+            if any(effect["state"] in {"claimed", "recovery_pending"} for effect in work):
+                messages = options["messages"]
+                human = next(
+                    (m["content"] for m in reversed(messages) if m["role"] == "user" and not m.get("internal")), ""
+                )
+                if not is_continuation(human):
+                    result = [
+                        *messages,
+                        {
+                            "role": "assistant",
+                            "content": "A Worker was interrupted. Send “继续” to recover the current task first.",
+                            "isError": True,
+                            "finishReason": "orchestration_recovery",
+                        },
+                    ]
+                    checkpoint_messages(result)
+                    if inbox := options.get("input_queue"):
+                        inbox.close()
+                    return result
+            return _run_verified_turn(runtime=runtime, runner=coordinator_runner(session, runtime, runner), **options)
+        finally:
+            if hooks:
+                hooks.wait_background()
+
+
 @scoped_turn
-def run_verified_turn(
+def _run_verified_turn(
     *,
     runtime: dict | None,
     runner,
@@ -376,11 +421,9 @@ def _run_verified_turn_once(
         and report.get("reason_code") == "awaiting_user"
         and not (result.messages and result.messages[-1].get("awaitingUser"))
     ):
-        pending = [
-            q["question"]
-            for q in snapshot().get("questions", [])
-            if q["status"] == "pending" and q.get("required", True)
-        ]
+        control = snapshot()
+        task_id = (control.get("task") or {}).get("id")
+        pending = [q["question"] for q in pending_questions(control, task_id) if q["required"]]
         result.messages.append(
             {"role": "assistant", "content": "\n".join(pending) or "Waiting for your reply.", "awaitingUser": True}
         )

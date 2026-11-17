@@ -60,7 +60,7 @@ class AgentDefinition:
                 "relevant files and understanding structure. "
                 "You can only use read-only tools."
             ),
-            allowed_tools=["read_file", "list_files", "grep_files"],
+            allowed_tools=["read_file", "list_files", "grep_files", "agent_report"],
             is_read_only=True,
             max_turns=5,
         )
@@ -78,7 +78,7 @@ class AgentDefinition:
                 "code paths, and build a complete mental model. "
                 "You can only use read-only tools."
             ),
-            allowed_tools=["read_file", "list_files", "grep_files"],
+            allowed_tools=["read_file", "list_files", "grep_files", "agent_report"],
             is_read_only=True,
             max_turns=8,
         )

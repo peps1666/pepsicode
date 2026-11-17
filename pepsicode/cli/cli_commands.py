@@ -42,6 +42,8 @@ SLASH_COMMANDS = [
     SlashCommand("/history", "/history", "Show recent prompt history.", "Session"),
     SlashCommand("/retry", "/retry", "在新分支重新生成上一条用户消息的回答，保留原路线。", "Session"),
     SlashCommand("/tree", "/tree", "选择当前会话的对话位置，文件保持当前状态。", "Session"),
+    SlashCommand("/agents", "/agents", "查看 Agent 执行状态，可指定执行 ID 或分页偏移。", "Session"),
+    SlashCommand("/answer", "/answer ", "用问题 ID 回复 Agent 提问。", "Session"),
     SlashCommand("/fork", "/fork", "选择一条用户消息创建独立会话。", "Session"),
     SlashCommand("/clone", "/clone", "将当前对话路线复制为新会话。", "Session"),
     SlashCommand("/plan", "/plan [task]", "Enter read-only Plan mode.", "Session"),

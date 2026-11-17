@@ -11,7 +11,7 @@ import time
 from pathlib import Path
 
 from pepsicode.cancellation import TurnCancelledError
-from pepsicode.execution.runtime import current_scope, current_tool_context
+from pepsicode.execution.runtime import current_scope, current_tool_context, run_policy_checkpoint
 from pepsicode.execution.windows import popen_args, resolve_argv
 from pepsicode.sandbox import SandboxPolicy
 from pepsicode.sandbox.backend import SandboxUnavailableError
@@ -90,7 +90,11 @@ def checked_argv(argv, *, context=None, cwd=None, reason=None, environment=None)
         policy = SandboxPolicy(
             getattr(permissions, "process_sandbox_mode", SandboxMode.DANGER_FULL_ACCESS), permissions.workspace_root
         )
-        confined = permissions.sandbox.confine(actual, policy)
+        backend = permissions.sandbox
+        if scope and scope.worker_sandbox:
+            backend = scope.worker_sandbox
+            policy = SandboxPolicy(SandboxMode.WORKSPACE_WRITE, scope.workspace_boundary, cwd=str(target))
+        confined = backend.confine(actual, policy)
         if policy.mode != SandboxMode.DANGER_FULL_ACCESS and confined.enforcement != "full":
             raise SandboxUnavailableError("Requested process confinement is unavailable; command not started")
         actual = confined.argv
@@ -101,6 +105,7 @@ def checked_argv(argv, *, context=None, cwd=None, reason=None, environment=None)
             raise PermissionError("Process working directory changed during approval")
     if scope:
         scope.check_cancelled()
+        run_policy_checkpoint(scope, kind="command", argv=actual, path=str(target))
     if context.cancellation_event is not None and context.cancellation_event.is_set():
         raise TurnCancelledError("Process cancelled before dispatch")
     return actual, str(target), context, enforcement
@@ -113,12 +118,17 @@ def Popen(argv, *, context=None, reason=None, persistent=False, **kwargs):  # no
         raise ValueError("Process executable overrides and preexec hooks bypass reviewed argv")
     if kwargs.get("start_new_session") is False:
         raise ValueError("Processes must belong to an owned process group")
-    if kwargs.get("env") is None:
+    context = _context(context, kwargs.get("cwd"))
+    scope = getattr(context, "execution", None) or current_scope()
+    if persistent and scope is not None and not scope.allow_background_processes:
+        raise PermissionError("Persistent commands are unavailable in managed Worker attempts")
+    if scope is not None and scope.process_environment is not None:
+        kwargs["env"] = dict(scope.process_environment)
+    elif kwargs.get("env") is None:
         kwargs["env"] = dict(os.environ)
     actual, cwd, context, enforcement = checked_argv(
         argv, context=context, cwd=kwargs.pop("cwd", None), reason=reason, environment=kwargs["env"]
     )
-    scope = getattr(context, "execution", None) or current_scope()
     if scope:
         scope.record("process/prepared", argv=actual, cwd=cwd, enforcement=enforcement)
     if os.name != "nt":
@@ -148,16 +158,16 @@ def Popen(argv, *, context=None, reason=None, persistent=False, **kwargs):  # no
     return process
 
 
-def stop(process, job=None):
+def stop(process, job=None, *, drain=True):
     """Stop only this owned tree, and wait for its pipes and process to settle."""
     lock = getattr(process, "_pepsi_stop_lock", None)
     if lock is None:
-        return _stop(process, job)
+        return _stop(process, job, drain)
     with lock:
-        return _stop(process, job)
+        return _stop(process, job, drain)
 
 
-def _stop(process, job):
+def _stop(process, job, drain):
     if os.name == "nt" and job is not None:
         job.terminate()
     elif os.name != "nt":
@@ -172,8 +182,31 @@ def _stop(process, job):
         )
         if process.poll() is None:
             process.kill()
-    if process.poll() is None:
+    if not drain:
+        process.wait(timeout=5)
+    elif process.poll() is None:
         process.communicate(timeout=5)
+
+
+def release(process, context, *, drain=True):
+    """Retire an owned foreground process and its registered descendants."""
+    job = getattr(process, "_pepsi_job", None)
+    try:
+        if process.poll() is None:
+            stop(process, job, drain=drain)
+        if job is not None:
+            job.terminate()
+        elif os.name != "nt":
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+    finally:
+        if job is not None:
+            job.close()
+        if context.permissions is not None and hasattr(context.permissions, "_processes"):
+            with context.permissions._process_lock:
+                context.permissions._processes.discard(process)
 
 
 def _watch_background(process, context, scope):
@@ -211,6 +244,8 @@ def _watch_background(process, context, scope):
         if context.permissions is not None and hasattr(context.permissions, "_processes"):
             with context.permissions._process_lock:
                 context.permissions._processes.discard(process)
+        if scope:
+            scope.observe("background/end", pid=process.pid)
 
 
 def run(argv, *, context=None, reason=None, timeout=None, capture_output=False, input=None, check=False, **kwargs):
@@ -251,17 +286,4 @@ def run(argv, *, context=None, reason=None, timeout=None, capture_output=False, 
             except subprocess.TimeoutExpired:
                 first = False
     finally:
-        if process.poll() is None:
-            stop(process, job)
-        if job is not None:
-            # Also drain descendants that detached their stdio before exit.
-            job.terminate()
-            job.close()
-        elif os.name != "nt":
-            try:
-                os.killpg(process.pid, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
-        if context.permissions is not None and hasattr(context.permissions, "_processes"):
-            with context.permissions._process_lock:
-                context.permissions._processes.discard(process)
+        release(process, context)

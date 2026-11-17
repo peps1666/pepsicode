@@ -82,7 +82,7 @@ export const useConnectionStore = create<ConnectionState>((set, get) => ({
       ws.onopen = () => {
         if (!active()) return;
         try {
-          ws.send(JSON.stringify({ kind: "request", id: 0, method: "connection/auth", params: { token } }));
+          ws.send(JSON.stringify({ kind: "request", id: 0, method: "connection/auth", params: { token, orchestration: 1 } }));
         } catch {
           fail(new Error("Connection authentication failed"));
         }

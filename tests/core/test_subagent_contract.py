@@ -94,22 +94,51 @@ def test_custom_readonly_review_is_allowed_in_plan_mode(tmp_path):
 
 
 def test_explore_tasks_execute_concurrently_and_join(tmp_path):
+    from pepsicode.agents.trace import TraceManager
+    from pepsicode.tools.read_file import read_file_tool
     from pepsicode.types import AgentStep
 
     barrier = threading.Barrier(3, timeout=5)
+    for n in range(3):
+        (tmp_path / f"item {n}.txt").write_text(f"file contents {n}", encoding="utf-8")
 
     class Model:
-        def next(self, messages):
-            barrier.wait()
-            return AgentStep(type="assistant", content=next(m["content"] for m in messages if m.get("role") == "user"))
+        last_usage = {"input_tokens": 7, "output_tokens": 3}
 
-    tool = create_task_tool(str(tmp_path), None, model_factory=lambda registry: Model())
+        def next(self, messages):
+            task = next(m["content"] for m in messages if m.get("role") == "user")
+            if not any(m["role"] == "tool_result" for m in messages):
+                barrier.wait()
+                return AgentStep(
+                    type="tool_calls",
+                    calls=[{"id": "read", "toolName": "read_file", "input": {"path": f"{task}.txt"}}],
+                )
+            return AgentStep(type="assistant", content=task)
+
+    def broken_display(_event, _data):
+        raise RuntimeError("display disconnected")
+
+    traces = TraceManager("session")
+    tool = create_task_tool(
+        str(tmp_path), None, model_factory=lambda registry: Model(), trace_manager=traces, on_tool_event=broken_display
+    )
     calls = [
         {"id": str(n), "toolName": "task", "input": {"agent_type": "explore", "task": f"item {n}"}} for n in range(3)
     ]
-    results = _execute_calls_in_order(calls, ToolRegistry([tool]), ToolContext(str(tmp_path)), None, None)
+    results = _execute_calls_in_order(
+        calls, ToolRegistry([tool, read_file_tool]), ToolContext(str(tmp_path)), None, None
+    )
     assert all(result.ok for result in results)
     assert all(f"item {n}" in result.output for n, result in enumerate(results))
+    nodes = {node.trace_id: node for node in traces.all_nodes()}
+    assert len(nodes) == len({node.execution_scope_id for node in nodes.values()}) == 3
+    for n, result in enumerate(results):
+        node = nodes[result.details["trace_id"]]
+        assert (node.parent_id, node.parent_call_id, node.task) == ("session", str(n), f"item {n}")
+        assert (node.input_tokens, node.output_tokens, node.status) == (14, 6, "completed")
+        assert node.tool_call_count == 1
+        assert node.recent_tools[0].id == "read"
+        assert f"file contents {n}" in node.recent_tools[0].output
 
 
 def test_child_request_quota_shares_parent_budget(tmp_path):
@@ -127,19 +156,30 @@ def test_child_request_quota_shares_parent_budget(tmp_path):
 
 
 def test_child_approval_identifies_execution(tmp_path):
+    from pepsicode.agents.status import observe_activity, trace_view
+    from pepsicode.agents.trace import TraceManager
     from pepsicode.approval.types import ApprovalDecision, ApprovalKind, ApprovalRequest
 
     seen = []
-    permissions = PermissionManager(
-        str(tmp_path), prompt=lambda payload: seen.append(payload) or {"decision": "deny_once"}
-    )
-    scope = ExecutionScope(str(tmp_path), parent_task_id="parent", agent_scope="subagent:General")
+    trace = TraceManager("session")
+    trace_id = trace.create(agent_type="general", name="General").trace_id
+
+    def prompt(payload):
+        seen.append(payload)
+        assert trace_view(trace, {})["records"][0]["stage"] == "waiting_approval"
+        return {"decision": "deny_once"}
+
+    permissions = PermissionManager(str(tmp_path), prompt=prompt)
+    scope = ExecutionScope(str(tmp_path), parent_task_id="parent", agent_scope="subagent:General", trace_id=trace_id)
+    scope.activity_observer = lambda event, data: observe_activity(trace, trace_id, event, data)
     request = ApprovalRequest(ApprovalKind.EDIT, "edit", [], "file", [])
     with bind_scope(scope):
         outcome = permissions._request_approval(request)
     assert outcome.decision == ApprovalDecision.DENY_ONCE
     assert seen[0]["metadata"]["execution_id"] == scope.task_id
+    assert seen[0]["metadata"]["trace_id"] == trace_id
     assert "subagent:General" in seen[0]["details"][0]
+    assert not trace.get(trace_id).activities
 
 
 def test_approval_prompts_are_serialized(tmp_path):
@@ -210,4 +250,4 @@ def test_child_cannot_obtain_tools_missing_from_parent_registry(tmp_path):
         "task", {"agent_type": "general", "task": "inspect"}, ToolContext(str(tmp_path))
     )
     assert result.ok
-    assert available == []
+    assert available == ["agent_report"]  # host-bound metadata is injected into the Worker registry

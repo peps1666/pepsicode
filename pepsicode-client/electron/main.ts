@@ -1,6 +1,6 @@
 import { app, BrowserWindow, ipcMain, dialog } from "electron";
 import type { ChildProcess } from "node:child_process";
-import { mkdirSync, createWriteStream, type WriteStream } from "node:fs";
+import { mkdirSync, createWriteStream, readFileSync, type WriteStream } from "node:fs";
 import * as path from "node:path";
 import * as net from "node:net";
 import { randomBytes } from "node:crypto";
@@ -27,6 +27,12 @@ let serverPort = 0;
 let quitting = false;
 let backendLog: WriteStream | null = null;
 const serverToken = randomBytes(32).toString("hex");
+// M3 resident service: when PEPSICODE_SERVICE_URL is set, the desktop attaches
+// to that service instead of spawning (and later killing) its own backend.
+// Closing the window only disconnects the control channel — the service keeps
+// running and its authorized tasks keep progressing.
+let externalService = false;
+let serverTokenExternal = "";
 
 function rendererURL(): string {
   return !app.isPackaged && process.env.PEPSI_DEV_SERVER === "1"
@@ -78,21 +84,41 @@ async function start(): Promise<void> {
     const workspace = process.env.PEPSI_CODE_WORKSPACE ||
       (app.isPackaged ? path.join(app.getPath("documents"), "Pepsicode Projects") : projectRoot);
     mkdirSync(workspace, { recursive: true });
-    const launch = backendLaunch({ packaged: app.isPackaged, resourcesPath: process.resourcesPath,
-      projectRoot, workspace, env: process.env });
-    serverPort = await findFreePort();
-    backendLog.write(`\n[${new Date().toISOString()}] Starting backend on port ${serverPort}\n`);
-    serverProcess = await launchBackend(launch, {
-      port: serverPort, token: serverToken, origins: serverOrigins(rendererURL()),
-      onLog: (text) => backendLog?.write(text),
-    });
-    serverProcess.once("exit", (code) => {
-      serverProcess = null;
-      if (!quitting) {
-        dialog.showErrorBox("Pepsicode 后端已停止", `后端意外退出（${code}）。请重新启动应用。\n日志：${logPath}`);
-        app.quit();
+    const serviceUrl = process.env.PEPSICODE_SERVICE_URL?.trim();
+    const serviceTokenFile = process.env.PEPSICODE_SERVICE_TOKEN_FILE?.trim();
+    if (serviceUrl) {
+      const parsed = new URL(serviceUrl);
+      if (parsed.protocol !== "ws:" && parsed.protocol !== "wss:") {
+        throw new Error("PEPSICODE_SERVICE_URL 必须是 ws:// 或 wss:// 地址");
       }
-    });
+      serverPort = Number(parsed.port);
+      if (!Number.isInteger(serverPort) || serverPort <= 0) {
+        throw new Error("PEPSICODE_SERVICE_URL 缺少有效端口");
+      }
+      if (!serviceTokenFile) {
+        throw new Error("连接常驻服务需要 PEPSICODE_SERVICE_TOKEN_FILE 指向令牌文件");
+      }
+      serverTokenExternal = readFileSync(serviceTokenFile, "utf8").trim();
+      if (!serverTokenExternal) throw new Error("常驻服务令牌文件为空");
+      externalService = true;
+      backendLog.write(`\n[${new Date().toISOString()}] Attaching to resident service ${parsed.host}:${serverPort}\n`);
+    } else {
+      const launch = backendLaunch({ packaged: app.isPackaged, resourcesPath: process.resourcesPath,
+        projectRoot, workspace, env: process.env });
+      serverPort = await findFreePort();
+      backendLog.write(`\n[${new Date().toISOString()}] Starting backend on port ${serverPort}\n`);
+      serverProcess = await launchBackend(launch, {
+        port: serverPort, token: serverToken, origins: serverOrigins(rendererURL()),
+        onLog: (text) => backendLog?.write(text),
+      });
+      serverProcess.once("exit", (code) => {
+        serverProcess = null;
+        if (!quitting) {
+          dialog.showErrorBox("Pepsicode 后端已停止", `后端意外退出（${code}）。请重新启动应用。\n日志：${logPath}`);
+          app.quit();
+        }
+      });
+    }
     createWindow();
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
@@ -112,7 +138,7 @@ else {
 }
 
 app.on("activate", () => {
-  if (!mainWindow && serverProcess && !quitting) createWindow();
+  if (!mainWindow && (serverProcess || externalService) && !quitting) createWindow();
 });
 app.on("window-all-closed", () => { if (process.platform !== "darwin") app.quit(); });
 app.on("before-quit", (event) => {
@@ -129,12 +155,13 @@ app.on("before-quit", (event) => {
 
 ipcMain.handle("get-server-port", () => serverPort);
 ipcMain.handle("get-server-connection", (event) => {
-  if (!mainWindow || !serverProcess || event.sender !== mainWindow.webContents ||
+  const backendAvailable = externalService ? serverPort > 0 : !!serverProcess;
+  if (!mainWindow || !backendAvailable || event.sender !== mainWindow.webContents ||
       event.senderFrame !== mainWindow.webContents.mainFrame ||
       !trustedRenderer(event.senderFrame.url, rendererURL())) {
     throw new Error("Untrusted connection credential request or backend unavailable");
   }
-  return { port: serverPort, token: serverToken };
+  return { port: serverPort, token: externalService ? serverTokenExternal : serverToken };
 });
 ipcMain.handle("select-folder", async () => {
   if (!mainWindow) return null;

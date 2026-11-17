@@ -30,7 +30,7 @@ if TYPE_CHECKING:
 GLOBAL_DISALLOWED: frozenset[str] = frozenset(
     {
         "task",  # prevent recursion
-        "ask_user",  # sub-agents cannot interact with the user
+        "ask_user",  # the host routes Worker questions through agent_report
     }
 )
 
@@ -46,6 +46,7 @@ READ_ONLY_TOOLS: frozenset[str] = frozenset(
         "find_symbols",
         "find_references",
         "get_ast_info",
+        "agent_report",
     }
 )
 

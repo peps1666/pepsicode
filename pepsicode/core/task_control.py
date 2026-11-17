@@ -35,6 +35,10 @@ def validate_control(control):
     """Validate the durable/wire boundary before installing recovered state."""
     if not isinstance(control, dict) or isinstance(control.get("version", 1), bool) or control.get("version", 1) != 1:
         raise ValueError("Unsupported task control state")
+    if "orchestration" in control:
+        from pepsicode.orchestration.schema import validate_orchestration
+
+        validate_orchestration(control["orchestration"])
     task = control.get("task")
     if task is not None:
         if not isinstance(task, dict) or not all(
@@ -107,6 +111,8 @@ def edit_control(context=None, session=None):
             yield control
             control.setdefault("version", 1)
             if session:
+                if session.agent_traces.has_records() or before.get("orchestration") != control.get("orchestration"):
+                    session.agent_traces.touch()
                 save_session(session)
         except BaseException:
             control.clear()
@@ -118,6 +124,27 @@ def snapshot(context=None):
     session, control = owner(context)
     with session._tree_lock if session else _fallback_lock:
         return copy.deepcopy(control)
+
+
+def pending_questions(control, task_id):
+    from pepsicode.core.session_tree import branch_path
+
+    pending = [q for q in control.get("questions", []) if q["task_id"] == task_id and q["status"] == "pending"]
+    session = current_session()
+    if session is None or not any(q.get("trace_id") for q in pending):
+        return pending
+    with session._tree_lock:
+        ancestors = {node["id"] for node in branch_path(session)}
+        traces = {node.trace_id: node for node in session.agent_traces.all_nodes()}
+    return [
+        q
+        for q in pending
+        if (
+            q.get("trace_id") not in traces
+            or not traces[q["trace_id"]].branch_entry_id
+            or traces[q["trace_id"]].branch_entry_id in ancestors
+        )
+    ]
 
 
 def classify_intent(text):
@@ -207,22 +234,50 @@ def begin_task(messages, runtime):
             if not task.get("pending_intents"):
                 task["admitted_revision"] = task["revision"]
             return copy.deepcopy(task)
+        answer_to = source.get("answerTo", [])
+        pending = pending_questions(control, task["id"]) if task else []
+        if answer_to and not set(answer_to) <= {question["id"] for question in pending}:
+            raise ValueError("Question is no longer pending in the current task")
+        orchestration = control.get("orchestration") or {}
+        if (
+            task
+            and runtime.get("orchestration", {}).get("enabled")
+            and task["id"] in orchestration.get("budgets", {})
+            and task["status"] not in {"complete", "answered", "cancelled"}
+            and not answer_to
+            and source.get("mode") != "follow_up"
+            and re.fullmatch(r"\s*(?:继续|继续执行|接着做|continue|resume)[.!。！\s]*", human["content"], re.I)
+            and any(
+                item["task_id"] == task["id"]
+                and item["revision"] == task["revision"]
+                and item["state"] in {"queued", "starting", "stop_requested", "recovery_pending", "waiting_user"}
+                for item in orchestration.get("work", [])
+            )
+        ):
+            task.update(status="active", evidence=[])
+            return copy.deepcopy(task)
         resume = (
             task
             and source.get("mode") != "follow_up"
-            and (task["status"] == "waiting_user" or is_continuation(human["content"]))
-            and task["status"] not in {"complete", "answered"}
+            and (
+                answer_to
+                or (
+                    (task["status"] == "waiting_user" or is_continuation(human["content"]))
+                    and task["status"] not in {"complete", "answered"}
+                )
+            )
         )
         if resume:
             from pepsicode.core.task_intent import apply_user_instruction
 
+            waiting_for_reply = task["status"] == "waiting_user"
             apply_user_instruction(task, input_id, human["content"], delivered=True)
-            pending = [
-                q for q in control.get("questions", []) if q["task_id"] == task["id"] and q["status"] == "pending"
-            ]
-            answer_to = source.get("answerTo", [])
             for question in pending:
-                if question["id"] in answer_to or (len(pending) == 1 and not answer_to):
+                if question["id"] in answer_to or (
+                    len(pending) == 1
+                    and not answer_to
+                    and (not question.get("trace_id") or (waiting_for_reply and question["required"]))
+                ):
                     question.update(status="answered", answer=human["content"], answer_input_id=input_id)
         else:
             if task:
@@ -279,8 +334,12 @@ def admit_steering(items, *, messages=None):
                 task = control.get("task")
                 if task:
                     for item in items:
-                        if item.mode == "steer":
+                        if item.mode == "steer" and not item.external:
                             apply_user_instruction(task, item.id, item.content, delivered=True)
+                            if item.answer_to:
+                                for question in pending_questions(control, task["id"]):
+                                    if question["id"] in item.answer_to:
+                                        question.update(status="answered", answer=item.content, answer_input_id=item.id)
                 if messages is not None:
                     from pepsicode.core.session_tree import checkpoint_messages
 

@@ -6,6 +6,7 @@ import { mdToPlain, splitForQQ, truncateText } from '../vendor/qq-bridge/md-to-p
 const HELP = `我是 Pepsi，可以陪你聊聊，也能帮你处理配置好的本地项目。
 直接发文字就好，忙的时候我会按顺序回复。
 /help 帮助 · /status 状态 · /new 新对话
+/agents 查看 Agent · /agent-stop 追踪编号 · /answer 问题编号 回复内容
 /stop 停止当前任务并清空排队 · /continue 继续暂停的队列
 /approve 编号 同意一次 · /deny 编号 拒绝一次
 /outbox 查看待发送消息 · /resend 编号 重发结果未知的消息 · /discard 编号 丢弃该消息
@@ -72,8 +73,9 @@ export class PrivateBridge {
     return result;
   }
 
-  say(text) {
+  say(text, noticeId) {
     if (!text) return;
+    if (noticeId && this.state.agentNotices?.includes(noticeId)) return;
     const plain = truncateText(mdToPlain(this.redact(text)), 40000);
     const chunks = splitForQQ(plain, this.config.limits.messageChars);
     if (String(text).length > 40000) chunks.push('回复过长，以上仅显示前 40000 字符。完整内容请查看 pepsicode 会话历史。');
@@ -86,6 +88,7 @@ export class PrivateBridge {
       return;
     }
     this.state.outbox.push(...chunks.map((content) => ({ id: randomUUID().slice(0, 8), text: content, status: 'pending' })));
+    if (noticeId) this.state.agentNotices = [...(this.state.agentNotices ?? []), noticeId].slice(-512);
     this.store.save();
     void this.flush();
   }
@@ -140,6 +143,7 @@ export class PrivateBridge {
       if (restored.profile !== 'qq_private') throw new Error('保存的会话不是 Pepsi 私聊，请备份并移走 state 后重新启动');
       this.awaitingReply = ['waiting_user', 'blocked'].includes(restored.task?.status);
       this.mock = restored.isMock === true;
+      this.agentNotices(restored.agents);
       // Recover the old false pause without replaying any interrupted input or
       // granting completion to a coding task. New work keeps normal verification.
       resumeChatQueue = !this.state.inFlight && restored.task?.kind === 'answer'
@@ -150,6 +154,7 @@ export class PrivateBridge {
     }
     await this.pepsi.request('permissions/set', { mode: this.config.accessMode });
     this.backendReady = true;
+    await this.fetchServiceNotifications();
     if (this.mock) this.say('当前运行的是离线演示模型，还不能正常 AI 聊天。请先在 pepsicode 配置模型，关闭 mock 模式后重启桥接。');
     const uncertain = this.state.outbox.filter((item) => item.status === 'uncertain').length;
     if (uncertain) this.say(`上次有 ${uncertain} 条消息发送结果未知，不会自动重发。发 /outbox 可以核对。`);
@@ -163,6 +168,24 @@ export class PrivateBridge {
       }
       this.store.save();
       this.say(`上次连接中断或退出，正在运行的消息不会自动重跑。还有 ${this.state.inbox.length} 条未开始的消息，/continue 可继续；/stop 可清空。`);
+    }
+  }
+
+  // Reconnect catch-up for M3 service notifications: fetch what accumulated
+  // while the bridge was offline and surface each entry once (deduped by id).
+  // Failures are ignored so an older kernel without the API still works.
+  async fetchServiceNotifications() {
+    try {
+      const result = await this.pepsi.request('notifications/fetch', { cursor: this.state.notificationCursor ?? 0 });
+      const items = Array.isArray(result.notifications) ? result.notifications : [];
+      this.state.notificationCursor = typeof result.cursor === 'number' ? result.cursor : this.state.notificationCursor ?? 0;
+      this.store.save();
+      for (const item of items) {
+        if (!item || typeof item.id !== 'string') continue;
+        this.say(`${item.title}${item.body ? `\n${truncateText(String(item.body), 600)}` : ''}`, `svc:${item.id}`);
+      }
+    } catch {
+      // Older kernel without notifications/fetch: nothing to catch up on.
     }
   }
 
@@ -254,7 +277,36 @@ export class PrivateBridge {
     const arg = args.join(' ');
     if (command === '/help') return this.say(HELP);
     if (command === '/status') {
-      return this.say(`Pepsi ${this.busy ? '正在回复' : '空闲'}${this.paused ? '，队列已暂停' : ''}。\n排队 ${this.state.inbox.length} 条，待发送 ${this.state.outbox.length} 条。\n上轮状态：${this.state.lastStatus ?? '尚未开始'}\n权限：${this.config.accessMode}；会话：${this.state.sessionId ?? '未创建'}`);
+      const service = this.state.serviceGeneration ? `；常驻服务代次 ${this.state.serviceGeneration.slice(0, 8)}` : '';
+      return this.say(`Pepsi ${this.busy ? '正在回复' : '空闲'}${this.paused ? '，队列已暂停' : ''}。\n排队 ${this.state.inbox.length} 条，待发送 ${this.state.outbox.length} 条。\n上轮状态：${this.state.lastStatus ?? '尚未开始'}\n权限：${this.config.accessMode}；会话：${this.state.sessionId ?? '未创建'}${service}`);
+    }
+    if (command === '/agents') {
+      if (!this.backendReady) return this.say('Pepsi 服务未连接，请重启桥接。');
+      const params = /^\d{1,8}$/.test(arg) ? { offset: Number(arg) } : arg ? { trace_id: arg } : {};
+      const view = await this.pepsi.request('agent/snapshot', { session_id: this.state.sessionId, ...params });
+      return this.say(view.records.slice(0, 20).map((row) =>
+        `${row.name} [${row.trace_id}] · ${row.stage} · ${Math.round(row.elapsed_seconds)} 秒\n`
+        + truncateText(row.activities.at(-1)?.summary || row.report?.summary || row.end_reason || row.task, 160)
+      ).join('\n') + (view.next_offset == null ? '' : `\n更多：/agents ${view.next_offset}`) || '当前会话没有匹配的 Agent 执行。');
+    }
+    if (command === '/agent-stop') {
+      if (!this.backendReady || !this.busy || !arg) return this.say('运行中可用 /agent-stop Worker追踪编号。');
+      const result = await this.pepsi.request('agent/cancel', { session_id: this.state.sessionId, trace_id: arg });
+      return this.say(result.state === 'cancelled' ? '已取消排队任务。' : '已请求停止这个 Worker。');
+    }
+    if (command === '/answer') {
+      const [id, ...reply] = args;
+      if (!this.backendReady || !id || !reply.length) return this.say('用法：/answer 问题编号 回复内容。');
+      if (this.busy) {
+        await this.pepsi.request('turn/enqueue', { input: reply.join(' '), mode: 'steer', answer_to: [id] });
+        return this.say('回复已提交。');
+      }
+      this.state.inbox.unshift({ id: randomUUID(), text: reply.join(' '), answerTo: [id] });
+      this.awaitingReply = false;
+      this.paused = false;
+      this.store.save();
+      void this.pump();
+      return;
     }
     if (command === '/outbox') {
       const uncertain = this.state.outbox.filter((item) => item.status === 'uncertain');
@@ -314,12 +366,28 @@ export class PrivateBridge {
   }
 
   backendEvent(packet) {
-    if (packet.kind !== 'event' || !this.busy) return;
+    if (packet.kind !== 'event') return;
     const data = packet.data ?? {};
+    if (packet.event === 'connection/ready' && data.service) {
+      // M3 resident service: record the generation so a reconnect shows
+      // which service instance owns the session; disconnects never stop it.
+      const generation = String(data.generation ?? '');
+      if (generation && generation !== this.state.serviceGeneration) {
+        this.state.serviceGeneration = generation;
+        this.store.save();
+        if (this.backendReady) this.say(`已切换到常驻服务，代次 ${generation.slice(0, 8)}。断开连接不会停止已授权的任务。`);
+      }
+      return;
+    }
+    if (packet.event === 'agent/update' || packet.event === 'session/view') {
+      this.agentNotices(packet.event === 'agent/update' ? data : data.agents);
+    }
+    if (!this.busy) return;
     if (packet.event === 'permission/request' && typeof data.prompt_id === 'string') {
       this.approvals.set(data.prompt_id, Date.now() + 295000);
       this.say(`需要你确认一次操作：\n${data.summary ?? data.kind}\n${truncateText((data.details ?? []).join('\n'), 2500)}\n同意：/approve ${data.prompt_id}\n拒绝：/deny ${data.prompt_id}\n约 5 分钟内有效，未回复将拒绝。`);
     }
+    if (packet.event === 'permission/withdrawn') this.approvals.delete(data.prompt_id);
     if (packet.event === 'message/end' && data.role !== 'progress' && data.content) {
       this.turnOutput = true;
       this.say(data.content);
@@ -334,6 +402,22 @@ export class PrivateBridge {
       this.awaitingReply = ['waiting_user', 'awaiting_user', 'blocked'].includes(data.status);
       if (data.status === 'blocked') this.say('这次任务还没有通过完成验证，队列已暂停。可以发补充说明继续，或发 /new 开一段新对话。');
       if (data.status === 'budget_exhausted') this.say('这次任务达到用量或执行限制，队列已暂停。请检查本地设置后发 /continue 继续。');
+    }
+  }
+
+  agentNotices(view) {
+    if (!view || view.session_id !== this.state.sessionId) return;
+    for (const row of view.records) {
+      if (row.historical) continue;
+      for (const question of row.questions) {
+        if (question.actionable) this.say(
+          `${row.name} ${question.required ? '必答问题' : '可选问题'}：${truncateText(question.question, 450)}\n/answer ${question.id} 回复内容`,
+          question.id,
+        );
+      }
+      if (row.ended_at && !row.stale && row.status !== 'awaiting_user') {
+        this.say(`${row.name} · ${row.stage}\n${truncateText(row.report?.summary || row.result_summary || row.end_reason || row.task, 450)}`, `${row.trace_id}:ended`);
+      }
     }
   }
 
@@ -356,7 +440,8 @@ export class PrivateBridge {
       this.state.inFlight = this.state.inbox.shift();
       this.store.save();
       try {
-        const result = await this.pepsi.request('turn/run', { input: this.state.inFlight.text }, { timeoutMs: 0 });
+        const { text, answerTo } = this.state.inFlight;
+        const result = await this.pepsi.request('turn/run', { input: text, ...(answerTo ? { answer_to: answerTo } : {}) }, { timeoutMs: 0 });
         if (!this.turnOutput) this.say(result.last_message || '这次没有生成回复，可以换个说法再发给我。');
         this.state.inFlight = null;
         this.store.save();

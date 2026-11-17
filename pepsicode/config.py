@@ -121,6 +121,54 @@ def save_mini_code_settings(updates: dict[str, Any]) -> None:
             temporary.unlink(missing_ok=True)
 
 
+def validate_service_settings(raw: Any) -> dict[str, Any]:
+    """Validate the optional ``service`` settings block (M3 resident service).
+
+    Credentials never live here: the GitHub connector reads its token from
+    the environment variable named by ``token_env``.
+    """
+    if raw is None:
+        raw = {}
+    if not isinstance(raw, dict):
+        raise ValueError("service must be an object")
+    port = raw.get("port", 0)
+    if type(port) is not int or port < 0 or port > 65535:
+        raise ValueError("service.port must be an integer between 0 and 65535")
+    connectors_raw = raw.get("connectors", {})
+    if not isinstance(connectors_raw, dict):
+        raise ValueError("service.connectors must be an object")
+    connectors: dict[str, Any] = {}
+    for name, settings in connectors_raw.items():
+        if name != "github":
+            raise ValueError(f"service.connectors.{name} is not a supported connector")
+        if not isinstance(settings, dict):
+            raise ValueError(f"service.connectors.{name} must be an object")
+        enabled = settings.get("enabled", False)
+        if type(enabled) is not bool:
+            raise ValueError(f"service.connectors.{name}.enabled must be a boolean")
+        entry: dict[str, Any] = {"enabled": enabled}
+        if enabled:
+            repository = settings.get("repository")
+            if not isinstance(repository, str) or "/" not in repository:
+                raise ValueError(f"service.connectors.{name}.repository must be 'owner/name'")
+            entry["repository"] = repository
+            poll_interval = settings.get("pollIntervalSeconds", 60)
+            if (
+                isinstance(poll_interval, bool)
+                or not isinstance(poll_interval, (int, float))
+                or not math.isfinite(poll_interval)
+                or poll_interval < 5
+            ):
+                raise ValueError(f"service.connectors.{name}.pollIntervalSeconds must be a number >= 5")
+            entry["pollIntervalSeconds"] = poll_interval
+            token_env = settings.get("tokenEnv", "GITHUB_TOKEN")
+            if not isinstance(token_env, str) or not token_env.strip():
+                raise ValueError(f"service.connectors.{name}.tokenEnv must be a non-empty string")
+            entry["tokenEnv"] = token_env
+        connectors[name] = entry
+    return {"port": port, "connectors": connectors}
+
+
 def load_runtime_config(cwd: str | Path | None = None) -> dict[str, Any]:
     effective = load_effective_settings(cwd)
     env = {**dict(effective.get("env", {})), **os.environ}
@@ -202,6 +250,57 @@ def load_runtime_config(cwd: str | Path | None = None) -> dict[str, Any]:
     sandbox_mode = effective.get("processSandboxMode", "danger-full-access")
     if sandbox_mode not in {"danger-full-access", "workspace-write", "read-only"}:
         raise ValueError("processSandboxMode must be danger-full-access, workspace-write, or read-only")
+    orchestration = effective.get("orchestration", {})
+    if not isinstance(orchestration, dict) or type(orchestration.get("enabled", False)) is not bool:
+        raise ValueError("orchestration.enabled must be a boolean")
+    execution_mode = orchestration.get("executionMode", "interactive")
+    if execution_mode not in {"interactive", "service"}:
+        raise ValueError("orchestration.executionMode must be interactive or service")
+    worker_isolation = orchestration.get("workerIsolation", "shared")
+    if worker_isolation not in ("shared", "workspace", "hardened"):
+        raise ValueError("orchestration.workerIsolation must be shared, workspace, or hardened")
+    max_repair_attempts = orchestration.get("maxRepairAttempts", 2)
+    if type(max_repair_attempts) is not int or not 0 <= max_repair_attempts <= 5:
+        raise ValueError("orchestration.maxRepairAttempts must be an integer between 0 and 5")
+
+    def _positive_orchestration_int(name, default):
+        value = orchestration.get(name, default)
+        if type(value) is not int or value < 1:
+            raise ValueError(f"orchestration.{name} must be a positive integer")
+        return value
+
+    def _non_negative_orchestration_int(name, default):
+        value = orchestration.get(name, default)
+        if type(value) is not int or value < 0:
+            raise ValueError(f"orchestration.{name} must be a non-negative integer")
+        return value
+
+    def _orchestration_milliseconds(name, default):
+        value = orchestration.get(name, default)
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value < 0:
+            raise ValueError(f"orchestration.{name} must be a non-negative finite number of milliseconds")
+        return value
+
+    max_concurrent_workers = _positive_orchestration_int("maxConcurrentWorkers", 3)
+    max_total_active_workers = (
+        _positive_orchestration_int("maxTotalActiveWorkers", max_concurrent_workers)
+        if "maxTotalActiveWorkers" in orchestration and orchestration.get("maxTotalActiveWorkers") is not None
+        else None
+    )
+    max_queued_work_items = _positive_orchestration_int("maxQueuedWorkItems", 32)
+    max_active_work_items = _positive_orchestration_int("maxActiveWorkItemsPerRun", 32)
+    max_auto_retries = _non_negative_orchestration_int("maxAutoRetries", 1)
+    max_coordinator_activations = _positive_orchestration_int("maxCoordinatorActivations", 20)
+    event_batch_limit = _positive_orchestration_int("eventBatchLimit", 8)
+    event_context_chars = _positive_orchestration_int("eventContextChars", 12_000)
+    event_debounce_ms = _orchestration_milliseconds("eventDebounceMs", 250)
+    event_max_delay_ms = _orchestration_milliseconds("eventMaxDelayMs", 1000)
+    if event_max_delay_ms < event_debounce_ms:
+        raise ValueError("orchestration.eventMaxDelayMs must be >= orchestration.eventDebounceMs")
+    coordinator_reserve_requests = _non_negative_orchestration_int("coordinatorReserveRequests", 2)
+    if orchestration.get("enabled", False) and coordinator_reserve_requests >= request_limit:
+        raise ValueError("orchestration.coordinatorReserveRequests must be less than modelRequestLimit")
+    service = validate_service_settings(effective.get("service", {}))
 
     runtime = {
         "model": model,
@@ -224,6 +323,24 @@ def load_runtime_config(cwd: str | Path | None = None) -> dict[str, Any]:
         "mcpServers": effective.get("mcpServers", {}),
         "budgetLimitUsd": budget_limit_usd,
         "modelRequestLimit": request_limit,
+        "orchestration": {
+            "enabled": orchestration.get("enabled", False),
+            "executionMode": execution_mode,
+            "workerIsolation": worker_isolation,
+            "maxRepairAttempts": max_repair_attempts,
+            "maxConcurrentWorkers": max_concurrent_workers,
+            "maxQueuedWorkItems": max_queued_work_items,
+            "maxActiveWorkItemsPerRun": max_active_work_items,
+            "maxAutoRetries": max_auto_retries,
+            "maxCoordinatorActivations": max_coordinator_activations,
+            "eventBatchLimit": event_batch_limit,
+            "eventContextChars": event_context_chars,
+            "eventDebounceMs": event_debounce_ms,
+            "eventMaxDelayMs": event_max_delay_ms,
+            "coordinatorReserveRequests": coordinator_reserve_requests,
+            **({"maxTotalActiveWorkers": max_total_active_workers} if max_total_active_workers is not None else {}),
+        },
+        "service": service,
         **({"subagentRequestLimit": subagent_request_limit} if subagent_request_limit is not None else {}),
         "repeatToolThresholds": effective.get("repeatToolThresholds", [3, 5, 8]),
         "taskTimeout": task_timeout,

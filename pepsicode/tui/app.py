@@ -23,6 +23,7 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
+from pepsicode.agents.status import format_trace_view, session_trace_view
 from pepsicode.branding import terminal_mark
 from pepsicode.cli.cli_commands import (
     expand_prompt_command,
@@ -81,6 +82,7 @@ from pepsicode.llm.providers import PROVIDERS, model_settings_snapshot, provider
 from pepsicode.permissions import PermissionManager
 from pepsicode.tooling import ToolContext, ToolRegistry
 from pepsicode.tools import create_default_tool_registry
+from pepsicode.tui.agent_panel import panel_width, render_agent_panel, render_agent_strip
 from pepsicode.tui.chrome import (
     ACCENT,
     BOLD,
@@ -369,6 +371,11 @@ class ScreenState:
     activity_header_rows: dict[int, int] = field(default_factory=dict)
     # Keep a toggled header on the row it was on: (group id, screen row).
     activity_anchor: tuple[int, int] | None = None
+    agent_panel_offset: int = 0
+    agent_panel_session: str | None = None
+    agent_panel_live_ids: set[str] = field(default_factory=set)
+    agent_panel_start_col: int | None = None
+    agent_panel_actions: dict[int, tuple[str, Any]] = field(default_factory=dict)
 
 
 # ---------------------------------------------------------------------------
@@ -1280,6 +1287,11 @@ def _composer_status_lines(args: TtyAppArgs, state: ScreenState, model: str, col
     if remaining > 0:
         first += f" {SUBTLE}· {truncate_plain(model, remaining)}{RESET}"
     hint = "Tab 切换"
+    if state.is_busy and state.session and state.session.agent_traces.has_records():
+        rows = session_trace_view(state.session, limit=4)["records"]
+        agent = next((row for row in rows if not row["historical"] and row["activities"]), None)
+        if agent:
+            first += f" {SUBTLE}· {agent['name']} · {agent['activities'][-1]['summary']}{RESET}"
     if not state.is_busy and _visible_width(first) + _visible_width(hint) + 3 <= width:
         first += f" {SUBTLE}· {hint}{RESET}"
 
@@ -1657,6 +1669,8 @@ def _render_stream_screen(args: TtyAppArgs, state: ScreenState) -> None:
     rows = max(8, rows)
     # Repopulated below only when the transcript is actually on screen.
     state.activity_header_rows = {}
+    state.agent_panel_start_col = None
+    state.agent_panel_actions = {}
     state.home_sharks_visible = False
     if state.provider_wizard is not None:
         state.frame_renderer.draw(render_provider_wizard(state.provider_wizard, cols, rows), cols, rows)
@@ -1727,10 +1741,34 @@ def _render_stream_screen(args: TtyAppArgs, state: ScreenState) -> None:
         state.frame_renderer.draw(_truncate_frame_lines((input_lines + status_lines)[-rows:], cols, rows), cols, rows)
         return
 
+    agent_view = None
+    if state.session and (
+        state.session.agent_traces.has_records()
+        or state.session.agent_traces.persistence_error
+        or state.session.task_control.get("orchestration")
+    ):
+        agent_view = session_trace_view(state.session, limit=128, live_first=True)
+        if not agent_view["records"] and not agent_view["persistence_error"]:
+            agent_view = None
+    if state.agent_panel_session != (state.session.session_id if state.session else None):
+        state.agent_panel_session = state.session.session_id if state.session else None
+        state.agent_panel_offset = 0
+        state.agent_panel_live_ids = set()
+    live_ids = {row["trace_id"] for row in agent_view["records"] if row["ended_at"] is None} if agent_view else set()
+    if live_ids - state.agent_panel_live_ids:
+        state.agent_panel_offset = 0
+    state.agent_panel_live_ids = live_ids
+    sidebar_width = panel_width(cols, transcript_height) if agent_view else 0
+    strip = []
+    if agent_view and not sidebar_width and transcript_height >= 5:
+        strip = render_agent_strip(agent_view, cols)
+        transcript_height -= len(strip)
+    content_cols = cols - sidebar_width - 4 if sidebar_width else cols
+
     header_lines: dict[int, int] = {}
     rendered = _build_stream_transcript_lines(
         list(state.transcript),
-        cols,
+        content_cols,
         expanded_groups=state.expanded_activity_groups,
         streaming_entry_id=state.streaming_entry_id,
         header_lines=header_lines,
@@ -1741,7 +1779,7 @@ def _render_stream_screen(args: TtyAppArgs, state: ScreenState) -> None:
     if anchor and anchor_line is not None:
         # A toggled header stays under the pointer; its details open below it.
         state.transcript_scroll_offset = _anchored_scroll_offset(total, transcript_height, anchor_line, anchor[1])
-    elif state.transcript_scroll_offset > 0 and cols == state.transcript_layout_cols:
+    elif state.transcript_scroll_offset > 0 and content_cols == state.transcript_layout_cols:
         # Offsets count from the bottom, so keep a scrolled-back view on the
         # same text while new output is appended below it.
         state.transcript_scroll_offset += total - state.transcript_total_lines
@@ -1749,7 +1787,7 @@ def _render_stream_screen(args: TtyAppArgs, state: ScreenState) -> None:
     state.user_scrolled_away = state.transcript_scroll_offset > 0
     state.transcript_total_lines = total
     state.transcript_view_height = transcript_height
-    state.transcript_layout_cols = cols
+    state.transcript_layout_cols = content_cols
     window_rows = _stream_window_rows(total, state.transcript_scroll_offset, transcript_height)
     state.activity_header_rows = {
         row: header_lines[index] for row, index in enumerate(window_rows) if index in header_lines
@@ -1758,7 +1796,17 @@ def _render_stream_screen(args: TtyAppArgs, state: ScreenState) -> None:
     # Anchor the composer while new output streams in.
     transcript_lines += [""] * max(0, transcript_height - len(transcript_lines))
 
-    frame = _truncate_frame_lines(transcript_lines, cols, transcript_height) + [sep] + input_lines + status_lines
+    transcript_lines = _truncate_frame_lines(transcript_lines, content_cols, transcript_height)
+    if sidebar_width:
+        sidebar, state.agent_panel_actions = render_agent_panel(
+            agent_view, sidebar_width, transcript_height, state.agent_panel_offset
+        )
+        state.agent_panel_start_col = content_cols + 3
+        transcript_lines = [
+            _pad_visible(left, content_cols) + f" {SUBTLE}│{RESET} " + right
+            for left, right in zip(transcript_lines, sidebar, strict=True)
+        ]
+    frame = transcript_lines + strip + [sep] + input_lines + status_lines
     frame = _truncate_frame_lines(frame, cols, rows)
 
     state.frame_renderer.draw(frame, cols, rows)
@@ -2141,6 +2189,22 @@ def _enqueue_tty_input(args: TtyAppArgs, state: ScreenState, input_text: str, in
     if input_text.startswith("/queue "):
         input_text, input_mode = input_text[len("/queue ") :].strip(), "follow_up"
     try:
+        if input_text.partition(" ")[0] == "/agent-stop":
+            trace_id = input_text.partition(" ")[2].strip()
+            if not trace_id:
+                raise ValueError("用法：/agent-stop Worker追踪编号")
+            stopped = state.input_queue.stop_worker(trace_id)
+            state.input, state.cursor_offset = "", 0
+            state.status = "已取消排队任务" if stopped == "cancelled" else "已请求停止 Worker"
+            return
+        if input_text.partition(" ")[0] == "/answer":
+            trace_question, _, reply = input_text.partition(" ")[2].strip().partition(" ")
+            if not trace_question or not reply.strip():
+                raise ValueError("用法：/answer 问题编号 回复内容")
+            state.input_queue.enqueue(reply, "steer", answer_to=(trace_question,))
+            state.input, state.cursor_offset = "", 0
+            state.status = "已提交 Worker 回复"
+            return
         if state.cancellation_event.is_set():
             raise ValueError("The task is stopping; draft kept for the next task")
         expanded = expand_prompt_command(input_text, args.cwd)
@@ -2284,6 +2348,45 @@ def _handle_input(
     """Returns True if /exit was typed."""
     _collect_agent_result(args, state)
     input_text = (submitted_raw_input if submitted_raw_input is not None else state.input).strip()
+    command, _, command_args = input_text.partition(" ")
+    if command == "/agents":
+        parts = command_args.split()
+        if len(parts) > 1:
+            status = "Usage: /agents [trace-id or offset]"
+        elif state.session is None:
+            status = "No Agent executions recorded."
+        else:
+            token = parts[0] if parts else ""
+            paged = token.isdecimal() and len(token) < 9
+            view = session_trace_view(
+                state.session,
+                trace_id=token if token and not paged else None,
+                offset=int(token) if paged else 0,
+                limit=5,
+            )
+            status = format_trace_view(view)
+            if view["next_offset"] is not None:
+                status += f"\nMore: /agents {view['next_offset']}"
+        state.input, state.cursor_offset = "", 0
+        _push_transcript_entry(state, kind="assistant", body=status)
+        rerender()
+        return False
+    answer_to, answer_text = None, ""
+    if command == "/answer":
+        from pepsicode.core.task_control import pending_questions
+
+        answer_to, _, answer_text = command_args.strip().partition(" ")
+        if state.is_busy or not state.session or not answer_text.strip():
+            state.status = "When the turn ends, use /answer <question-id> <reply>."
+            rerender()
+            return False
+        with recording_session(state.session):
+            control = state.session.task_control
+            task = control.get("task") or {}
+            if answer_to not in {q["id"] for q in pending_questions(control, task.get("id"))}:
+                state.status = "Question is no longer pending in the current task."
+                rerender()
+                return False
     if state.is_busy:
         if input_text == "/paste-image" or input_text == "/image" or input_text.startswith("/image "):
             state.status = "Wait for the current response before sending an image"
@@ -2356,7 +2459,7 @@ def _handle_input(
             _push_transcript_entry(state, kind="assistant", body=str(error), status="error")
             return False
 
-    _emit_tty_hook(args, HookEvent.USER_INPUT, data={"user_input": input_text})
+    _emit_tty_hook(args, HookEvent.USER_INPUT, data={"user_input": answer_text if answer_to else input_text})
     _drain_tty_hook_notifications(args, state)
 
     # History
@@ -2389,7 +2492,15 @@ def _handle_input(
         input_text = task
 
     try:
-        if regenerated_prompt:
+        if answer_to:
+            import uuid
+
+            prompt_message = {
+                "role": "user",
+                "content": answer_text,
+                "source": {"kind": "human", "id": uuid.uuid4().hex, "answerTo": [answer_to]},
+            }
+        elif regenerated_prompt:
             prompt_message = regenerated_prompt
         elif input_text == "/image" or input_text.startswith("/image "):
             prompt_message = image_message(input_text, args.cwd)
@@ -2536,6 +2647,8 @@ def _handle_input(
         return False
 
     # Agent turn
+    if answer_to:
+        input_text = answer_text
     if state.pending_images:
         prompt_message = {
             "role": "user",
@@ -3062,7 +3175,10 @@ def run_tty_app(
     approval_result: dict[str, Any] = {}
 
     def _permission_prompt_handler(request: dict[str, Any]) -> dict[str, Any]:
+        from pepsicode.execution.runtime import current_scope
+
         nonlocal approval_result
+        scope = current_scope()
         approval_event.clear()
         state.pending_approval = PendingApproval(
             request=request,
@@ -3074,16 +3190,20 @@ def run_tty_app(
         # the terminal display.  request() only sets a pending flag; the main
         # event loop's next flush() will do the actual render safely.
         rerender()
-        while not approval_event.wait(0.05):
+        try:
+            while not approval_event.wait(0.05):
+                if scope:
+                    scope.check_cancelled()
+                if state.cancellation_event.is_set():
+                    return {"decision": "deny_once"}
+            if scope:
+                scope.check_cancelled()
             if state.cancellation_event.is_set():
-                state.pending_approval = None
                 return {"decision": "deny_once"}
-        if state.cancellation_event.is_set():
+            return approval_result.copy()
+        finally:
             state.pending_approval = None
-            return {"decision": "deny_once"}
-        result = approval_result.copy()
-        state.pending_approval = None
-        return result
+            rerender()
 
     original_permission_prompt = permissions.prompt
     permissions.prompt = _permission_prompt_handler
@@ -3137,9 +3257,19 @@ def run_tty_app(
     try:
         _render_screen(args, state)
         last_terminal_size = _get_terminal_size()
+        last_agent_state = None
 
         with _RawModeContext():
             while not should_exit:
+                if state.session:
+                    agent_state = (
+                        state.session.session_id,
+                        state.session.agent_traces.sequence,
+                        int(time.monotonic()) if state.is_busy and state.session.agent_traces.has_records() else 0,
+                    )
+                    if agent_state != last_agent_state:
+                        last_agent_state = agent_state
+                        rerender()
                 terminal_size = _get_terminal_size()
                 if terminal_size != last_terminal_size:
                     last_terminal_size = terminal_size
@@ -3746,7 +3876,7 @@ def _handle_normal_mode_return(
     input_mode: InputMode = "steer",
 ) -> None:
     """Handle Return key in normal mode."""
-    if state.is_busy:
+    if state.is_busy and state.input.strip().partition(" ")[0] not in {"/agents", "/answer"}:
         # Admission can race with worker settlement. A closed queue keeps the
         # draft; it must never accidentally start a second run here.
         _enqueue_tty_input(args, state, state.input, input_mode)
@@ -4020,6 +4150,15 @@ def _handle_selection_event(state: ScreenState, event: ParsedInputEvent, rerende
                 state.selection_dragging = False
                 if renderer.selection.is_empty:
                     renderer.selection = None
+                    if state.agent_panel_start_col is not None and event.x >= state.agent_panel_start_col:
+                        action = state.agent_panel_actions.get(event.y)
+                        if action and action[0] == "page":
+                            state.agent_panel_offset = action[1]
+                        elif action and action[0] == "detail" and state.session:
+                            view = session_trace_view(state.session, trace_id=action[1])
+                            _push_transcript_entry(state, kind="assistant", body=format_trace_view(view))
+                        rerender()
+                        return True
                     # A plain click on an activity header folds/unfolds it.
                     group_id = state.activity_header_rows.get(event.y)
                     if group_id is not None:

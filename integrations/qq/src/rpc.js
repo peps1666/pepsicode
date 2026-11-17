@@ -66,7 +66,7 @@ export class RpcClient extends EventEmitter {
       }, 20000);
       socket.heartbeat.unref();
       if (this.protocol === 'pepsi') {
-        const result = await this.request('connection/auth', { token: this.token });
+        const result = await this.request('connection/auth', { token: this.token, orchestration: 1 });
         if (result?.authenticated !== true) throw new Error('pepsi 鉴权失败');
       }
     } catch (error) {

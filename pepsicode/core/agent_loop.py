@@ -208,6 +208,16 @@ def _emit_hook(
         logger.warning("Hook event %s failed: %s", event.value, error)
 
 
+def _worker_rounds_left(agent_scope: str, max_steps: int | None, step: int) -> int | None:
+    if not agent_scope.startswith("subagent") or max_steps is None:
+        return None
+    remaining = max_steps - step + 1
+    scope = current_scope()
+    if scope and scope.request_limit is not None:
+        remaining = min(remaining, scope.request_limit - scope.requests)
+    return max(0, remaining)
+
+
 def _messages_for_model(
     messages: list[ChatMessage],
     hook_engine: HookEngine | None,
@@ -217,8 +227,12 @@ def _messages_for_model(
     tools: ToolRegistry | None = None,
     memory: Any | None = None,
     runtime: dict | None = None,
+    worker_rounds_left: int | None = None,
 ) -> list[ChatMessage]:
+    from pepsicode.agents.notices import deliver_agent_notices
     from pepsicode.core.task_control import task_context
+
+    deliver_agent_notices(messages)
 
     if cwd is not None:
         from pepsicode.context.instructions import load_agent_instructions
@@ -344,6 +358,34 @@ def _messages_for_model(
                 )
             )
     checkpoint_messages(messages)
+    if worker_rounds_left is not None:
+        guidance = (
+            "This is your final available model round. Return an explicit <final> summary now, "
+            "including findings, evidence and any unfinished work. Do not start more exploration or tool calls."
+            if worker_rounds_left <= 1
+            else "Reserve the last round for a final summary. Use only essential tools now."
+            if worker_rounds_left == 2
+            else "Keep the investigation focused and reserve a round to finish."
+        )
+        # Request-only context: the provider's model/prepared journal records
+        # the actual input; do not accumulate a countdown in persistent history.
+        return [
+            *messages,
+            cast(
+                ChatMessage,
+                {
+                    "role": "user",
+                    "internal": True,
+                    "content": (
+                        '<system-reminder kind="worker-round-budget">\n'
+                        f"Remaining model rounds including this request: {worker_rounds_left}. "
+                        "This counts model rounds, not individual tool calls. Reports also require tool calls. "
+                        "A ready report saves a result but does not end the turn. "
+                        f"{guidance} Never claim unfinished work is complete.\n</system-reminder>"
+                    ),
+                },
+            ),
+        ]
     return messages
 
 
@@ -434,6 +476,8 @@ def append_queued_inputs(
         messages[:] = before
         raise
     for item in pending:
+        if item.external:
+            continue
         _emit_hook(
             hook_engine,
             HookEvent.USER_INPUT,
@@ -673,17 +717,19 @@ def run_agent_turn(
                     )
         try:
             raise_if_cancelled()
-            next_step = model.next(
-                _messages_for_model(
-                    current_messages,
-                    hook_engine,
-                    cwd=cwd,
-                    permissions=permissions,
-                    tools=tools,
-                    memory=memory,
-                    runtime=getattr(model, "runtime", None),
+            with current_scope().observe_activity("model", "model-turn"):
+                next_step = model.next(
+                    _messages_for_model(
+                        current_messages,
+                        hook_engine,
+                        cwd=cwd,
+                        permissions=permissions,
+                        tools=tools,
+                        memory=memory,
+                        runtime=getattr(model, "runtime", None),
+                        worker_rounds_left=_worker_rounds_left(agent_scope, max_steps, step),
+                    )
                 )
-            )
             raise_if_cancelled()
         except TurnCancelledError:
             return _finish_cancelled_turn(
@@ -1352,6 +1398,7 @@ def run_agent_turn_stream(
                         tools=tools,
                         memory=memory,
                         runtime=getattr(model, "runtime", None),
+                        worker_rounds_left=_worker_rounds_left(agent_scope, max_steps, step),
                     )
                 )
                 with closing(token_stream) if hasattr(token_stream, "close") else nullcontext(token_stream):
@@ -1371,6 +1418,7 @@ def run_agent_turn_stream(
                         tools=tools,
                         memory=memory,
                         runtime=getattr(model, "runtime", None),
+                        worker_rounds_left=_worker_rounds_left(agent_scope, max_steps, step),
                     )
                 )
                 text_content = next_step.content

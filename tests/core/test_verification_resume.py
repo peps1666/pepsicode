@@ -149,3 +149,92 @@ def test_desktop_resume_restores_pending_verification(workspace):
         assert session.tools.mutation_count > session.tools.verified_mutation_count
 
     asyncio.run(scenario())
+
+
+def test_resume_rechecks_delivered_head_sha_and_missing_checkout(tmp_path, monkeypatch):
+    import shutil
+    import subprocess
+
+    from pepsicode import config
+    from pepsicode.core import session as sessions
+    from pepsicode.core.session import load_session
+    from pepsicode.core.session_tree import recording_session
+    from pepsicode.core.task_control import begin_task, edit_control
+    from pepsicode.core.workspace_state import digest, workspace_state
+
+    monkeypatch.setattr(config, "PEPSI_CODE_DIR", tmp_path / "state")
+    monkeypatch.setattr(sessions, "PEPSI_CODE_DIR", config.PEPSI_CODE_DIR)
+    monkeypatch.setattr(sessions, "SESSIONS_DIR", config.PEPSI_CODE_DIR / "sessions")
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+
+    def git(cwd, *args):
+        return subprocess.run(
+            ["git", *args], cwd=cwd, check=True, capture_output=True, text=True, timeout=15
+        ).stdout.strip()
+
+    git(repo, "init")
+    (repo / "app.txt").write_text("v1\n", encoding="utf-8")
+    git(repo, "add", "app.txt")
+    git(repo, "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-m", "Delivered")
+    delivered_sha = git(repo, "rev-parse", "HEAD")
+
+    criteria = [{"id": "c1", "kind": "file_exists", "path": "app.txt"}]
+    ws_digest = workspace_state(str(repo), include_paths=["app.txt"])["digest"]
+
+    def make_complete_session(checkout_path):
+        saved = create_new_session(str(repo))
+        with recording_session(saved):
+            begin_task([{"role": "user", "content": "Deliver app.txt"}], {})
+        with edit_control(session=saved) as control:
+            task = control["task"]
+            task["status"] = "complete"
+            task["criteria"] = criteria
+            task["evidence"] = [{"criterion": "file_exists", "ok": True}]
+            task["acceptance"] = {
+                "valid": True,
+                "task_revision": task["revision"],
+                "criteria_digest": digest(criteria),
+                "workspace": {"digest": ws_digest},
+                "delivered": {"checkout": str(checkout_path), "head_sha": delivered_sha},
+            }
+        save_session(saved)
+        return saved.session_id
+
+    # 1. Matching HEAD and content keeps task complete.
+    sid_ok = make_complete_session(repo)
+    resumed_ok = load_session(sid_ok)
+    assert resumed_ok is not None
+    assert resumed_ok.task_control["task"]["status"] == "complete"
+
+    # 2. Same file content but changed HEAD (empty commit) forces recheck and keeps legacy evidence.
+    git(
+        repo,
+        "-c",
+        "user.name=Test",
+        "-c",
+        "user.email=test@example.invalid",
+        "commit",
+        "--allow-empty",
+        "-m",
+        "Different HEAD same content",
+    )
+    resumed_head_changed = load_session(sid_ok)
+    assert resumed_head_changed is not None
+    task_changed = resumed_head_changed.task_control["task"]
+    assert task_changed["status"] == "incomplete"
+    assert task_changed["assurance"] == "needs_recheck"
+    assert task_changed["legacy_evidence"] == [{"criterion": "file_exists", "ok": True}]
+
+    # 3. Missing delivered checkout forces recheck even if main workspace has matching files.
+    checkout_dir = tmp_path / "missing-checkout"
+    checkout_dir.mkdir()
+    sid_missing = make_complete_session(checkout_dir)
+    shutil.rmtree(checkout_dir)
+    resumed_missing = load_session(sid_missing)
+    assert resumed_missing is not None
+    task_missing = resumed_missing.task_control["task"]
+    assert task_missing["status"] == "incomplete"
+    assert task_missing["assurance"] == "needs_recheck"
+    assert task_missing["legacy_evidence"] == [{"criterion": "file_exists", "ok": True}]

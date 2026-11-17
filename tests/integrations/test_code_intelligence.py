@@ -2,7 +2,6 @@ import json
 import shutil
 import sys
 from pathlib import Path
-from tempfile import TemporaryDirectory
 from unittest.mock import Mock
 
 import pytest
@@ -172,15 +171,15 @@ def test_read_only_mode_cannot_apply_rename(intelligence):
 def test_real_pylsp_cross_file_navigation_and_rename(tmp_path):
     (tmp_path / "api.py").write_text("def square(value):\n    return value * value\n", encoding="utf-8")
     (tmp_path / "use.py").write_text("from api import square\n\nresult = square(3)\n", encoding="utf-8")
-    # Keep Jedi's hashed cache filenames below Windows' legacy path limit.
-    cache = TemporaryDirectory(prefix="lsp-")
+    cache = tmp_path / ".lsp"
+    cache.mkdir()
     manager = LanguageServers(
         str(tmp_path),
         {
             "python": {
                 "command": "pylsp",
                 "timeout": 30,
-                "env": {"LOCALAPPDATA": cache.name, "XDG_CACHE_HOME": cache.name},
+                "env": {"LOCALAPPDATA": str(cache), "XDG_CACHE_HOME": str(cache)},
             }
         },
     )
@@ -215,7 +214,6 @@ def test_real_pylsp_cross_file_navigation_and_rename(tmp_path):
         assert "result = squared(3)" in (tmp_path / "use.py").read_text()
     finally:
         manager.close()
-        cache.cleanup()
 
 
 def test_invalid_server_environment_is_rejected(tmp_path):

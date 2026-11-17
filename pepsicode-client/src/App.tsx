@@ -3,6 +3,7 @@ import AppFrame from "./layout/AppFrame";
 import ChatView from "./conversation/ChatView";
 import SessionList from "./sidebar/SessionList";
 import DetailsPanel from "./panels/DetailsPanel";
+import ServiceBanner from "./components/ServiceBanner";
 import { useConnectionStore } from "./stores/connection";
 import { useSessionStore, type InputMode } from "./stores/session";
 
@@ -46,6 +47,7 @@ export default function App() {
 
   return (
     <>
+      <ServiceBanner />
       <AppFrame
         sidebar={<SessionList />}
         center={(controls) => <ChatView onSend={handleSend} frameControls={controls} />}

@@ -8,7 +8,13 @@ from contextlib import closing
 import pytest
 
 from pepsicode.core.agent_loop import _accumulate_stream_tokens
-from pepsicode.execution.runtime import ExecutionJournal, ExecutionScope, RequestBudget, bind_scope
+from pepsicode.execution.runtime import (
+    ExecutionJournal,
+    ExecutionScope,
+    ModelRequestLimitError,
+    RequestBudget,
+    bind_scope,
+)
 from pepsicode.llm.anthropic_adapter import AnthropicModelAdapter
 from pepsicode.llm.cost_tracker import BudgetExceededError, CostTracker
 from pepsicode.tooling import ToolRegistry
@@ -32,6 +38,20 @@ def response(stream):
         ("message_stop", {}),
     ]
     return io.BytesIO("".join(f"event: {event}\ndata: {json.dumps(data)}\n\n" for event, data in events).encode())
+
+
+def test_worker_cannot_spend_coordinator_reserve(tmp_path):
+    budget = RequestBudget(CostTracker(), max_requests=3, coordinator_reserve=2)
+    coordinator = ExecutionScope(str(tmp_path), budget=budget)
+    worker = ExecutionScope(str(tmp_path), budget=budget, parent_task_id=coordinator.task_id)
+    with budget.request(worker, {}):
+        assert budget.requests == 1
+    with pytest.raises(ModelRequestLimitError, match="reserved"), budget.request(worker, {}):
+        pytest.fail("A Worker spent a coordinator slot")
+    with budget.request(coordinator, {}):
+        assert budget.requests == 2
+    with budget.request(coordinator, {}):
+        assert budget.requests == 3
 
 
 @pytest.mark.parametrize("stream", [False, True], ids=["normal", "stream"])

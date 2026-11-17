@@ -29,6 +29,7 @@ class SandboxPolicy:
     mode: SandboxMode
     workspace_root: str
     extra_allowed_dirs: set[str] = field(default_factory=set)
+    cwd: str | None = None
 
 
 @dataclass(frozen=True)

@@ -24,6 +24,8 @@ class QueuedInput:
     mode: InputMode
     display_content: str | None = None
     command_path: str | None = None
+    answer_to: tuple[str, ...] = ()
+    external: bool = False
 
     def __post_init__(self):
         if not isinstance(self.id, str) or not self.id or self.mode not in {"steer", "follow_up"}:
@@ -40,6 +42,23 @@ class QueuedInput:
             raise ValueError("Invalid queued input display text")
         if self.command_path is not None and not isinstance(self.command_path, str):
             raise ValueError("Invalid queued command source")
+        if (
+            not isinstance(self.answer_to, (tuple, list))
+            or len(self.answer_to) > 12
+            or any(not isinstance(item, str) or not 0 < len(item) <= 128 for item in self.answer_to)
+            or len(set(self.answer_to)) != len(self.answer_to)
+            or (self.answer_to and self.mode != "steer")
+        ):
+            raise ValueError("Invalid queued question IDs")
+        object.__setattr__(self, "answer_to", tuple(self.answer_to))
+
+    def payload(self):
+        result = asdict(self)
+        if not self.answer_to:
+            result.pop("answer_to")
+        if not self.external:
+            result.pop("external")
+        return result
 
     def message(self) -> ChatMessage:
         message: ChatMessage = {
@@ -51,6 +70,10 @@ class QueuedInput:
             message["displayContent"] = self.display_content
         if self.command_path is not None:
             message["commandPath"] = self.command_path
+        if self.answer_to:
+            message["source"]["answerTo"] = list(self.answer_to)
+        if self.external:
+            message.update(internal=True, source={"kind": "external-event", "id": self.id})
         return message
 
 
@@ -70,6 +93,32 @@ class TurnInputQueue:
         self._claimed: dict[str, QueuedInput] = {}
         self._returned: list[QueuedInput] = []
         self._returned_notified: set[str] = set()
+        self._steering_wakeup: Callable[[], None] | None = None
+        self._worker_stop: Callable[[str], str] | None = None
+
+    @contextmanager
+    def wake_on_steering(self, callback, *, stop_worker):
+        with self._lock:
+            self._steering_wakeup = callback
+            self._worker_stop = stop_worker
+        try:
+            yield
+        finally:
+            with self._lock:
+                self._steering_wakeup = None
+                self._worker_stop = None
+
+    def stop_worker(self, trace_id: str) -> str:
+        with self._lock:
+            callback = self._worker_stop
+        if callback is None:
+            raise ValueError("No active orchestration run")
+        return callback(trace_id)
+
+    @property
+    def has_steering(self):
+        with self._lock:
+            return any(item.mode == "steer" for item in self._pending)
 
     def bind_session(self, session):
         with self._lock:
@@ -109,14 +158,14 @@ class TurnInputQueue:
 
         with edit_control(session=self._session) as control:
             control["inbox"] = {
-                "pending": [asdict(item) for item in self._pending],
-                "claimed": [asdict(item) for item in self._claimed.values()],
-                "returned": [asdict(item) for item in self._returned],
+                "pending": [item.payload() for item in self._pending],
+                "claimed": [item.payload() for item in self._claimed.values()],
+                "returned": [item.payload() for item in self._returned],
             }
             task = control.get("task")
             if task:
                 for item in self._pending:
-                    if item.mode == "steer":
+                    if item.mode == "steer" and not item.external:
                         apply_user_instruction(task, item.id, item.content, delivered=False)
                 return_user_instructions(task, {item.id for item in self._returned})
 
@@ -148,7 +197,9 @@ class TurnInputQueue:
         *,
         display_content: str | None = None,
         command_path: str | None = None,
-    ) -> QueuedInput:
+        answer_to=(),
+        external_id: str | None = None,
+    ) -> QueuedInput | None:
         if not isinstance(content, str) or not content.strip():
             raise ValueError("Input must contain text")
         content = content.strip()
@@ -163,14 +214,57 @@ class TurnInputQueue:
         if display_content is not None and len(display_content) > MAX_INPUT_CHARACTERS:
             raise ValueError(f"Queued invocation exceeds {MAX_INPUT_CHARACTERS} characters")
         with self._mutation():
+            if external_id is not None:
+                for item in [*self._pending, *self._claimed.values()]:
+                    if item.id == external_id:
+                        return item
+                if self._session and any(
+                    node["message"].get("source", {}).get("id") == external_id
+                    for node in self._session.tree.get("nodes", [])
+                ):
+                    return None
             if not self._accepting:
                 raise ValueError("The task is finishing; send this input as a new task")
             if len(self._pending) >= MAX_PENDING_INPUTS:
                 raise ValueError(f"The input queue is full ({MAX_PENDING_INPUTS} messages)")
-            item = QueuedInput(uuid.uuid4().hex, content, mode, display_content, command_path)
+            item = QueuedInput(
+                external_id or uuid.uuid4().hex,
+                content,
+                mode,
+                display_content,
+                command_path,
+                answer_to,
+                external=external_id is not None,
+            )
+            if item.answer_to:
+                self._check_question_targets(item)
             self._pending.append(item)
             self._publish()
+            if mode == "steer" and self._steering_wakeup is not None:
+                self._steering_wakeup()
             return item
+
+    def _check_question_targets(self, item):
+        if self._worker_stop is None or self._session is None:
+            raise ValueError("Wait for the current turn before answering a Worker")
+        from pepsicode.core.task_control import pending_questions
+
+        with self._session._tree_lock:
+            control = self._session.task_control
+            task_id = (control.get("task") or {}).get("id")
+            waiting = {
+                row["trace_id"]
+                for row in (control.get("orchestration") or {}).get("work", [])
+                if row["task_id"] == task_id and row["state"] == "waiting_user"
+            }
+            pending = {
+                question["id"]
+                for question in pending_questions(control, task_id)
+                if question.get("trace_id") in waiting
+            }
+        reserved = {key for entry in [*self._pending, *self._claimed.values()] for key in entry.answer_to}
+        if not set(item.answer_to) <= pending - reserved:
+            raise ValueError("A question is no longer pending or already has a queued answer")
 
     def take_steering(self) -> list[QueuedInput]:
         with self._mutation():
@@ -207,7 +301,8 @@ class TurnInputQueue:
             if not self._accepting and not self._pending:
                 return
             self._accepting = False
-            returned, self._pending = self._pending, []
+            returned = [item for item in self._pending if not item.external]
+            self._pending = [item for item in self._pending if item.external]
             self._publish(returned=returned)
 
     def _publish(self, *, delivered=(), returned=(), remember_returned=True) -> None:
@@ -224,9 +319,9 @@ class TurnInputQueue:
                 self._listener(
                     {
                         "accepting": self._accepting,
-                        "pending": [asdict(item) for item in self._pending],
-                        "delivered": [asdict(item) for item in delivered],
-                        "returned": [asdict(item) for item in returned],
+                        "pending": [item.payload() for item in self._pending],
+                        "delivered": [item.payload() for item in delivered],
+                        "returned": [item.payload() for item in returned],
                     }
                 )
             except Exception:

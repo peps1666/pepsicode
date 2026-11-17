@@ -28,6 +28,7 @@ class ToolCapability(str, Enum):
     """Tool capability flags."""
 
     READ_ONLY = "read_only"
+    SESSION_METADATA = "session_metadata"
     DESTRUCTIVE = "destructive"
     CONCURRENCY_SAFE = "concurrency_safe"
     REQUIRES_PERMISSION = "requires_permission"
@@ -485,6 +486,10 @@ class ToolRegistry:
     def get_mcp_servers(self) -> list[dict[str, Any]]:
         return list(self._mcp_servers)
 
+    def record_mutations(self, count: int) -> None:
+        with self._lock:
+            self.mutation_count += count
+
     def find(self, name: str) -> ToolDefinition | None:
         for tool in self._tools:
             if tool.name == name:
@@ -616,7 +621,10 @@ class ToolRegistry:
                     False, "Inspect the previous unknown operation before further changes", status="blocked"
                 )
             if context.execution:
+                from pepsicode.execution.runtime import run_policy_checkpoint
+
                 context.execution.check_cancelled()
+                run_policy_checkpoint(context.execution, kind="tool", tool=tool_name, mutating=affects_workspace)
                 context.execution.record(
                     "tool/started",
                     call_id=context.tool_use_id,
@@ -626,8 +634,7 @@ class ToolRegistry:
                 )
             # Count before execution: an integration can write and then raise.
             if affects_workspace:
-                with self._lock:
-                    self.mutation_count += 1
+                self.record_mutations(1)
             dispatched = True
             result = tool.run(parsed, context)
             if context.hooks is not None and not context.suppress_hooks:

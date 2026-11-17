@@ -281,8 +281,13 @@ class PermissionManager:
 
     def ensure_tool_allowed(self, tool: Any, parsed: Any) -> None:
         """Enforce read-only boundaries before requesting tool approval."""
+        from pepsicode.tooling import ToolCapability
+
         tool_name = str(getattr(tool, "name", ""))
         is_read_only = bool(getattr(tool, "is_read_only", False))
+
+        if tool_name == "agent_report" and ToolCapability.SESSION_METADATA in tool.capabilities:
+            return
 
         if self.mode == PermissionMode.READ_ONLY and not is_read_only:
             if tool_name == "ask_user":
@@ -440,16 +445,25 @@ class PermissionManager:
     def _request_approval(self, request):
         from dataclasses import replace
 
-        from pepsicode.execution.runtime import current_scope
+        from pepsicode.execution.runtime import current_scope, current_tool_context
 
         scope = current_scope()
         if scope and scope.parent_task_id:
             request = replace(
                 request,
                 details=[f"Sub-agent: {scope.agent_scope} (execution {scope.task_id})", *request.details],
-                metadata={**request.metadata, "agent_scope": scope.agent_scope, "execution_id": scope.task_id},
+                metadata={
+                    **request.metadata,
+                    "agent_scope": scope.agent_scope,
+                    "execution_id": scope.task_id,
+                    **({"trace_id": scope.trace_id} if scope.trace_id else {}),
+                },
             )
+        context = current_tool_context()
+        activity_id = "approval:" + (context.tool_use_id if context else request.scope)
         started = time.monotonic()
+        if scope:
+            scope.observe("approval/start", activity_id=activity_id)
         with self._approval_metrics_lock:
             self.approval_metrics["requests"] += 1
         try:
@@ -467,6 +481,8 @@ class PermissionManager:
                     self.approval_metrics["decisions"] += 1
             return outcome
         finally:
+            if scope:
+                scope.observe("approval/end", activity_id=activity_id)
             with self._approval_metrics_lock:
                 self.approval_metrics["wait_seconds"] += time.monotonic() - started
 
@@ -653,7 +669,7 @@ class PermissionManager:
                 {"key": "n", "label": "deny once", "decision": "deny_once"},
                 {"key": "d", "label": "always deny this command", "decision": "deny_always"},
             ],
-            metadata={"cwd": command_cwd, "reason": reason},
+            metadata={"cwd": command_cwd, "reason": reason, "command": signature, "argv": [command, *args]},
         )
         outcome = self._request_approval(req)
         if outcome.decision == ApprovalDecision.ALLOW_TASK:
@@ -730,6 +746,7 @@ class PermissionManager:
                     {"key": "y", "label": "allow this action once", "decision": "allow_once"},
                     {"key": "n", "label": "deny", "decision": "deny_once"},
                 ],
+                metadata={"operation": operation, "target": target.splitlines()[0] if target else ""},
             )
         )
 

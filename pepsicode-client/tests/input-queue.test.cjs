@@ -12,6 +12,7 @@ async function session() {
   let failTurn;
   let branchError;
   let approval;
+  let agentSnapshot;
   const connection = {
     useConnectionStore: { getState: () => ({ ws: {} }) },
     onMessage: (handler) => handlers.push(handler),
@@ -34,6 +35,7 @@ async function session() {
       if (method === "turn/cancel") return { cancelled: true };
       if (method === "turn/dequeue") return { removed: true };
       if (method === "tool/approve" && approval) return approval();
+      if (method === "agent/snapshot" && agentSnapshot) return agentSnapshot();
       return {};
     },
   };
@@ -55,6 +57,7 @@ async function session() {
     disconnect: () => failTurn(new Error("WebSocket connection closed")),
     rejectBranch: () => { branchError = new Error("invalid branch"); },
     onApproval: (handler) => { approval = handler; },
+    onAgentSnapshot: (handler) => { agentSnapshot = handler; },
   };
 }
 
@@ -64,6 +67,43 @@ test("usage update preserves cache token counts and clears them when unavailable
   assert.deepEqual(api.store.getState().latestUsage, {input_total: 100, cache_read: 80, cache_write: 0, cost_usd: null});
   api.event("usage/update", {cache_hit_percentage: null, input_total: null, context: null});
   assert.equal(api.store.getState().latestUsage, null);
+});
+
+test("Agent snapshots ignore duplicates and old sessions and request a fresh page after a gap", async () => {
+  const api = await session();
+  const view = (session_id, sequence, trace_id) => ({ version: 1, session_id, sequence, records: [{ trace_id }] });
+  api.event("session/view", { session_id: "test", history: [], agents: view("test", 4, "first") });
+  api.event("agent/update", view("test", 6, "latest"));
+  api.event("agent/update", view("test", 6, "duplicate"));
+  api.event("agent/update", view("test", 5, "late"));
+  api.event("agent/update", view("other", 100, "unrelated"));
+  assert.equal(api.store.getState().agents.records[0].trace_id, "latest");
+  assert.deepEqual(api.calls.find(call => call.method === "agent/snapshot").params, { session_id: "test", offset: 0 });
+  api.event("session/view", { session_id: "other", history: [], agents: view("other", 1, "other") });
+  api.event("agent/update", view("test", 7, "old session"));
+  assert.equal(api.store.getState().agents.records[0].trace_id, "other");
+  await api.store.getState().runTurn("answer text", "steer", ["question-id"]);
+  assert.deepEqual(api.calls.at(-1).params, { input: "answer text", answer_to: ["question-id"] });
+});
+
+test("Agent pages replace old records and share one gap request while a slow snapshot is pending", async () => {
+  const api = await session();
+  const view = (sequence, persistence_error = null) => ({
+    version: 1, session_id: "test", sequence, persistence_error,
+    records: Array.from({length: 20}, (_, i) => ({trace_id: `${sequence}-${i}`})),
+  });
+  let finish;
+  api.onAgentSnapshot(() => new Promise(resolve => { finish = resolve; }));
+  api.event("session/view", {session_id: "test", history: [], agents: view(1, "disk unavailable")});
+  assert.equal(api.store.getState().agents.persistence_error, "disk unavailable");
+  for (let i = 3; i < 1025; i += 2) api.event("agent/update", view(i));
+  assert.equal(api.calls.filter(call => call.method === "agent/snapshot").length, 1);
+  assert.equal(api.store.getState().agents.persistence_error, null);
+  assert.deepEqual(api.store.getState().agents.records, view(1023).records);
+  finish(view(3, "obsolete error"));
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(api.store.getState().agents.sequence, 1023);
+  assert.equal(api.store.getState().agents.persistence_error, null);
 });
 
 test("thinking streams independently, closes on cancellation, and survives history replacement", async () => {
@@ -158,6 +198,21 @@ test("a running turn blocks project switching", async () => {
   await api.store.getState().resumeSession("other-chat", "/another-project");
   assert.equal(api.calls.some((call) => call.method === "session/resume"), false);
   assert.equal(api.store.getState().cwd, "/project");
+});
+
+test("busy Worker replies retain the exact question and withdrawing approval is scoped", async () => {
+  const api = await session();
+  await api.store.getState().runTurn("Inspect the project");
+  await api.store.getState().runTurn("Use settings.py", "steer", ["worker-question"]);
+  assert.deepEqual(api.calls.at(-1), {
+    method: "turn/enqueue",
+    params: { input: "Use settings.py", mode: "steer", answer_to: ["worker-question"] },
+  });
+  api.event("permission/request", { prompt_id: "new-prompt" });
+  api.event("permission/withdrawn", { prompt_id: "old-prompt" });
+  assert.equal(api.store.getState().pendingPermission.prompt_id, "new-prompt");
+  api.event("permission/withdrawn", { prompt_id: "new-prompt" });
+  assert.equal(api.store.getState().pendingPermission, null);
 });
 
 test("busy sends use the input queue and enter the transcript only when delivered", async () => {

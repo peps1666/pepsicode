@@ -162,6 +162,11 @@ def _save_transcript_file(cwd: str, permissions, transcript: list[TranscriptEntr
 
 
 def main() -> None:
+    if len(sys.argv) > 1 and sys.argv[1] == "service":
+        from pepsicode.service.cli import main as service_main
+
+        raise SystemExit(service_main(sys.argv[2:]))
+
     # 解析命令行参数，支持恢复会话、列出会话、安装、验证配置和设置日志级别等功能
     parser = argparse.ArgumentParser(
         description="pepsicode - terminal coding agent",

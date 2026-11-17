@@ -62,6 +62,7 @@ pepsicode/
   intelligence/          语言服务接入与代码智能
   cli/                   命令层：斜杠命令、管理 CLI、安装器
   server/                WebSocket 服务端（python -m pepsicode.server）与协议定义
+  service/               M3 常驻服务：宿主、策略、事件日志、通知发件箱、连接器与 CLI
   hooks/                 Hooks v2 模型、加载、信任、引擎与运行时接线
   tools/                 内置工具
   agents/                子代理定义与追踪

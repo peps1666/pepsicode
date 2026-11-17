@@ -25,6 +25,8 @@ export class StateStore {
           || !d.outbox.every((m) => m && typeof m.text === 'string' && typeof m.id === 'string'
             && ['pending', 'sending', 'uncertain'].includes(m.status))
           || !d.recentIds.every((id) => typeof id === 'string')
+          || (d.agentNotices !== undefined && (!Array.isArray(d.agentNotices)
+            || d.agentNotices.length > 512 || !d.agentNotices.every((id) => typeof id === 'string')))
           || (d.sessionId !== null && !/^[a-f0-9]{12}$/.test(d.sessionId))) {
         throw new Error('私聊状态损坏，已停止以避免重复执行');
       }

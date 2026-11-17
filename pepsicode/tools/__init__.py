@@ -2,10 +2,12 @@ import json
 from dataclasses import asdict
 from typing import Any
 
+from pepsicode.agents.trace import TraceManager
 from pepsicode.context.skills import discover_skills
 from pepsicode.intelligence.lsp import LanguageServers
 from pepsicode.mcp import create_mcp_backed_tools
 from pepsicode.tooling import ToolCapability, ToolRegistry
+from pepsicode.tools.agent_status import create_agent_status
 from pepsicode.tools.api_tester import api_tester_tool
 from pepsicode.tools.ask_user import ask_user_tool
 from pepsicode.tools.code_intelligence import create_code_intelligence_tools
@@ -66,7 +68,9 @@ def create_default_tool_registry(
     *,
     cost_tracker: Any | None = None,
     trace_manager: Any | None = None,
+    on_agent_tool_event: Any | None = None,
 ) -> ToolRegistry:
+    trace_manager = trace_manager or TraceManager()
     skills = [asdict(skill) for skill in discover_skills(cwd)]
     mcp = create_mcp_backed_tools(cwd=cwd, mcp_servers=dict(runtime.get("mcpServers", {})) if runtime else {})
     languages = LanguageServers(cwd, (runtime or {}).get("languageServers"))
@@ -87,6 +91,7 @@ def create_default_tool_registry(
         [
             # User interaction
             ask_user_tool,
+            create_agent_status(trace_manager),
             task_state_tool,
             execution_status_tool,
             exit_plan_mode_tool,
@@ -144,6 +149,7 @@ def create_default_tool_registry(
                 runtime,
                 cost_tracker=cost_tracker,
                 trace_manager=trace_manager,
+                on_tool_event=on_agent_tool_event,
             ),
             # Skills
             create_load_skill_tool(cwd),

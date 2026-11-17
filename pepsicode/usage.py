@@ -20,11 +20,13 @@ def usage_snapshot(context_manager: Any, usage: dict[str, Any] | None) -> dict[s
     context = None
     if context_manager is not None:
         stats = context_manager.get_stats()
+        input_total = prompt_tokens(usage) if usage else 0
+        counted = input_total + int(usage.get("output_tokens", 0) or 0) if input_total else stats.total_tokens
         context = {
-            "total_tokens": stats.total_tokens,
+            "total_tokens": counted,
             "max_tokens": stats.context_window,
-            "usage_percentage": stats.usage_percentage,
-            "is_estimate": context_manager.actual_input_tokens <= 0,
+            "usage_percentage": counted / stats.context_window * 100 if stats.context_window else 0,
+            "is_estimate": not input_total and context_manager.actual_input_tokens <= 0,
             "window_is_estimate": context_manager.context_window_is_estimate,
         }
     return {

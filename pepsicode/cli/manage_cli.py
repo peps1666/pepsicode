@@ -205,6 +205,11 @@ def maybe_handle_management_command(cwd: str, argv: list[str]) -> bool:
         return _handle_mcp_command(cwd, rest)
     if category == "skills":
         return _handle_skills_command(cwd, rest)
+    if category == "service":
+        from pepsicode.service.cli import main as service_main
+
+        service_main(rest)
+        return True
     if category in {"help", "--help", "-h"}:
         _print_usage()
         return True

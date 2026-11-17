@@ -38,6 +38,24 @@ export interface VerificationReport {
   status: string; reason: string; reason_code?: string; details?: string; ok: boolean;
 }
 
+export interface AgentStatus {
+  trace_id: string; parent_id: string | null; parent_call_id: string | null; name: string; task: string;
+  stage: string; status: string; elapsed_seconds: number; started_at: number; ended_at: number | null;
+  historical: boolean; stale: boolean; end_reason: string | null; result_summary: string;
+  can_stop?: boolean;
+  can_reply_running?: boolean;
+  activities: Array<{ id: string; kind: string; summary: string }>;
+  report: { id: string; status: string; summary: string; submitted_at: number } | null;
+  questions: Array<{ id: string; question: string; required: boolean; status: "pending" | "answered"; actionable: boolean }>;
+  acceptance: { passed: number; total: number };
+  recent_tools: Array<{ id: string; tool: string; summary: string; status: string; input_preview: string; output: string; duration_ms: number }>;
+}
+
+export interface AgentSnapshot {
+  version: number; session_id: string; sequence: number; records: AgentStatus[];
+  next_offset: number | null; persistence_error: string | null;
+}
+
 export interface BranchNode {
   id: string;
   parent_id: string | null;
@@ -99,6 +117,9 @@ interface SessionHistoryItem {
 }
 
 interface SessionState {
+  agents: AgentSnapshot | null;
+  fetchAgents: (offset?: number, traceId?: string) => Promise<AgentSnapshot | null>;
+  stopWorker: (traceId: string) => Promise<void>;
   tree: ConversationTree | null;
   branchUpdating: boolean;
   branchError: string;
@@ -149,7 +170,7 @@ interface SessionState {
   sessionsLoading: boolean;
   initialize: () => Promise<void>;
   createSession: () => Promise<void>;
-  runTurn: (input: string, mode?: InputMode) => Promise<void>;
+  runTurn: (input: string, mode?: InputMode, answerTo?: string[]) => Promise<void>;
   approvePermission: (decision: string, feedback?: string) => Promise<void>;
   refreshSessions: () => Promise<void>;
   resumeSession: (sessionId: string, workspace?: string) => Promise<void>;
@@ -162,6 +183,11 @@ interface SessionState {
   contextData: any;
   planMode: boolean;
   planFile: string | null;
+  // M3 resident service: announced via connection/ready. Detaching only ends
+  // this control view — authorized service work keeps running.
+  serviceInfo: { generation: string; executionMode: string } | null;
+  serviceNotifications: number;
+  refreshServiceNotifications: () => Promise<void>;
 }
 
 export interface ModelCapabilities {
@@ -280,6 +306,23 @@ async function changeBranch(
 }
 
 export const useSessionStore = create<SessionState>((set, get) => ({
+  agents: null,
+  stopWorker: async (traceId) => {
+    const { ws } = useConnectionStore.getState();
+    const id = get().sessionId;
+    if (!ws || !id) throw new Error("PepsiCode 未连接");
+    await sendRequest(ws, "agent/cancel", { session_id: id, trace_id: traceId });
+    if (get().sessionId === id) await get().fetchAgents();
+  },
+  fetchAgents: async (offset = 0, traceId) => {
+    const { ws } = useConnectionStore.getState();
+    const id = get().sessionId;
+    if (!ws || !id) return null;
+    const snapshot: AgentSnapshot = await sendRequest(ws, "agent/snapshot", { session_id: id, offset, ...(traceId ? { trace_id: traceId } : {}) });
+    if (get().sessionId !== id || snapshot.session_id !== id || snapshot.version !== 1) return null;
+    if (offset === 0 && !traceId && snapshot.sequence >= (get().agents?.sequence ?? -1)) set({ agents: snapshot });
+    return snapshot;
+  },
   tree: null,
   branchUpdating: false,
   branchError: "",
@@ -396,6 +439,8 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   contextData: null,
   planMode: false,
   planFile: null,
+  serviceInfo: null,
+  serviceNotifications: 0,
 
   initialize: async () => {
     const { ws } = useConnectionStore.getState();
@@ -404,8 +449,12 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       const result = await sendRequest(ws, "session/create", {});
       set({
         sessionId: result.session_id,
+        agents: result.agents || null,
         cwd: result.cwd,
         accessMode: result.access_mode || "auto",
+        serviceInfo: result.service
+          ? { generation: String(result.generation), executionMode: String(result.execution_mode) }
+          : null,
         ...modelSettings(result),
       });
       await get().refreshSessions();
@@ -413,16 +462,44 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     } catch (e) {
       console.error("Failed to initialize session:", e);
     }
+    get().serviceInfo && void get().refreshServiceNotifications();
 
+    let agentResync: { sessionId: string } | undefined;
     // Subscribe to events
     onMessage((message) => {
       if (message.kind !== "event") return;
       const { event, data } = message;
 
       switch (event) {
+        case "connection/ready": {
+          if (data.service) {
+            set({ serviceInfo: { generation: String(data.generation ?? ""), executionMode: String(data.execution_mode ?? data.executionMode ?? "service") } });
+            void get().refreshServiceNotifications();
+          }
+          break;
+        }
+        case "agent/update": {
+          const snapshot: AgentSnapshot = data;
+          const previous = get().agents;
+          if (snapshot.version !== 1 || snapshot.session_id !== get().sessionId
+              || (previous && snapshot.sequence <= previous.sequence)) break;
+          // Updates carry a complete first page. Apply immediately and confirm
+          // a gap via the active-session snapshot endpoint.
+          set({ agents: snapshot });
+          if (previous && snapshot.sequence > previous.sequence + 1 && agentResync?.sessionId !== snapshot.session_id) {
+            const pending = { sessionId: snapshot.session_id };
+            agentResync = pending;
+            void get().fetchAgents().catch(() => {}).finally(() => {
+              if (agentResync === pending) agentResync = undefined;
+            });
+          }
+          break;
+        }
         case "session/view": {
           set((state) => ({
             sessionId: data.session_id,
+            agents: data.session_id === state.sessionId && state.agents
+              && state.agents.sequence > (data.agents?.sequence ?? -1) ? state.agents : data.agents || null,
             messages: hydrateSessionHistory(data.history),
             tree: data.tree || null,
             verification: data.verification || null,
@@ -595,6 +672,10 @@ export const useSessionStore = create<SessionState>((set, get) => ({
           set({ pendingPermission: data });
           break;
         }
+        case "permission/withdrawn": {
+          if (get().pendingPermission?.prompt_id === data.prompt_id) set({ pendingPermission: null });
+          break;
+        }
         case "cost/update": {
           set((state) => ({
             costData: { ...state.costData, ...data },
@@ -624,6 +705,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
           get().refreshContext();
           void get().refreshCommands();
           void get().refreshTree();
+          if (get().serviceInfo) void get().refreshServiceNotifications();
           break;
         }
         case "session/saved": {
@@ -641,6 +723,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     set({ verification: null, task: null });
     set({
       sessionId: result.session_id,
+      agents: result.agents || null,
       cwd: result.cwd,
       accessMode: result.access_mode || "auto",
       ...modelSettings(result),
@@ -658,13 +741,13 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     await Promise.all([get().refreshCost(), get().refreshContext(), get().refreshCommands()]);
   },
 
-  runTurn: async (input: string, mode: InputMode = "steer") => {
+  runTurn: async (input: string, mode: InputMode = "steer", answerTo: string[] = []) => {
     const { ws } = useConnectionStore.getState();
     if (!ws) throw new Error("Server disconnected");
     if (get().modelUpdating || get().branchUpdating) throw new Error("请等待当前操作完成");
     if (get().isStopping) throw new Error("任务正在停止，请稍后发送");
     if (get().isRunning) {
-      await sendRequest(ws, "turn/enqueue", { input, mode });
+      await sendRequest(ws, "turn/enqueue", { input, mode, ...(answerTo.length ? { answer_to: answerTo } : {}) });
       return;
     }
 
@@ -680,7 +763,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     // Fire-and-forget: turn/run blocks until the agent turn completes.
     // Stream events (message/delta, tool/call, etc.) arrive in the meantime
     // via the onMessage subscription registered in initialize().
-    sendRequest(ws, "turn/run", { input }, { timeoutMs: null }).catch((e) => {
+    sendRequest(ws, "turn/run", { input, ...(answerTo.length ? { answer_to: answerTo } : {}) }, { timeoutMs: null }).catch((e) => {
       console.error("turn/run error:", e);
       set((state) => ({
         isRunning: false,
@@ -704,6 +787,20 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     });
     if (result.resolved === false) throw new Error("这项权限请求已结束");
     if (get().pendingPermission?.prompt_id === pendingPermission.prompt_id) set({ pendingPermission: null });
+  },
+
+  refreshServiceNotifications: async () => {
+    // Service outbox catch-up (M3): count merged pending notifications so the
+    // banner can show them without spamming the chat timeline.
+    if (!get().serviceInfo) return;
+    const { ws } = useConnectionStore.getState();
+    try {
+      const result = await sendRequest(ws, "notifications/fetch", { cursor: 0 });
+      const items = Array.isArray(result.notifications) ? result.notifications : [];
+      set({ serviceNotifications: items.filter((item: any) => item.status !== "uncertain").length });
+    } catch {
+      // Older kernels without the API simply show no count.
+    }
   },
 
   refreshSessions: async () => {
@@ -740,6 +837,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       });
       set({
         sessionId: result.session_id,
+        agents: result.agents || null,
         cwd: result.workspace,
         accessMode: result.access_mode || "auto",
         ...modelSettings(result),

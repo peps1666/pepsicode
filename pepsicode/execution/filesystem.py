@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from pepsicode.cancellation import TurnCancelledError, raise_if_cancelled
-from pepsicode.execution.runtime import current_scope, current_tool_context
+from pepsicode.execution.runtime import current_scope, current_tool_context, run_policy_checkpoint
 
 
 class StaleFileError(ValueError):
@@ -97,6 +97,7 @@ class FileSystemService:
             raise StaleFileError("Directory target changed during approval")
         scope = getattr(context, "execution", None) or current_scope()
         if scope:
+            run_policy_checkpoint(scope, kind="path", path=str(target))
             scope.record("directory/prepared", path=str(target))
         target.mkdir(parents=True, exist_ok=True)
         context.effect_state = "committed"
@@ -122,6 +123,7 @@ class FileSystemService:
             raise StaleFileError("Symlink target changed during approval")
         scope = getattr(context, "execution", None) or current_scope()
         if scope:
+            run_policy_checkpoint(scope, kind="path", path=str(target))
             scope.record("symlink/prepared", source=str(source), path=str(target))
         os.symlink(str(source), str(target), target_is_directory=source.is_dir())
         context.effect_state = "committed"
@@ -257,6 +259,7 @@ class FileSystemService:
             scope = getattr(context, "execution", None) or current_scope()
             if scope:
                 scope.check_cancelled()
+                run_policy_checkpoint(scope, kind="path", path=str(fresh))
                 scope.record("file/prepared", path=str(fresh), before=expected, after=version(content))
             temporary = None
             try:

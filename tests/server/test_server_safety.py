@@ -71,6 +71,66 @@ def test_authentication_accepts_only_explicit_trusted_origins_and_token(origin):
     assert socket.sent == [{"kind": "response", "id": 0, "result": {"authenticated": True}}]
 
 
+def test_slow_agent_subscriber_coalesces_updates_without_blocking_commit(isolated_sessions, monkeypatch):
+    from pepsicode.core.session import load_session
+
+    session = app.ClientSession(str(isolated_sessions))
+    session.session_data = data = create_new_session(session.cwd)
+    manager = data.agent_traces
+    trace_id = manager.create(agent_type="explore", name="Explore").trace_id
+    monkeypatch.setattr(app, "ClientSession", lambda _: session)
+
+    async def scenario():
+        incoming = asyncio.Queue()
+        updates = asyncio.Queue()
+        responses = asyncio.Queue()
+        release = asyncio.Event()
+
+        class SlowSocket(AuthSocket):
+            def __aiter__(self):
+                return self
+
+            async def __anext__(self):
+                frame = await incoming.get()
+                if frame is None:
+                    raise StopAsyncIteration
+                return frame
+
+            async def send(self, message):
+                packet = json.loads(message)
+                if packet.get("event") == "agent/update":
+                    await updates.put(packet["data"])
+                    await release.wait()
+                elif packet.get("id") == 1:
+                    await responses.put(packet)
+
+        server = app.PepsiCodeServer(token="test-token")
+        connection = asyncio.create_task(server.handle_ws(SlowSocket(auth_frame())))
+        try:
+            first = await asyncio.wait_for(updates.get(), timeout=5)
+            assert first["records"][0]["ended_at"] is None
+            for _ in range(200):
+                manager.record_tool_call(trace_id)
+            manager.complete(trace_id, result_summary="Complete while transport waits")
+            await asyncio.wait_for(asyncio.to_thread(save_session, data), timeout=5)
+            saved = await asyncio.to_thread(load_session, data.session_id)
+            assert saved.agent_traces.get(trace_id).result_summary == "Complete while transport waits"
+            await incoming.put(json.dumps({"kind": "request", "id": 1, "method": "agent/snapshot"}))
+            response = await asyncio.wait_for(responses.get(), timeout=5)
+            assert response["result"]["records"][0]["stage"] == "completed"
+            assert updates.empty()
+            release.set()
+            latest = await asyncio.wait_for(updates.get(), timeout=5)
+            assert latest["sequence"] == response["result"]["sequence"]
+            assert latest["records"][0]["tool_call_count"] == 200
+        finally:
+            release.set()
+            await incoming.put(None)
+            await asyncio.wait_for(connection, timeout=5)
+
+    asyncio.run(scenario())
+
+
 def test_real_socket_cannot_read_session_metadata_without_authentication(isolated_sessions):
     root = isolated_sessions
     session = create_new_session(str(root))

@@ -33,6 +33,15 @@ def denying(root):
     return PermissionManager(str(root), mode="auto", prompt=lambda _request: {"decision": "deny_once"})
 
 
+def test_managed_worker_cannot_start_persistent_process(tmp_path, monkeypatch):
+    spawn = Mock(side_effect=AssertionError("A persistent process reached OS spawn"))
+    monkeypatch.setattr(processes.subprocess, "Popen", spawn)
+    scope = ExecutionScope(str(tmp_path), allow_background_processes=False)
+    with bind_scope(scope), pytest.raises(PermissionError, match="Persistent commands"):
+        processes.Popen([sys.executable, "-c", "pass"], persistent=True)
+    spawn.assert_not_called()
+
+
 @pytest.mark.parametrize(
     "tool,arguments",
     [
@@ -197,7 +206,8 @@ def test_requested_sandbox_uses_confined_argv_and_fails_closed_when_unavailable(
     assert not spawn.called
 
 
-def test_allow_once_never_authorizes_another_command_or_cwd(tmp_path):
+def test_allow_once_never_authorizes_another_command_or_cwd(tmp_path, monkeypatch):
+    monkeypatch.setattr("pepsicode.approval.store.PEPSI_CODE_PERMISSIONS_PATH", tmp_path / "permissions.json")
     requests = []
     manager = PermissionManager(
         str(tmp_path), prompt=lambda request: requests.append(request) or {"decision": "allow_once"}
@@ -239,7 +249,8 @@ def test_journal_failure_prevents_dispatch(tmp_path, monkeypatch):
     assert not effect.called
 
 
-def test_model_log_reconstructs_hook_context_and_schemas_without_auth_headers(tmp_path, monkeypatch):
+@pytest.mark.parametrize("agent_scope", ["main", "subagent:Explore"])
+def test_model_log_reconstructs_hook_context_and_schemas_without_auth_headers(tmp_path, monkeypatch, agent_scope):
     from pepsicode import config
     from pepsicode.execution.runtime import execution_journal_dir
 
@@ -275,6 +286,8 @@ def test_model_log_reconstructs_hook_context_and_schemas_without_auth_headers(tm
         cwd=str(tmp_path),
         cost_tracker=tracker,
         hook_engine=hook,
+        agent_scope=agent_scope,
+        max_steps=5,
     )
     assert result[-1]["content"] == "done"
     journal_path = next(execution_journal_dir(str(tmp_path)).glob("*.jsonl"))
@@ -282,6 +295,7 @@ def test_model_log_reconstructs_hook_context_and_schemas_without_auth_headers(tm
     request = next(record for record in records if record["event"] == "model/prepared")
     assert "HOOK_CONTEXT_SENTINEL" not in request["body"]["system"]
     assert "HOOK_CONTEXT_SENTINEL" in json.dumps(request["body"]["messages"])
+    assert ("worker-round-budget" in json.dumps(request["body"]["messages"])) is agent_scope.startswith("subagent")
     assert request["body"]["tools"][0]["name"] == "read_file"
     assert "HEADER_SECRET" not in journal_path.read_text(encoding="utf-8")
     assert tracker.get_total_calls() == 1

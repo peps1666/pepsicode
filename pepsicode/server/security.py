@@ -17,7 +17,7 @@ def request_origin(websocket) -> str | None:
     return headers.get("Origin")
 
 
-async def authenticate(websocket, token: str, allowed_origins: set[str]) -> bool:
+async def authenticate(websocket, token: str, allowed_origins: set[str]) -> dict | None:
     try:
         origin = request_origin(websocket)
         if origin is not None and origin not in allowed_origins:
@@ -39,7 +39,7 @@ async def authenticate(websocket, token: str, allowed_origins: set[str]) -> bool
         await websocket.send(
             json.dumps({"kind": "response", "id": message.get("id", 0), "result": {"authenticated": True}})
         )
-        return True
+        return params
     except (ValueError, TypeError, TimeoutError, OSError, ConnectionClosed):
         await websocket.close(code=1008, reason="Connection authentication failed")
-        return False
+        return None

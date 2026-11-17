@@ -136,3 +136,66 @@ test('private QQ text traverses a real Python agent session, approvals, question
   assert.ok(fs.existsSync(path.join(root, 'backend-state', 'sessions', `${originalId}.json`)));
   assert.deepEqual(fatal, []);
 });
+
+test('a live WebSocket answer starts a replacement before the sibling Worker finishes', { timeout: 45000 }, async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'pepsi-qq-orchestration-'));
+  const token = randomBytes(32).toString('hex');
+  const fixture = fileURLToPath(new URL('./backend_fixture.py', import.meta.url));
+  const child = spawn(process.env.PEPSI_PYTHON ?? 'python', ['-u', fixture, root, 'orchestration'], {
+    env: { ...process.env, PEPSI_CODE_SERVER_TOKEN: token, PYTHONIOENCODING: 'utf-8' },
+    windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  let output = '', errors = '', spawnError, client;
+  child.stdout.on('data', (chunk) => { output += chunk; });
+  child.stderr.on('data', (chunk) => { errors += chunk; });
+  child.once('error', (error) => { spawnError = error; });
+  t.after(async () => {
+    await client?.close();
+    if (child.pid && child.exitCode === null && child.signalCode === null) {
+      await new Promise((resolve) => { child.once('exit', resolve); child.kill(); });
+    }
+    assert.equal(path.dirname(root), fs.realpathSync(os.tmpdir()));
+    assert.ok(path.basename(root).startsWith('pepsi-qq-orchestration-'));
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+  await until(() => spawnError || child.exitCode !== null || /listening on (ws:\/\/[^\s]+)/.test(output), () => errors);
+  assert.ifError(spawnError);
+  assert.equal(child.exitCode, null, errors);
+  const url = output.match(/listening on (ws:\/\/[^\s]+)/)[1];
+  client = new RpcClient({ url, token, protocol: 'pepsi' });
+  await client.connect();
+  const { session_id } = await client.request('session/create', { cwd: fs.realpathSync(root), profile: 'qq_private' });
+  const turn = client.request('turn/run', { input: 'What is in this project?' }, { timeoutMs: 20000 });
+  let complete = false;
+  void turn.then(() => { complete = true; }, () => { complete = true; });
+
+  let question, sibling;
+  const deadline = Date.now() + 10000;
+  while (!question && !complete && Date.now() < deadline) {
+    const view = await client.request('agent/snapshot', { session_id });
+    const asking = view.records.find((row) => row.can_reply_running);
+    question = asking?.questions.find((item) => item.actionable);
+    sibling = view.records.find((row) => row.task === 'Sibling investigation');
+    if (!question) await delay(20);
+  }
+  assert.ok(question, errors);
+  await until(() => fs.existsSync(path.join(root, 'coordinator-entered')), () => errors);
+  assert.equal(sibling?.ended_at, null, errors);
+  assert.equal(complete, false, errors);
+  const receipt = await client.request('turn/enqueue', { input: 'Use settings.py', mode: 'steer', answer_to: [question.id] });
+  fs.writeFileSync(path.join(root, 'reply-enqueued'), '');
+  await turn;
+
+  const saved = JSON.parse(fs.readFileSync(path.join(root, 'backend-state', 'sessions', `${session_id}.json`), 'utf8'));
+  const control = saved.task_control;
+  assert.equal(control.questions.find((item) => item.id === question.id).answer_input_id, receipt.id);
+  const [original, other, replacement] = control.orchestration.work;
+  assert.equal(other.state, 'stale');
+  assert.ok(replacement, JSON.stringify({
+    errors, toolResults: saved.messages.filter((item) => item.role === 'tool_result').slice(-3),
+  }));
+  assert.equal(replacement.retry_of, original.attempt_id);
+  assert.equal(replacement.work_id, original.work_id);
+  assert.equal(replacement.state, 'result_ready');
+  assert.match(replacement.summary, /Resumed with settings\.py/);
+});

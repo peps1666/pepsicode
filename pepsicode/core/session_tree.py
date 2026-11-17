@@ -96,6 +96,8 @@ def checkpoint_execution(state: dict) -> None:
 
         with session._tree_lock:
             session.execution_state = copy.deepcopy(state)
+            if session.agent_traces.has_records():
+                session.agent_traces.touch()
             save_session(session)
 
 
@@ -187,6 +189,8 @@ def checkout_entry(session: SessionData, entry_id: str, *, preserve_task: bool =
         # selected task and will recheck it before accepting a new answer.
         if not preserve_task and session.task_control.get("task"):
             session.task_control.setdefault("task_history", []).append(session.task_control.pop("task"))
+        if session.agent_traces.has_records():
+            session.agent_traces.touch()
         return draft
 
 

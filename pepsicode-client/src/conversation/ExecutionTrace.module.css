@@ -50,3 +50,21 @@
 .empty { padding: 44px 24px; color: var(--dsw-alias-label-tertiary); font-size: 12px; text-align: center; }
 .loadMore { margin: 8px 12px; }
 @container (max-width: 850px) { .withInspector { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(180px, 1fr) minmax(150px, .85fr); } .inspector { border-left: 0; border-top: 1px solid var(--dsw-alias-border-l2); } .toolbar { padding: 14px 18px; } }
+.agentCards {
+  padding: 12px 16px;
+  max-height: 40%;
+  overflow: auto;
+}
+
+.agentCard {
+  margin-block: 6px;
+  overflow-wrap: anywhere;
+}
+
+.agentCard small {
+  display: block;
+}
+
+.agentCard pre {
+  white-space: pre-wrap;
+}

@@ -8,7 +8,7 @@ import time
 import urllib.request
 from urllib.parse import urlsplit
 
-from pepsicode.execution.runtime import current_scope, current_tool_context
+from pepsicode.execution.runtime import current_scope, current_tool_context, run_policy_checkpoint
 
 
 def tavily_search(query: str, num_results: int, key: str, *, context=None, timeout=30):
@@ -58,6 +58,8 @@ def authorize(context, operation: str, target: str, *, mutating: bool):
     scope = (getattr(context, "execution", None) if context is not None else None) or current_scope()
     if scope:
         scope.check_cancelled()
+        if scope.worker_sandbox:
+            raise PermissionError("External network requests are unavailable to hardened Workers")
     permissions = (context.permissions if context is not None else None) or (scope.permissions if scope else None)
     if mutating:
         if scope and scope.has_unknown:
@@ -70,9 +72,9 @@ def authorize(context, operation: str, target: str, *, mutating: bool):
             raise PermissionError(outcome.denial_message(scope=operation))
         if permissions.mode != mode:
             raise PermissionError("Permissions changed during external action approval")
-        if scope:
-            scope.check_cancelled()
     if scope:
+        scope.check_cancelled()
+        run_policy_checkpoint(scope, kind="network", url=target, action=operation, mutating=mutating)
         scope.record("external/prepared", operation=operation, target=target, mutating=mutating)
 
 
@@ -99,6 +101,8 @@ def urlopen(request, *, context=None, timeout=30, validate_url=None):
         mutating=mutation,
     )
 
+    scope = (getattr(context, "execution", None) if context is not None else None) or current_scope()
+
     class CheckedRedirect(urllib.request.HTTPRedirectHandler):
         def redirect_request(self, req, fp, code, msg, headers, newurl):
             new = urlsplit(newurl)
@@ -116,11 +120,11 @@ def urlopen(request, *, context=None, timeout=30, validate_url=None):
                 parsed.query,
             ):
                 raise PermissionError("Redirect of an approved external mutation refused")
+            run_policy_checkpoint(scope, kind="network", url=newurl, action=f"HTTP {method}", mutating=mutation)
             return super().redirect_request(req, fp, code, msg, headers, newurl)
 
     if context is not None and method not in {"GET", "HEAD", "OPTIONS"}:
         context.effect_state = "unknown"
-    scope = getattr(context, "execution", None) or current_scope()
     if scope:
         scope.check_cancelled()
         if scope.deadline is not None:

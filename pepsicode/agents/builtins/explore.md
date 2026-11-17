@@ -5,6 +5,7 @@ model: inherit
 maxTurns: 5
 isReadOnly: true
 allowedTools:
+  - agent_report
   - read_file
   - list_files
   - grep_files

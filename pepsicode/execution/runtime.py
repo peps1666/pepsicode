@@ -114,6 +114,7 @@ class RequestBudget:
     max_requests: int = 200
     requests: int = 0
     unmetered: bool = False
+    coordinator_reserve: int = 0
     _lock: Any = field(default_factory=threading.RLock, repr=False)
 
     def __post_init__(self):
@@ -131,6 +132,11 @@ class RequestBudget:
         if self.requests >= self.max_requests:
             raise ModelRequestLimitError("Shared model request limit reached")
 
+    def check_worker(self):
+        self.check()
+        if self.max_requests - self.requests <= self.coordinator_reserve:
+            raise ModelRequestLimitError("Remaining requests are reserved for the coordinator")
+
     @staticmethod
     def _allocate_child(scope):
         if scope.request_limit is not None and scope.requests >= scope.request_limit:
@@ -146,7 +152,7 @@ class RequestBudget:
                 scope.check_cancelled()
             try:
                 scope.check_cancelled()
-                self.check()
+                (self.check_worker if scope.parent_task_id is not None else self.check)()
                 self._allocate_child(scope)
                 self.requests += 1
             finally:
@@ -159,7 +165,7 @@ class RequestBudget:
             scope.check_cancelled()
         try:
             scope.check_cancelled()
-            self.check()
+            (self.check_worker if scope.parent_task_id is not None else self.check)()
             if self.limit is not None:
                 pricing = MODEL_PRICING.get(body["model"], MODEL_PRICING["default"])
                 # Conservative preflight estimate; vendor tokenizers/prices
@@ -220,6 +226,13 @@ class ExecutionScope:
     snapshot_metrics: list = field(default_factory=list)
     recovery_version: list = field(default_factory=lambda: [0])
     _recovery_lock: Any = field(default_factory=threading.RLock, repr=False)
+    trace_id: str | None = None
+    activity_observer: Any = field(default=None, repr=False)
+    allow_background_processes: bool = True
+    workspace_boundary: str | None = None
+    process_environment: dict[str, str] | None = None
+    worker_sandbox: Any = None
+    policy_checkpoint: Any = field(default=None, repr=False)
 
     @property
     def has_unknown(self):
@@ -228,6 +241,9 @@ class ExecutionScope:
 
     def mark_unknown(self, call_id, **details):
         with self._recovery_lock:
+            if self.trace_id:
+                details.update(trace_id=self.trace_id, tool_use_id=call_id)
+                call_id = f"{self.trace_id}:{call_id}"
             self.unresolved[call_id] = {"call_id": call_id, **details, "state": "unknown"}
             self.recovery_version[0] += 1
             self.state = "unknown"
@@ -244,11 +260,14 @@ class ExecutionScope:
             self.state = "unknown" if self.has_unknown else "running"
 
     def snapshot(self):
+        with self._recovery_lock:
+            unknown_trace_ids = sorted({item["trace_id"] for item in self.unresolved.values() if item.get("trace_id")})
         return {
             "task_id": self.task_id,
             "state": "unknown" if self.has_unknown else self.state,
             "journal": str(self.journal.path) if self.journal else None,
             "recovery_revision": self.recovery_version[0],
+            "unknown_trace_ids": unknown_trace_ids,
             "usage_uncertain": bool(self.budget and self.budget.unmetered),
             "workspace_scans": {
                 "calls": len(self.snapshot_metrics),
@@ -272,7 +291,30 @@ class ExecutionScope:
 
     def record(self, event: str, **data):
         if self.journal is not None:
-            self.journal.append(event, task_id=self.task_id, parent_task_id=self.parent_task_id, **data)
+            identity = {"trace_id": self.trace_id} if self.trace_id else {}
+            if self.trace_id and "call_id" in data:
+                data["tool_use_id"] = data["call_id"]
+                data["call_id"] = f"{self.trace_id}:{data['call_id']}"
+            self.journal.append(event, task_id=self.task_id, parent_task_id=self.parent_task_id, **identity, **data)
+        if self.activity_observer and event in {
+            "model/prepared",
+            "model/settled",
+            "model/failed",
+            "process/started",
+        }:
+            self.observe(event, **data)
+
+    def observe(self, event: str, **data):
+        if self.activity_observer:
+            self.activity_observer(event, data)
+
+    @contextmanager
+    def observe_activity(self, kind: str, activity_id: str):
+        self.observe(f"{kind}/start", activity_id=activity_id)
+        try:
+            yield
+        finally:
+            self.observe(f"{kind}/end", activity_id=activity_id)
 
     def child(self, cwd=None, permissions=None, cancellation_event=None):
         from pepsicode.core.task_control import _fallback_lock, owner, snapshot
@@ -327,7 +369,22 @@ class ExecutionScope:
             observations=self.observations,
             recovery_version=self.recovery_version,
             _recovery_lock=self._recovery_lock,
+            allow_background_processes=self.allow_background_processes,
+            workspace_boundary=self.workspace_boundary,
+            process_environment=self.process_environment,
+            worker_sandbox=self.worker_sandbox,
+            policy_checkpoint=self.policy_checkpoint,
         )
+
+
+def run_policy_checkpoint(scope, **context):
+    """Invoke ``scope.policy_checkpoint`` with structured side-effect context."""
+    if scope is None or not scope.policy_checkpoint:
+        return
+    try:
+        scope.policy_checkpoint(**context)
+    except TypeError:
+        scope.policy_checkpoint()
 
 
 def current_scope() -> ExecutionScope | None:
@@ -365,26 +422,30 @@ def execution_journal_dir(cwd: str) -> Path:
     return (config.PEPSI_CODE_DIR / "executions" / digest).resolve()
 
 
-def _recover(scope, previous):
-    if isinstance(previous, dict) and previous.get("usage_uncertain") and scope.budget:
-        scope.budget.unmetered = True
+def recover_execution_calls(cwd, previous):
     if not isinstance(previous, dict) or not previous.get("journal"):
-        return
+        return []
     path = Path(previous["journal"]).resolve()
-    reserved = (Path(scope.cwd) / ".pepsi-code" / "executions").resolve()
-    if path.parent not in {reserved, execution_journal_dir(scope.cwd)} or path.suffix != ".jsonl":
+    reserved = (Path(cwd) / ".pepsi-code" / "executions").resolve()
+    if path.parent not in {reserved, execution_journal_dir(cwd)} or path.suffix != ".jsonl":
         raise ValueError("Recovery journal must belong to this workspace's execution directory")
     try:
-        calls = ExecutionJournal.interrupted_calls(path)
+        return ExecutionJournal.interrupted_calls(path)
     except (OSError, ValueError, KeyError, TypeError) as error:
         # A missing/corrupt audit trail cannot prove that effects did not run.
-        calls = [
+        return [
             {
                 "call_id": previous.get("task_id", "unreadable-journal"),
                 "tool": "unreadable journal",
                 "error": type(error).__name__,
             }
         ]
+
+
+def _recover(scope, previous):
+    if isinstance(previous, dict) and previous.get("usage_uncertain") and scope.budget:
+        scope.budget.unmetered = True
+    calls = recover_execution_calls(scope.cwd, previous)
     for call in calls:
         scope.unresolved[call["call_id"]] = call
     if calls:
@@ -426,6 +487,7 @@ def scoped_turn(function):
                 kwargs.get("cancellation_event"),
                 RequestBudget(tracker, limit, runtime.get("modelRequestLimit", 200)),
                 control=runtime.setdefault("_taskControl", {}),
+                policy_checkpoint=runtime.get("_servicePolicyCheckpoint"),
             )
             if Path(cwd).is_dir():
                 scope.journal = ExecutionJournal(execution_journal_dir(cwd) / f"{scope.task_id}.jsonl")

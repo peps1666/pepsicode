@@ -201,7 +201,7 @@ class AgentLoader:
             raise ValueError(f"Agent {name}: disallowedTools must be a list of tool names")
         from pepsicode.tools.task import _SUB_AGENT_TOOL_POOL
 
-        known = {tool.name for tool in _SUB_AGENT_TOOL_POOL.list()} | {"notebook_edit"}
+        known = {tool.name for tool in _SUB_AGENT_TOOL_POOL.list()} | {"notebook_edit", "agent_report"}
         unknown = (set(allowed_tools) | set(disallowed_tools)) - known
         if unknown:
             raise ValueError(f"Agent {name}: unknown tools: {', '.join(sorted(unknown))}")

@@ -24,7 +24,7 @@ Tavily 搜索是单独的受限执行入口：固定 HTTPS 目标、基础搜索
 
 默认 `processSandboxMode` 是 `danger-full-access`，表示**应用层审批，通过后的程序拥有当前用户的权限**。它不能阻止被批准的 Python、Shell、Git Hook 或 Docker 访问工作区外资源。
 
-当前内置 LocalSandboxBackend 没有内核隔离能力。选择 `workspace-write` 或 `read-only` 时，它会拒绝启动，不能降级成直接运行。自定义后端必须返回实际封装的 argv 和 `full` enforcement；仅环境清理等 `partial` 能力不足以满足限制模式。本次没有新增 Windows/Linux 原生隔离后端。
+默认的 LocalSandboxBackend 没有内核隔离能力。选择 `workspace-write` 或 `read-only` 时，它会拒绝启动。新的 Linux Bubblewrap 后端仅供显式启用 hardened 的受管 Worker 使用，要求系统支持用户命名空间。准备时会启动受限探针，Windows 继续拒绝 hardened。普通工具命令仍按会话指定的后端运行。具体挂载和限制见[独立工作区](task-orchestration.md#m2-工作区准备)。
 
 MCP 的服务启动和连接来自宿主配置。配置中的程序、语言服务器和自定义扩展是可信计算基的一部分。工具能力声明不能约束已经获准运行的任意代码。
 

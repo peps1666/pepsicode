@@ -100,7 +100,7 @@ test("authentication completes before workspace requests become available", asyn
   ws.onopen();
   assert.equal(api.useConnectionStore.getState().status, "connecting");
   assert.equal(api.useConnectionStore.getState().ws, null);
-  assert.deepEqual(ws.sent[0], {kind: "request", id: 0, method: "connection/auth", params: {token: "private-token"}});
+  assert.deepEqual(ws.sent[0], {kind: "request", id: 0, method: "connection/auth", params: {token: "private-token", orchestration: 1}});
   ws.onmessage({data: JSON.stringify({kind: "response", id: 0, result: {authenticated: true}})});
   await ready;
   assert.equal(api.useConnectionStore.getState().status, "connected");

@@ -1,0 +1,23 @@
+.banner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 16px;
+  font-size: 12px;
+  color: var(--dsw-alias-label-secondary);
+  background-color: var(--dsw-alias-bg-base);
+  border-bottom: 1px solid var(--dsw-alias-border-l1);
+}
+
+.dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  background-color: var(--dsw-alias-state-success-primary, #2e7d32);
+}
+
+.hint {
+  margin-left: auto;
+  color: var(--dsw-alias-label-placeholder, var(--dsw-alias-label-secondary));
+}

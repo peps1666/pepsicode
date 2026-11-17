@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import threading
 import time
 import uuid
@@ -16,6 +17,7 @@ from pathlib import Path
 from tempfile import NamedTemporaryFile
 from typing import Any
 
+from pepsicode.agents.trace import TraceManager
 from pepsicode.config import PEPSI_CODE_DIR
 from pepsicode.logging_config import get_logger
 
@@ -28,6 +30,53 @@ logger = get_logger("session")
 SESSIONS_DIR = PEPSI_CODE_DIR / "sessions"
 AUTOSAVE_INTERVAL_SECONDS = 30  # Minimum seconds between autosaves
 _STORE_LOCK = threading.RLock()
+_GIT_SHA = re.compile(r"(?:[0-9a-f]{40}|[0-9a-f]{64})\Z")
+
+
+def _read_git_head(checkout: Path) -> str | None:
+    """Read the Git HEAD commit SHA of ``checkout`` without spawning a subprocess."""
+    dot_git = checkout / ".git"
+    try:
+        if dot_git.is_file():
+            marker = dot_git.read_text(encoding="utf-8").strip()
+            if not marker.startswith("gitdir:"):
+                return None
+            raw_dir = marker[len("gitdir:") :].strip()
+            git_dir = Path(raw_dir)
+            if not git_dir.is_absolute():
+                git_dir = (checkout / git_dir).resolve()
+        elif dot_git.is_dir():
+            git_dir = dot_git
+        else:
+            return None
+        commondir_file = git_dir / "commondir"
+        if commondir_file.is_file():
+            common_dir = (git_dir / commondir_file.read_text(encoding="utf-8").strip()).resolve()
+        else:
+            common_dir = git_dir
+        head_text = (git_dir / "HEAD").read_text(encoding="utf-8").strip()
+        if _GIT_SHA.fullmatch(head_text):
+            return head_text
+        if not head_text.startswith("ref:"):
+            return None
+        ref_name = head_text[len("ref:") :].strip()
+        for base in (git_dir, common_dir):
+            ref_path = base / ref_name
+            if ref_path.is_file():
+                sha = ref_path.read_text(encoding="utf-8").strip()
+                return sha if _GIT_SHA.fullmatch(sha) else None
+        packed = common_dir / "packed-refs"
+        if packed.is_file():
+            for line in packed.read_text(encoding="utf-8").splitlines():
+                if not line or line.startswith("#") or line.startswith("^"):
+                    continue
+                parts = line.split(" ", 1)
+                if len(parts) == 2 and parts[1].strip() == ref_name:
+                    sha = parts[0].strip()
+                    return sha if _GIT_SHA.fullmatch(sha) else None
+    except OSError:
+        return None
+    return None
 
 
 def _atomic_write(path: Path, content: str) -> None:
@@ -92,8 +141,14 @@ class SessionData:
     _default_plan_start: bool = field(default=False, repr=False, compare=False)
     _tree_lock: Any = field(default_factory=threading.RLock, repr=False, compare=False)
     metadata: SessionMetadata = field(default=None)
+    agent_traces: TraceManager = field(init=False, repr=False, compare=False)
 
     def __post_init__(self):
+        def read_archive():
+            raw = _session_file(self.session_id).read_text(encoding="utf-8")
+            return json.loads(raw)["agent_traces"]["records"]
+
+        self.agent_traces = TraceManager(self.session_id, read_archive=read_archive)
         if self.metadata is None:
             self.metadata = SessionMetadata(
                 session_id=self.session_id,
@@ -215,6 +270,7 @@ def _has_recoverable_content(session: SessionData, *, include_service: bool = Tr
     # be able to resume it after a restart even before the first message.
     if (
         session.execution_state
+        or session.agent_traces.has_records()
         or (session.plan_file_path and (not session._default_plan_start or Path(session.plan_file_path).is_file()))
         or (include_service and session.profile != "default")
     ):
@@ -272,6 +328,7 @@ def _save_session_locked(session: SessionData) -> None:
         "verification_state": session.verification_state,
         "execution_state": session.execution_state,
         "task_control": session.task_control,
+        "agent_traces": session.agent_traces.serialize(),
         "loaded_tools": session.loaded_tools,
         "tree": session.tree,
         "parent_session_id": session.parent_session_id,
@@ -288,6 +345,8 @@ def _save_session_locked(session: SessionData) -> None:
         },
     }
     _atomic_write(session_path, json.dumps(serializable, indent=2, ensure_ascii=False) + "\n")
+    session.agent_traces.set_persistence_error(None)
+    session.agent_traces.retain_recent(serializable["agent_traces"]["records"])
 
     # The session file is the authoritative commit. An auxiliary index failure
     # must not report rejection after input has already been durably accepted.
@@ -329,13 +388,36 @@ def load_session(session_id: str) -> SessionData | None:
             from pepsicode.core.workspace_state import digest, task_paths, workspace_state
 
             proof = task.get("acceptance") or {}
+            # Acceptance rooted at a delivered integration froze the digest of
+            # that checkout, so the proof is rechecked against the delivered
+            # version. If the checkout is gone the recorded digest can no
+            # longer be reproduced and the main workspace comparison fails
+            # conservatively.
+            delivered = proof.get("delivered") or {}
+            proof_workspace = data["workspace"]
+            delivered_ok = True
+            if delivered:
+                checkout_path = delivered.get("checkout")
+                expected_sha = delivered.get("head_sha")
+                if (
+                    not isinstance(checkout_path, str)
+                    or not checkout_path
+                    or not Path(checkout_path).is_dir()
+                    or not isinstance(expected_sha, str)
+                    or not _GIT_SHA.fullmatch(expected_sha)
+                ):
+                    delivered_ok = False
+                else:
+                    proof_workspace = checkout_path
+                    delivered_ok = _read_git_head(Path(checkout_path)) == expected_sha
             try:
                 current_proof = (
-                    proof.get("valid")
+                    delivered_ok
+                    and proof.get("valid")
                     and proof.get("task_revision") == task["revision"]
                     and proof.get("criteria_digest") == digest(task["criteria"])
                     and proof.get("workspace", {}).get("digest")
-                    == workspace_state(data["workspace"], include_paths=task_paths(task))["digest"]
+                    == workspace_state(proof_workspace, include_paths=task_paths(task))["digest"]
                 )
             except (OSError, ValueError):
                 current_proof = False
@@ -343,7 +425,7 @@ def load_session(session_id: str) -> SessionData | None:
             # Retain archived evidence verbatim; it has no proof for the current workspace.
             task["legacy_evidence"] = task.get("evidence", [])
             task.update(status="incomplete", evidence=[], assurance="needs_recheck")
-        return SessionData(
+        session = SessionData(
             session_id=data["session_id"],
             created_at=data["created_at"],
             updated_at=data["updated_at"],
@@ -370,6 +452,15 @@ def load_session(session_id: str) -> SessionData | None:
             parent_entry_id=data.get("parent_entry_id"),
             metadata=metadata,
         )
+        session.agent_traces.restore(data.get("agent_traces", {}))
+        if session.agent_traces.has_records() and session.execution_state:
+            from pepsicode.execution.runtime import recover_execution_calls
+
+            unresolved = recover_execution_calls(session.workspace, session.execution_state)
+            session.execution_state["unknown_trace_ids"] = sorted(
+                {item["trace_id"] for item in unresolved if item.get("trace_id")}
+            )
+        return session
     except (json.JSONDecodeError, KeyError, TypeError, ValueError):
         return None
 

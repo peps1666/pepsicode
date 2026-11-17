@@ -85,6 +85,20 @@ test('only owner friend text on the bound QQ account enters the conversation', (
   assert.equal(privateText(message('', 1, { message: '&#91;CQ:image,file=x&#93;' }), OWNER, BOT), '[CQ:image,file=x]');
 });
 
+test('targeted Worker stop routes to the active session without cancelling the turn', async (t) => {
+  const f = await fixture(t);
+  await f.bridge.receive(message('查看项目', 1));
+  assert.equal(f.pepsi.turns.length, 1);
+  await f.bridge.receive(message('/agent-stop worker-trace', 2));
+  const request = f.pepsi.calls.find(({ method }) => method === 'agent/cancel');
+  assert.deepEqual(request.params, { session_id: f.store.data.sessionId, trace_id: 'worker-trace' });
+  assert.equal(f.pepsi.calls.some(({ method }) => method === 'turn/cancel'), false);
+  await f.bridge.receive(message('/answer worker-question 用 settings.py', 3));
+  const reply = f.pepsi.calls.find(({ method }) => method === 'turn/enqueue');
+  assert.deepEqual(reply.params, { input: '用 settings.py', mode: 'steer', answer_to: ['worker-question'] });
+  assert.equal(f.pepsi.turns.length, 1);
+});
+
 test('deduplicates incoming messages durably and replies once without progress/thinking/tool logs', async (t) => {
   const f = await fixture(t);
   await f.bridge.receive(message('你好'));
@@ -100,6 +114,25 @@ test('deduplicates incoming messages durably and replies once without progress/t
   assert.deepEqual(f.texts(), ['你好，很高兴见到你']);
   assert.equal(f.onebot.sent[0].user_id, Number(OWNER));
   assert.equal(f.store.data.inFlight, null);
+});
+
+test('deduplicates Agent notices and sends the exact question ID with replies', async (t) => {
+  const f = await fixture(t);
+  const question = { id: 'agent:trace:question', question: 'Which file?', actionable: true, required: false };
+  const view = { session_id: f.store.data.sessionId, records: [
+    { trace_id: 'trace', name: 'Explore', questions: [question] },
+  ] };
+  f.pepsi.event('agent/update', { ...view, session_id: 'other-session' });
+  f.pepsi.event('agent/update', view);
+  f.pepsi.event('session/view', { agents: view });
+  await f.bridge.flush();
+  assert.equal(f.texts().length, 1);
+  assert.match(f.texts()[0], /Which file\?/);
+  assert.deepEqual(f.store.data.agentNotices, [question.id]);
+  await f.bridge.receive(message(`/answer ${question.id} README.md`));
+  assert.deepEqual(f.pepsi.turns[0].params, { input: 'README.md', answer_to: [question.id] });
+  f.pepsi.finish();
+  await f.bridge.pumping;
 });
 
 test('queues new messages in order, bounds admission, and stop clears only pending work', async (t) => {
@@ -265,4 +298,37 @@ test('backend disconnect stops admission and never reissues an uncertain turn', 
   await f.bridge.receive(message('another message', 2));
   assert.equal(f.fatal.length, 1);
   assert.equal(f.pepsi.turns.length, 1);
+});
+
+test('service generation is tracked and offline notifications are fetched once', async (t) => {
+  const f = await fixture(t);
+  // The resident service announces itself on (re)connect.
+  f.pepsi.event('connection/ready', { service: true, execution_mode: 'service', generation: 'a'.repeat(32) });
+  assert.equal(f.store.data.serviceGeneration, 'a'.repeat(32));
+  // Reannouncing the same generation does not repeat the banner.
+  f.pepsi.event('connection/ready', { service: true, execution_mode: 'service', generation: 'a'.repeat(32) });
+  const banners = f.texts().filter((text) => text.includes('常驻服务'));
+  assert.equal(banners.length, 1);
+
+  // Catch-up fetches only what accumulated offline and persists the cursor.
+  f.pepsi.request = async (method, params = {}) => {
+    if (method === 'notifications/fetch') {
+      f.fetchCursor = params.cursor;
+      return { notifications: [
+        { id: 'n1', dedup_key: 'approval:s1:command', title: '需要审批', body: '运行某命令' },
+        { id: 'n2', dedup_key: 'question:q1', title: 'Worker 提问' },
+      ], cursor: 7 };
+    }
+    return {};
+  };
+  await f.bridge.fetchServiceNotifications();
+  assert.equal(f.fetchCursor, 0);
+  assert.equal(f.store.data.notificationCursor, 7);
+  await until(() => f.texts().some((text) => text.includes('需要审批')) && f.texts().some((text) => text.includes('Worker 提问')));
+  const notices = f.texts().filter((text) => text.includes('需要审批') || text.includes('Worker 提问'));
+  assert.equal(notices.length, 2);
+  // A refetch at the new cursor delivers nothing new (no duplicate spam).
+  f.pepsi.request = async (method) => (method === 'notifications/fetch' ? { notifications: [], cursor: 7 } : {});
+  await f.bridge.fetchServiceNotifications();
+  assert.equal(f.texts().filter((text) => text.includes('需要审批')).length, 1);
 });

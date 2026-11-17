@@ -1,10 +1,78 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
-import type { ChatMessage, TaskReport, VerificationReport } from "../stores/session";
+import { useSessionStore, type AgentSnapshot, type ChatMessage, type TaskReport, type VerificationReport } from "../stores/session";
 import { buildTrajectory, formatDuration, traceStatusLabels, type TraceRow } from "./trajectory";
 import Icon from "../components/Icon";
 import Button from "../components/Button";
 import styles from "./ExecutionTrace.module.css";
 import { hasCurrentAcceptance, satisfiedCount, taskOutcome } from "./taskOutcome";
+
+const agentStages: Record<string, string> = {
+  queued: "排队中", stop_requested: "正在停止",
+  starting: "正在启动", idle: "等待下一步", running: "运行中", completed: "已返回",
+  waiting_user: "等待回复", awaiting_continuation: "等待继续", waiting_approval: "等待审批",
+  pending_verification: "结果待核验", reported_blocked: "Worker 报告受阻", reported_failed: "Worker 报告失败",
+  verified: "父任务验收通过",
+  reported_dropped: "Worker 报告放弃", stale_result: "旧版本结果", recovery_pending: "中断待核对",
+  unknown: "结果未知", cancelled: "已停止", timed_out: "超时", failed: "失败", blocked: "受阻",
+  budget_exhausted: "达到预算或执行限制",
+};
+
+function AgentCards({ canReply, running, onSelectCall }: { canReply: boolean; running: boolean; onSelectCall: (id: string) => void }) {
+  const live = useSessionStore(state => state.agents);
+  const fetchAgents = useSessionStore(state => state.fetchAgents);
+  const stopWorker = useSessionStore(state => state.stopWorker);
+  const runTurn = useSessionStore(state => state.runTurn);
+  const [page, setPage] = useState<AgentSnapshot | null>(null);
+  const [error, setError] = useState("");
+  const view = page?.session_id === live?.session_id && page?.sequence === live?.sequence ? page : live;
+  if (!view || (!view.records.length && !view.persistence_error)) return null;
+  return <section className={styles.agentCards} aria-label="Agent 状态">
+    <strong>Agent 状态</strong>
+    {view.persistence_error && <p role="alert">追踪状态保存失败：{view.persistence_error}</p>}
+    {error && <p role="alert">{error}</p>}
+    {view.records.map(agent => <details key={agent.trace_id} className={styles.agentCard}>
+      <summary>
+        <strong>{agent.name}</strong> · {agentStages[agent.stage] || agent.stage}
+        {agent.historical && " · 历史分支"} · {formatDuration(agent.elapsed_seconds * 1000)}
+        <small>{agent.task}</small>
+        {agent.activities.map(activity => <small key={activity.id}>{activity.summary}</small>)}
+      </summary>
+      <small>执行 {agent.trace_id} · 负责人 {agent.parent_id || "当前会话"}</small>
+      {running && agent.can_stop && <button type="button" onClick={() => {
+        void stopWorker(agent.trace_id).catch(error => setError(String(error)));
+      }}>停止 Worker</button>}
+      {view === live && <button type="button" onClick={() => {
+        void fetchAgents(0, agent.trace_id).then(setPage).catch(error => setError(String(error)));
+      }}>查看完整记录</button>}
+      {agent.parent_call_id && <button type="button" onClick={() => onSelectCall(agent.parent_call_id!)}>查看发起步骤</button>}
+      {agent.report && <p>最近报告{agent.stale ? "（旧版本）" : ""} · {agent.report.summary}</p>}
+      {agent.result_summary && agent.result_summary !== agent.report?.summary && <p>{agent.result_summary}</p>}
+      {agent.end_reason && <p>{agent.end_reason}</p>}
+      {agent.acceptance.total > 0 && <small>父任务验收 {agent.acceptance.passed}/{agent.acceptance.total}</small>}
+      {agent.questions.map(question => <div key={question.id}>
+        <p>{question.status === "answered" ? "已答" : question.required ? "必答" : "可选"} · {question.question}</p>
+        {question.actionable && (canReply || (running && agent.can_reply_running)) && <form onSubmit={event => {
+          event.preventDefault();
+          const form = event.currentTarget;
+          const reply = String(new FormData(form).get("reply") || "").trim();
+          if (reply) void runTurn(reply, "steer", [question.id]).then(() => form.reset()).catch(error => setError(String(error)));
+        }}>
+          <input name="reply" aria-label="回复 Agent" required />
+          <button type="submit">回复</button>
+        </form>}
+      </div>)}
+      {agent.recent_tools.map(tool => <details key={tool.id}>
+        <summary>{tool.summary} · {tool.status} · {formatDuration(tool.duration_ms)}</summary>
+        {tool.input_preview && <pre aria-label="调用参数预览">{tool.input_preview}</pre>}
+        <pre>{tool.output}</pre>
+      </details>)}
+    </details>)}
+    {view !== live && <button type="button" onClick={() => setPage(null)}>回到最新执行</button>}
+    {view.next_offset !== null && <button type="button" onClick={() => {
+      void fetchAgents(view.next_offset!).then(setPage).catch(error => setError(String(error)));
+    }}>查看更早的执行</button>}
+  </section>;
+}
 
 export default function ExecutionTrace({ messages, running, verification, taskReport, canContinue, onContinue }: {
   messages: ChatMessage[]; running: boolean; verification: VerificationReport | null;
@@ -43,6 +111,10 @@ export default function ExecutionTrace({ messages, running, verification, taskRe
         <ul>{task.criteria.map(criterion => <li key={criterion.id}>{criterion.purpose || criterion.id}：{criterion.kind === "command" ? "执行检查" : criterion.kind === "file_contains" ? "文本匹配" : "文件存在"} · {(criterion.path || criterion.argv?.join(" ") || "").slice(0, 1000)}</li>)}</ul>
       </details>}
     </div>}
+    <AgentCards canReply={canContinue} running={running} onSelectCall={id => {
+      const row = rows.find(item => item.callId === id);
+      if (row) setSelectedId(row.id);
+    }} />
     <div className={styles.toolbar}>
       <div><strong>执行轨迹</strong><span>{rows.filter(row => row.kind === "tool").length} 次工具调用{failures > 0 ? ` · ${failures} 条异常` : ""}</span></div>
       <div className={styles.filters}>

@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import uuid
 from dataclasses import asdict
 from functools import wraps
+from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from pepsicode.core.loop_engine import VerificationResult
@@ -17,6 +19,107 @@ from pepsicode.execution.filesystem import FILES
 from pepsicode.execution.runtime import current_scope
 from pepsicode.tooling import ToolContext
 from pepsicode.tools.run_command import run_command_tool
+
+_DELIVERED_STATUSES = {"local", "delivered"}
+
+
+def delivered_acceptance_root(session, task, scope):
+    """Root parent acceptance at the task's delivered version when one exists.
+
+    Returns ``(checkout, head_sha, problem)``. When the current task revision
+    has a delivered integration whose record still validates (accepted,
+    acceptance valid, clean checkout at the recorded HEAD, candidates intact),
+    parent acceptance and required-artifact checks run against that checkout —
+    the version actually delivered, not the orchestrator's working directory.
+
+    A problem string means a delivery exists for the current revision but its
+    recorded version can no longer be trusted (stale integration, failed or
+    missing acceptance, unconfirmed delivery). Acceptance then fails with that
+    reason instead of silently checking a different version; the coordinator
+    must re-integrate, re-verify and deliver again.
+    """
+    if session is None or not task:
+        return None, None, None
+    state = (getattr(session, "task_control", None) or {}).get("orchestration") or {}
+    revision = (task["id"], task["revision"])
+    integrations = [
+        record
+        for record in (state.get("integrations") or {}).values()
+        if (record.get("task_id"), record.get("revision")) == revision
+    ]
+    deliveries = [
+        record
+        for record in (state.get("deliveries") or {}).values()
+        if (record.get("task_id"), record.get("revision")) == revision
+    ]
+    if not integrations and not deliveries:
+        return None, None, None
+    if not integrations:
+        return (
+            None,
+            None,
+            "A delivery exists but its integration record is missing; re-integrate and deliver the current version",
+        )
+    latest = None
+    for record in integrations:  # insertion-ordered; a later record wins a timestamp tie
+        if latest is None or (record.get("created_at") or 0.0) >= (latest.get("created_at") or 0.0):
+            latest = record
+    integration_deliveries = [
+        record for record in deliveries if record.get("integration_id") == latest["integration_id"]
+    ]
+    if not any(record.get("status") in _DELIVERED_STATUSES for record in integration_deliveries):
+        return None, None, "The latest integration for this task is not delivered yet; deliver it before acceptance"
+    if any(record.get("status") == "uncertain" for record in integration_deliveries):
+        return (
+            None,
+            None,
+            "An external delivery for this integration has an uncertain outcome; reconcile it before acceptance",
+        )
+    delivery_target = (task.get("requirements") or {}).get("delivery_target")
+    objective_text = "\n".join([task.get("objective", ""), *(task.get("instructions") or [])])
+    if delivery_target == "merge_or_deploy" or re.search(
+        r"合并\s*PR|合并到主分支|合入主分支|上线生产|部署生产|\b(?:merge\s+(?:the\s+)?(?:pr|pull\s+request)|deploy\s+to\s+prod(?:uction)?)\b",
+        objective_text,
+        re.I,
+    ):
+        if not any(
+            record.get("status") == "delivered"
+            and (
+                (record.get("external_refs") or {}).get("merged") is True
+                or (record.get("external_refs") or {}).get("deployed") is True
+            )
+            for record in integration_deliveries
+        ):
+            return (
+                None,
+                None,
+                "Creating a pull request or local branch does not satisfy a merge or deployment objective",
+            )
+    elif delivery_target == "pull_request" or re.search(
+        r"(?:提交|创建|发起|提一个|开一个)\s*PR\b|\b(?:open|create|submit)\s+(?:a\s+)?(?:pr|pull\s+request)\b",
+        objective_text,
+        re.I,
+    ):
+        if not any(
+            record.get("kind") == "pull_request"
+            and record.get("status") == "delivered"
+            and (record.get("external_refs") or {}).get("pr_number")
+            for record in integration_deliveries
+        ):
+            return None, None, "This task requires a delivered pull request before completion"
+    from pepsicode.orchestration.integration import validate_integration
+
+    try:
+        record = validate_integration(session, scope, latest["integration_id"])
+    except (ValueError, PermissionError, RuntimeError) as error:
+        return None, None, f"The delivered version could not be revalidated: {error}"
+    acceptance = record.get("acceptance") or {}
+    if record.get("state") != "accepted" or not acceptance.get("valid"):
+        return None, None, "The delivered version changed after delivery; re-integrate, re-verify and deliver again"
+    checkout = Path(record["worktree"])
+    if not checkout.is_dir():
+        return None, None, "The delivered integration checkout is missing; re-integrate and deliver again"
+    return checkout, record.get("head_sha"), None
 
 
 def settle_task_failure(function):
@@ -101,6 +204,20 @@ class TaskVerifier:
             # large or partially unreadable repository merely to answer it.
             return self._verify(messages=messages, tools=tools, cwd=cwd, permissions=permissions)
         try:
+            acceptance_root, delivered_head, delivered_problem = delivered_acceptance_root(
+                session, task, current_scope()
+            )
+            if delivered_problem is not None:
+                return self._verify(
+                    messages=messages,
+                    tools=tools,
+                    cwd=cwd,
+                    permissions=permissions,
+                    project_report=VerificationResult(
+                        False, delivered_problem, status="failed", reason_code="delivered_version_changed"
+                    ),
+                )
+            acceptance_cwd = str(acceptance_root) if acceptance_root is not None else cwd
             preparation = self.runtime.get("verificationPreparationCommands")
             if preparation:
                 from pepsicode.core.verification import ProjectVerifier
@@ -110,10 +227,10 @@ class TaskVerifier:
                     tools,
                     self.project.cancellation_event,
                     hook_engine=self.project.hook_engine,
-                ).verify(messages=messages, tools=tools, cwd=cwd, permissions=permissions)
+                ).verify(messages=messages, tools=tools, cwd=acceptance_cwd, permissions=permissions)
                 if not prepared.ok:
                     return prepared
-            before = workspace_state(cwd, include_paths=task_paths(task or {}), reason="acceptance_start")
+            before = workspace_state(acceptance_cwd, include_paths=task_paths(task or {}), reason="acceptance_start")
         except (OSError, ValueError) as error:
             return VerificationResult(
                 False, str(error), status="blocked", reason_code="verification_snapshot_unavailable"
@@ -128,11 +245,15 @@ class TaskVerifier:
             else digest([]),
             "workspace": summary(before),
         }
-        report = self._verify(messages=messages, tools=tools, cwd=cwd, permissions=permissions)
+        if acceptance_root is not None:
+            run["delivered"] = {"checkout": str(acceptance_root), "head_sha": delivered_head}
+        report = self._verify(
+            messages=messages, tools=tools, cwd=cwd, permissions=permissions, acceptance_root=acceptance_root
+        )
         with edit_control() as control:
             latest = control.get("task")
             try:
-                after = workspace_state(cwd, include_paths=task_paths(task or {}), reason="acceptance_final")
+                after = workspace_state(acceptance_cwd, include_paths=task_paths(task or {}), reason="acceptance_final")
                 changed = before["digest"] != after["digest"]
             except (OSError, ValueError):
                 changed = True
@@ -210,7 +331,7 @@ class TaskVerifier:
         }
         return report
 
-    def _verify(self, *, messages, tools, cwd, permissions, project_report=None):
+    def _verify(self, *, messages, tools, cwd, permissions, project_report=None, acceptance_root=None):
         task = snapshot().get("task")
         ref = (task["id"], task["revision"]) if task else None
         if project_report is not None:
@@ -248,10 +369,9 @@ class TaskVerifier:
         if report.status in {"failed", "blocked", "cancelled"}:
             return report
         state = snapshot()
-        if any(
-            q["task_id"] == task["id"] and q.get("required", True) and q["status"] == "pending"
-            for q in state.get("questions", [])
-        ):
+        from pepsicode.core.task_control import pending_questions
+
+        if any(q["required"] for q in pending_questions(state, task["id"])):
             return VerificationResult(
                 False, "Required user question remains unanswered", status="blocked", reason_code="awaiting_user"
             )
@@ -302,7 +422,9 @@ class TaskVerifier:
             )
         for artifact in task.get("required_artifacts", []):
             path = artifact["path"]
-            context = ToolContext(cwd, permissions=permissions, execution=scope)
+            context = ToolContext(
+                str(acceptance_root) if acceptance_root is not None else cwd, permissions=permissions, execution=scope
+            )
             if FILES.snapshot(context, path, observe=False).content is None:
                 return VerificationResult(
                     False,
@@ -327,16 +449,25 @@ class TaskVerifier:
                 status="failed",
                 reason_code="behavior_unverified",
             )
-        context = ToolContext(
-            cwd,
-            permissions=permissions,
-            execution=scope,
-            cancellation_event=self.project.cancellation_event,
-            for_verification=True,
-        )
         evidence = []
+        roots = {}
         for criterion in task["criteria"]:
             item = {"criterion_id": criterion["id"], "task_revision": task["revision"], "status": "unknown"}
+            # The delivered version carries the artifact and behavior claims.
+            # ``file_unchanged`` protects the user's own workspace and keeps
+            # its baseline comparison at the orchestrator's working directory.
+            if criterion["kind"] == "file_unchanged" or acceptance_root is None:
+                criterion_cwd = cwd
+            else:
+                criterion_cwd = str(acceptance_root)
+            roots[criterion["id"]] = criterion_cwd
+            context = ToolContext(
+                criterion_cwd,
+                permissions=permissions,
+                execution=scope,
+                cancellation_event=self.project.cancellation_event,
+                for_verification=True,
+            )
             try:
                 if criterion["kind"].startswith("file_"):
                     file = FILES.snapshot(context, criterion["path"], observe=False)
@@ -389,6 +520,7 @@ class TaskVerifier:
         for item in evidence:
             if "path" in item:
                 try:
+                    context = ToolContext(roots[item["criterion_id"]], permissions=permissions, execution=scope)
                     if FILES.snapshot(context, item["path"], observe=False).version != item["version"]:
                         item.update(status="unknown", error="File changed during acceptance")
                 except (OSError, ValueError) as error:

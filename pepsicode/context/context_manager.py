@@ -199,6 +199,44 @@ def _merge_rolling_summary(previous: str, current: str) -> str:
     raise SummaryError("Extractive checkpoint exceeds its budget; original context retained")
 
 
+def _render_orchestration_recovery() -> str:
+    from pepsicode.core.session_tree import current_session
+
+    session = current_session()
+    control = getattr(session, "task_control", None) if session is not None else None
+    if not isinstance(control, dict):
+        return ""
+    orch = control.get("orchestration") or {}
+    task = control.get("task") or {}
+    work = orch.get("work") or []
+    integrations = orch.get("integrations") or {}
+    deliveries = orch.get("deliveries") or {}
+    if not (work or integrations or deliveries):
+        return ""
+    lines = ["Orchestration evidence:"]
+    if task.get("id"):
+        lines.append(f"- Task: {task['id']} (revision={task.get('revision')}, status={task.get('status')})")
+    for row in work[-8:]:
+        summary = str(row.get("summary") or "").splitlines()[0][:240] if row.get("summary") else ""
+        detail = f" — {summary}" if summary else ""
+        lines.append(
+            f"- Work {row.get('work_key')} (work_id={row.get('work_id')}, "
+            f"attempt_id={row.get('attempt_id')}, state={row.get('state')}){detail}"
+        )
+    for int_id, rec in list(integrations.items())[-4:]:
+        valid = (rec.get("acceptance") or {}).get("valid")
+        lines.append(
+            f"- Integration {int_id}: state={rec.get('state')}, "
+            f"head_sha={str(rec.get('head_sha') or '')[:12]}, acceptance_valid={valid}"
+        )
+    for del_id, rec in list(deliveries.items())[-4:]:
+        lines.append(
+            f"- Delivery {del_id}: integration_id={rec.get('integration_id')}, "
+            f"status={rec.get('status')}, head_sha={str(rec.get('head_sha') or '')[:12]}"
+        )
+    return "\n".join(lines)
+
+
 # ---------------------------------------------------------------------------
 # Context tracking
 # ---------------------------------------------------------------------------
@@ -596,6 +634,17 @@ class ContextManager:
             status = "passed" if ok else "failed"
             first_line = next((line.strip() for line in output.splitlines() if line.strip()), "")
             self.recovery_state.last_verification = f"{tool_name} {status}: {first_line}"[:500]
+        elif tool_name in {"task_dispatch", "task_retry"} and ok:
+            work_key = arguments.get("work_key") or arguments.get("attempt_id") or "work"
+            first_line = next((line.strip() for line in output.splitlines() if line.strip()), "")
+            entry = f"{tool_name}({work_key}): {first_line}"[:500]
+            tasks = [t for t in self.recovery_state.current_tasks if t != entry]
+            tasks.append(entry)
+            self.recovery_state.current_tasks = tasks[-8:]
+        elif tool_name in {"task_integrate", "task_deliver"}:
+            status = "passed" if ok else "failed"
+            first_line = next((line.strip() for line in output.splitlines() if line.strip()), "")
+            self.recovery_state.last_verification = f"{tool_name} {status}: {first_line}"[:500]
 
     def get_stats(self) -> ContextStats:
         """Calculate current context statistics."""
@@ -749,6 +798,9 @@ class ContextManager:
         if warning:
             marker_body += "\n\nWARNING: " + warning
         marker_body += "\n\n" + self.recovery_state.render()
+        orch_recovery = _render_orchestration_recovery()
+        if orch_recovery:
+            marker_body += "\n\n" + orch_recovery
         if artifact_ids:
             marker_body += "\n- Recoverable context artifacts: " + ", ".join(artifact_ids)
         compaction_marker = {"role": "system", "content": marker_body, "_compaction_marker": True}

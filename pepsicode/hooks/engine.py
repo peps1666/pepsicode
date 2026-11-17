@@ -94,6 +94,19 @@ class HookEngine:
     def enabled(self) -> bool:
         return self._enabled
 
+    def has_command_actions(self) -> bool:
+        with self._lock:
+            return self._enabled and any(
+                hook.enabled and hook.trusted and hook.action.type == HookActionType.COMMAND for hook in self.hooks
+            )
+
+    def wait_background(self) -> None:
+        """Wait for already-submitted background hooks to leave the workspace."""
+        with self._lock:
+            futures = list(self._futures)
+        if futures:
+            wait(futures)
+
     @staticmethod
     def _coerce_event(event: HookEvent | str) -> HookEvent:
         return event if isinstance(event, HookEvent) else HookEvent(str(event))

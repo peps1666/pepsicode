@@ -126,6 +126,16 @@ allowedTools:
 
 同一批次中连续的 `explore` / `plan` 调用可以并发，父轮次同步等待全部结果并按原顺序接收；包含命令或写入的任务不参与此并发。子任务持有父任务的只读投影，在后续步骤和执行入口检查父任务修订；发生变化后阻止继续执行并标记结果过期。已启动的外部操作不因此回滚。子代理报告不自动成为任务验收证据。
 
+桌面端在「执行轨迹」查看 Agent 的负责事项、当前活动、最近报告、耗时和问题。默认 TUI 在子 Agent 出现后自动显示右侧状态栏，当前执行优先，结束后保留最近结果；点击名称查看详情，记录较多时点击底部翻页。终端宽度不足 110 列或可用高度不足时，改为输入框上方的简短状态区，不必反复输入命令。终端仍可用 `/agents [执行 ID 或分页偏移]` 查询完整编号和问题，QQ 私聊也支持 `/agents`。桌面问题卡片直接回复。终端和 QQ 使用 `/answer <问题 ID> <回复>`，可逐一回答同一任务的多个问题。
+
+Agent 列表记录通过 `task` 委派的 Worker。主代理的状态与验收仍显示在任务轨迹。
+
+主代理可用 `agent_status` 分页查询执行记录，或传入 `trace_id` 查看单次执行详情。Worker 用 `agent_report` 报告阶段变化、结果、阻碍或问题。自定义 Worker 如果设置了 `allowedTools`，需在列表中加入 `agent_report` 才能使用。必答问题结束当前轮次并等待用户。可选问题允许 Worker 继续检查。回复后由主代理决定是否重新委派，每次委派生成独立的执行 ID。
+
+Worker 的 `ready` 先显示为结果待核验；Worker 明确报告 `failed`/`blocked` 时按实际结果结算为失败或阻塞，协调者收到对应事件而不是待核验结果。父任务完成且当前版本的有效证据覆盖全部验收条件后，显示父任务验收通过；已交付集成的会话按实际交付版本检查验收条件。旧修订的执行仍可查询。重启后，先前未结束的 Worker 显示为中断待核对。保存失败的提示在下一次会话成功提交后清除。
+
+子 Agent 的 `maxTurns` 限制模型交互轮数，一轮可以调用多个工具。内核在请求中提供剩余轮数，临近上限时提醒收尾；此提醒不会增加执行预算，也不保证模型遵从。达到轮数上限时归为执行限制，保留已提交的报告并交给主 Agent，报告仍需核验。终端将其显示为“达到轮数上限”，旧记录中的同类失败也按此原因展示，避免误解成代码执行出错。
+
 子任务结果的工具事件包含状态、定义来源、实际工具、执行 ID 和父任务修订等结构化字段；模型收到简短文本。子任务工具取父注册表与子任务允许工具的交集。子任务有独立请求次数上限，同时消耗父任务共享预算。子任务审批提示显示角色及执行 ID。
 
 子代理与主代理共用同一套 Hook 引擎，各自保留 `scope`（`main` / `subagent`）。运行中的轮次可以随时停止，停止信号会传给模型读取、后续工具与子代理，命令会清理自身子进程。`/tasks` 查看后台任务。
@@ -191,3 +201,66 @@ allowedTools:
 这意味着 Hook 可以为规划补充提醒或模型上下文，但不能借 Hook 运行命令绕过 Plan 边界。
 
 终端 TUI 的新会话默认从 Plan 开始；恢复已有会话时保留其模式。空闲时可按 `Tab` 在 Plan 与 Build 之间切换；输入斜杠命令时，`Tab` 优先用于补全。手动切回 Build 只恢复原来的权限模式，不会批准或自动执行计划，计划文件仍保留。若原权限为只读，Build 仍为只读。
+
+## 异步编排
+
+在 PepsiCode 的 `settings.json` 中设置 `"orchestration": {"enabled": true}`，再打开会话即可启用实验性的 M1 编排。终端、桌面和 QQ 共用同一个内核入口。默认使用原有同步模式。
+
+在 Build 中使用异步编排。协调者负责派工和汇总，Worker 通过现有审批与执行规则调查或修改项目。Agent 状态可看到排队和执行中的任务。桌面可点击“停止 Worker”，终端和 QQ 可发送 `/agent-stop <追踪编号>`。仍有其他 Worker 执行时，已进入等待回复的必答问题可以定向回答，协调者随后可申请新尝试。中断后发送文本“继续”进入恢复流程，未确认的操作需要先核对。
+
+编排容量和节奏由 `settings.json` 的 `orchestration` 段控制，默认值如下；启动时会校验类型和范围，超出范围直接拒绝配置：
+
+| 配置 | 默认值 | 作用 |
+| --- | --- | --- |
+| `maxConcurrentWorkers` | 3 | 同时运行的 Worker 上限 |
+| `maxQueuedWorkItems` | 32 | 当前修订的排队上限；满时拒绝新派工 |
+| `maxActiveWorkItemsPerRun` | 32 | 当前修订的活跃工作上限（含排队、执行、等待回复和待验收） |
+| `maxAutoRetries` | 1 | 失败 `explore` 尝试的自动重试上限 |
+| `maxCoordinatorActivations` | 20 | 每个修订自动唤醒协调者的次数上限 |
+| `eventBatchLimit` | 8 | 一次协调输入的批内事件上限 |
+| `eventContextChars` | 12000 | 一次协调输入的事件文本上限 |
+| `eventDebounceMs` | 250 | 结果到达后的合并等待窗口 |
+| `eventMaxDelayMs` | 1000 | 合并等待的绝对上限；用户输入和停止不被延后 |
+| `coordinatorReserveRequests` | 2 | 从父任务预算中保留给协调收尾的请求数 |
+
+`workerIsolation` 取代了早期草案中的 `workspaceMode`：`shared` 对应共享串行，`workspace` 对应独立 worktree，`hardened` 仅在 Linux Bubblewrap 可用时生效。无人看护授权仍由 `.pepsi-code/service/policy.json` 配置，不放进 `settings.json`。退出交互宿主会停止它持有的运行。
+
+## 常驻服务（实验性，M3）
+
+交互模式下运行归属当前交互宿主，退出会停止它持有的任务。需要“关闭客户端后任务继续”时使用常驻服务模式：
+
+```sh
+python -m pepsicode.service start --workspace E:/path/to/project   # 分离进程启动
+python -m pepsicode.service status                                  # 查看身份与 PID
+python -m pepsicode.service health                                  # 分项健康快照
+python -m pepsicode.service attach                                  # 终端控制台 attach 到驻留会话
+python -m pepsicode.service stop                                    # 显式停止（阻止守护器自动重启）
+python -m pepsicode.service foreground                              # 供 NSSM/systemd 直接托管的前台入口
+```
+
+- 启动后连接信息写入 `<workspace>/.pepsi-code/service/`（`service.json`、`token`、`service.log`）。QQ 桥接在其配置中把 `backend.mode` 设为 `external` 并指向该地址与令牌，即可接入常驻服务。桌面端设置环境变量 `PEPSICODE_SERVICE_URL=ws://127.0.0.1:<端口>` 与 `PEPSICODE_SERVICE_TOKEN_FILE=<令牌文件路径>` 后直接接入服务（不再生成自有后端），并在界面上显示服务代次、待处理通知与“关闭窗口不会停止任务”提示。
+- `service` 模式下关闭客户端只解除订阅，已授权任务继续推进；重新连接后通过会话快照和事件游标读取离线期间的消息、问题与结果。同一会话同一时刻只允许一个控制端连接。
+- 停止任务（`turn/cancel`、`/stop`）、停止服务（`stop`）、断开客户端是三种不同动作。`stop` 会持久化人工停止标记，外部守护程序（NSSM/systemd/看门狗脚本）不能借普通 `start` 重启它；人工重新启动需 `start --clear-stop`。
+- 服务模式要求先配置预授权策略（`<workspace>/.pepsi-code/service/policy.json`）：记录允许的路径、命令前缀、外部动作、费用/次数/时长上限与有效期。策略内的操作自动执行并留审计记录，策略外的操作等待接入的控制端确认；无人接入时拒绝并合并为通知，不会自动重试。撤销或到期立即在下一副作用入口生效。
+- 可在 `settings.json` 配置 `"service": {"port": 0, "connectors": {"github": {"enabled": true, "repository": "owner/repo", "pollIntervalSeconds": 60, "tokenEnv": "GITHUB_TOKEN"}}}`，服务会只读轮询 PR 审查与 CI 状态，事件经去重后交给协调会话；连接器令牌只从环境变量读取。
+- `python -m pepsicode.service health` 分项显示存储、队列、模型、Worker、连接器与通知健康。事件日志写失败会暂停新的任务处理，恢复后自动继续。
+- 终端控制台 `python -m pepsicode.service attach [--session SESSION_ID|latest] [--list] [--url ...] [--token-file ...]`：连接后显示服务代次与待处理通知，`/sessions`、`/attach <id|latest>`、`/status`、`/notifications`、`/cancel` 查询与控制，普通文本在轮次空闲时开始新轮次、运行中自动转为 steer 排队输入；审批请求到达时输入 `y`/`n` 回答。退出控制台只 detach，运行中的任务继续推进（`/detach`/`/quit` 同义）。开始新轮次（`turn/run`）仍要求有效的预授权策略；排队输入与取消不受影响。停止服务仍只能用 `stop` 命令，控制台不提供 `service/shutdown`。
+
+服务默认只绑定本机回环地址。跨主机部署、公网访问、服务账户与凭据轮换需要自行部署并审计，本版本未内置；服务与执行在同一台主机上，主机关机任务同样中断，重启后按策略恢复安全任务。
+
+异步编排的 WebSocket 客户端在认证请求中声明 `orchestration: 1`。服务策略的请求次数、预估费用和运行时间与会话上限取较小值。GitHub 审查和 CI 事件先持久化，再投递到拥有对应 PR 的任务。旧 head 的结果不会覆盖已记录的新 head，事件作为内部任务数据投递。
+
+## 交付闭环（实验性，M4）
+
+启用编排的会话在 Worker 交付后可以走"候选 → 集成 → 验收 → 交付"的闭环，全部由宿主确定性代码执行、经执行层审计：
+
+- 候选记录：Worker 尝试到达 `result_ready` 且其受管 worktree 有已提交改动后，可记录候选——绑定 base SHA、分支与提交后的 head SHA、有界的 diff 摘要。worktree 存在未提交改动时拒绝记录（交付必须是 commit）；head 或分支后续变化会把候选标记 `stale`，旧记录不能代替新代码。
+- 集成与精确版本验收：协调者经 `task_integrate {work_ids}` 把多个候选按序 cherry-pick 到从共同 base SHA 建立的独立集成工作区（分支 `codex/integrate-<id>`），随后运行 `verificationCommands` 配置的验收命令，验收记录绑定集成 head SHA、任务修订与命令摘要。出现冲突时中止 pick 并保留双方改动（不强制丢弃、不 reset），集成记录进入 `conflict` 等待人工或协调者决策。候选或集成 checkout 在验收后发生变化会把整条记录标记 `stale`——旧验收证据不继承给新代码。未配置 `verificationCommands` 时不产生有效验收，交付被拒绝。
+- 有限修复：失败的实现类尝试可按 `orchestration.maxRepairAttempts`（默认 2）重试；失败按原因分类（代码/环境可自动修复，权限/预算/传输/未知不进入自动修复），同一失败指纹的重试被拒绝（无进展不算修复）。Worker 最终明确报告 `failed`/`blocked` 时按同一尝试的实际结果结算并投递失败事件（不再伪装成待核验结果），事件附带有界证据：阶段、失败类别、失败检查、输出摘要与执行日志引用。重试尝试在核对 worktree、分支与新提交归属（线性接续已记录基线）后，接续同一工作项此前已确认的提交成果继续修复；被改写或来源不明的 HEAD 不自动接续，保留待核对。
+- 修复基线与交付版本验收：集成验收失败后，同一任务修订内新派发的实施尝试默认从失败集成记录的 head 建立工作区（环境清单记录 `base_integration` 来源），保留原候选与失败证据；冲突中的集成无 head，不作为基线。重新集成通过后，父任务的验收条件和必需产物在**实际交付的集成 checkout** 上检查——绑定当前任务修订、干净 checkout 的 HEAD 与已确认的交付记录；交付版本发生变化（候选/checkout 变更、重新集成）或验收定义变化后，按新版本重新验收，旧交付记录不能直接通过。
+- 交付：协调者经 `task_deliver {integration_id}` 交付**已通过验收**的集成。默认只生成本地交付记录（分支 + head + 证据引用）；`push: true` 推送到远端分支——交互模式经执行层审批，service 模式按预授权策略判定；推送前先 `ls-remote` 核对远端（已在远端则幂等跳过），推送结果未知时标记 `uncertain` 并合并通知，绝不自动重发。`pull_request: true` 经 GitHub API 为集成分支建 PR（令牌只从环境变量读取，`tokenEnv` 默认 `GITHUB_TOKEN`）；同一 head 已有 PR 时幂等返回，不重复创建。
+- 保留：集成工作区不自动清理；`prune_integration` 只处理已通过验收、冲突或已过期的集成，且经执行层执行。
+
+在 Git 项目中设置 `"orchestration": {"enabled": true, "workerIsolation": "workspace"}` 后，实施 Worker 从已经提交的 HEAD 自动准备独立 worktree。Linux 可显式选择 `hardened`，需要系统提供 Bubblewrap 和可用的用户命名空间。集成验收要求 checkout 在检查前后都干净。创建 PR 需要执行层批准，结果不明时后续调用只核对远端记录。
+
+真实模型评测目前为小样本单 Agent 编码用例（1/3 通过，见修改清单第八批记录）。真实模型 M4 闭环、真实 GitHub 推送及建 PR、真实 CI 仍待实测。

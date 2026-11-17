@@ -222,7 +222,7 @@ def test_stream_footer_shows_trusted_mode_during_plan(monkeypatch, capsys):
     state = app.ScreenState()
     app._render_stream_screen(args, state)
     frame = _initial_frame_text(capsys.readouterr().out)
-    assert "PLAN trust_commands 高风险" in frame.splitlines()[-2]
+    assert "PLAN  trust_commands 高风险" in frame.splitlines()[-2]
 
 
 @pytest.mark.parametrize("transcript", [False, True])

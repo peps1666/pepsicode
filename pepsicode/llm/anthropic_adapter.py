@@ -45,11 +45,17 @@ class ServiceOverloadError(Exception):
 
 
 def _sleep(milliseconds: int) -> None:
+    from contextlib import nullcontext
+
+    from pepsicode.execution.runtime import current_scope
+
     event = cancellation_event()
-    if event is None:
-        time.sleep(max(0, milliseconds) / 1000)
-    elif event.wait(max(0, milliseconds) / 1000):
-        raise_if_cancelled()
+    scope = current_scope()
+    with scope.observe_activity("retry", "model-retry") if scope else nullcontext():
+        if event is None:
+            time.sleep(max(0, milliseconds) / 1000)
+        elif event.wait(max(0, milliseconds) / 1000):
+            raise_if_cancelled()
 
 
 def _get_retry_limit() -> int:
