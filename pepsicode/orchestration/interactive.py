@@ -102,6 +102,21 @@ def coordinator_runner(session, runtime, runner):
             if not any(message.get("source", {}).get("kind") == "orchestration-role" for message in history):
                 history.append({**_ROLE, "source": dict(_ROLE["source"])})
             invoke(ToolRegistry([*tools.list(), *controls]), history)
+            deliveries = (current.task_control.get("orchestration") or {}).get("deliveries") or {}
+            if (
+                deliveries
+                and scope is not None
+                and scope.permissions is not None
+                and scope.journal is not None
+                and not scope.has_unknown
+            ):
+                from pepsicode.orchestration.environment import prune_environments
+
+                retention_seconds = setup.get("environmentRetentionSeconds", 3600)
+                try:
+                    prune_environments(current, scope, retention_seconds=retention_seconds, owns_workspace=True)
+                except (PermissionError, ValueError, RuntimeError, OSError):
+                    pass
 
         def schedule():
             return run_owned(

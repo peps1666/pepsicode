@@ -487,3 +487,61 @@ def test_acceptance_matches_committed_content(compatible):
     (Path(record["worktree"]) / "target.txt").write_text("dirty", encoding="utf-8")
     accepted = run_integration_acceptance(data, scope, record["integration_id"])
     assert accepted["state"] != "accepted", accepted["acceptance"]
+
+
+def test_task_deliver_automatically_prunes_expired_delivered_environments(compatible):
+    from threading import Event
+
+    from pepsicode.execution.runtime import RequestBudget, bind_scope
+    from pepsicode.llm.cost_tracker import CostTracker
+    from pepsicode.orchestration.environment import attribute_managed_output
+    from pepsicode.orchestration.interactive import coordinator_runner
+    from pepsicode.orchestration.runtime import own_workspace
+    from pepsicode.tooling import ToolContext, ToolRegistry
+
+    data, scope, _, manifests = compatible
+    first_id, second_id = manifests[0]["work_id"], manifests[1]["work_id"]
+    first_item = next(row for row in data.task_control["orchestration"]["work"] if row["work_id"] == first_id)
+    attribute_managed_output(data, first_item, scope)
+    record_candidate(data, scope, first_id)
+
+    # Mark second worker failed so its worktree must be retained for inspection.
+    for row in data.task_control["orchestration"]["work"]:
+        if row["work_id"] == second_id:
+            row["state"] = "failed"
+            row["outcome"] = "failed"
+
+    runtime = {
+        "verificationCommands": [{"name": "probe", "command": [sys.executable, "-c", "print('ok')"]}],
+        "orchestration": {"environmentRetentionSeconds": 0},
+    }
+    scope.cancellation_event = Event()
+    scope.budget = RequestBudget(CostTracker())
+    deliver_result = []
+
+    def runner(**options):
+        if not deliver_result:
+            integ = options["tools"].execute(
+                "task_integrate", {"work_ids": [first_id]}, ToolContext(data.workspace, execution=scope)
+            )
+            assert integ.ok and integ.details["state"] == "accepted"
+            deliver_result.append(
+                options["tools"].execute(
+                    "task_deliver",
+                    {"integration_id": integ.details["integration_id"]},
+                    ToolContext(data.workspace, execution=scope),
+                )
+            )
+        return options["messages"]
+
+    run = coordinator_runner(data, runtime, runner)
+    with own_workspace(data.workspace), recording_session(data), bind_scope(scope):
+        run(tools=ToolRegistry([]), model=None, messages=data.messages, cwd=data.workspace)
+
+    result = deliver_result[0]
+    assert result.ok, result.output
+    assert not Path(manifests[0]["manifest"]["worktree"]).exists()
+    assert Path(manifests[1]["manifest"]["worktree"]).is_dir()
+    reloaded = sessions.load_session(data.session_id)
+    assert reloaded.task_control["orchestration"]["environments"][first_id]["state"] == "pruned"
+    assert reloaded.task_control["orchestration"]["environments"][second_id]["state"] == "prepared"

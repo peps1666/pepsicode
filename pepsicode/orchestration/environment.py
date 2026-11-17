@@ -7,6 +7,7 @@ import re
 import shutil
 import sys
 import time
+from contextlib import nullcontext
 from pathlib import Path
 
 from pepsicode.core.session import load_session
@@ -477,7 +478,7 @@ def _prepare(session, item, context, repo, common, base_sha, isolation="workspac
     return manifest
 
 
-def prune_environment(session, scope, work_id, *, retention_seconds=0, now=None):
+def prune_environment(session, scope, work_id, *, retention_seconds=0, now=None, owns_workspace=False):
     """Remove a settled Worker environment after retention and deliverable checks."""
     if scope is None or scope.permissions is None or scope.journal is None:
         raise ValueError("Pruning a managed environment requires execution permissions and a journal")
@@ -540,7 +541,7 @@ def prune_environment(session, scope, work_id, *, retention_seconds=0, now=None)
             raise ValueError("Worker environment contains undelivered committed output")
     common = Path(environment["repository"]).resolve()
     with (
-        own_workspace(repo),
+        nullcontext() if owns_workspace else own_workspace(repo),
         own_workspace(common),
         recording_session(session),
         bind_scope(scope),
@@ -576,14 +577,23 @@ def prune_environment(session, scope, work_id, *, retention_seconds=0, now=None)
         return updated
 
 
-def prune_environments(session, scope, *, retention_seconds=0, now=None):
+def prune_environments(session, scope, *, retention_seconds=0, now=None, owns_workspace=False):
     """Attempt retention-safe pruning of all Worker environments in a session."""
     state = session.task_control.get("orchestration") or {}
     pruned = []
     retained = {}
     for work_id in list(state.get("environments") or {}):
         try:
-            pruned.append(prune_environment(session, scope, work_id, retention_seconds=retention_seconds, now=now))
+            pruned.append(
+                prune_environment(
+                    session,
+                    scope,
+                    work_id,
+                    retention_seconds=retention_seconds,
+                    now=now,
+                    owns_workspace=owns_workspace,
+                )
+            )
         except ValueError as error:
             retained[work_id] = str(error)
     return {"pruned": pruned, "retained": retained}

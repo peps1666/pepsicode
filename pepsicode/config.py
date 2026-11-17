@@ -298,6 +298,12 @@ def load_runtime_config(cwd: str | Path | None = None) -> dict[str, Any]:
     if event_max_delay_ms < event_debounce_ms:
         raise ValueError("orchestration.eventMaxDelayMs must be >= orchestration.eventDebounceMs")
     coordinator_reserve_requests = _non_negative_orchestration_int("coordinatorReserveRequests", 2)
+    environment_retention_seconds = (
+        _non_negative_orchestration_int("environmentRetentionSeconds", 3600)
+        if "environmentRetentionSeconds" in orchestration
+        and orchestration.get("environmentRetentionSeconds") is not None
+        else None
+    )
     if orchestration.get("enabled", False) and coordinator_reserve_requests >= request_limit:
         raise ValueError("orchestration.coordinatorReserveRequests must be less than modelRequestLimit")
     service = validate_service_settings(effective.get("service", {}))
@@ -339,6 +345,11 @@ def load_runtime_config(cwd: str | Path | None = None) -> dict[str, Any]:
             "eventMaxDelayMs": event_max_delay_ms,
             "coordinatorReserveRequests": coordinator_reserve_requests,
             **({"maxTotalActiveWorkers": max_total_active_workers} if max_total_active_workers is not None else {}),
+            **(
+                {"environmentRetentionSeconds": environment_retention_seconds}
+                if environment_retention_seconds is not None
+                else {}
+            ),
         },
         "service": service,
         **({"subagentRequestLimit": subagent_request_limit} if subagent_request_limit is not None else {}),
