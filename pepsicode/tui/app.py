@@ -1271,7 +1271,7 @@ def _render_home_brand(cols: int, rows: int) -> list[str]:
 def _permission_mode_label(args: TtyAppArgs) -> str:
     permissions = getattr(args, "permissions", None)
     mode = getattr(getattr(permissions, "access_mode", None), "value", "auto")
-    risk = " 高风险" if mode == "trust_commands" else ""
+    risk = " 高风险" if mode in {"full_access", "trust_commands"} else ""
     plan = getattr(permissions, "is_plan_mode", False)
     color = YELLOW if mode in {"trust_commands", "full_access"} else SUBTLE
     label_color = BRIGHT_CYAN if plan else ACCENT

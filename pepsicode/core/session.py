@@ -381,13 +381,30 @@ def load_session(session_id: str) -> SessionData | None:
         task = control.get("task")
         if task:
             from pepsicode.core.file_contract import migrate_file_contract
+            from pepsicode.orchestration.reporting import restore_worker_output
 
             migrate_file_contract(task)
+            restore_worker_output(control)
         current_proof = False
         if task and task.get("status") == "complete":
+            proof = task.get("acceptance") or {}
+        else:
+            proof = {}
+        if proof.get("kind") == "worker_reports":
+            from pepsicode.orchestration.reporting import worker_report_only, worker_results
+
+            workers = worker_results(control, task)
+            current_proof = (
+                proof.get("valid")
+                and proof.get("task_revision") == task["revision"]
+                and worker_report_only(task)
+                and bool(workers)
+                and workers == proof.get("workers")
+                and all(w["state"] == "result_ready" for w in workers)
+            )
+        elif task and task.get("status") == "complete":
             from pepsicode.core.workspace_state import digest, task_paths, workspace_state
 
-            proof = task.get("acceptance") or {}
             # Acceptance rooted at a delivered integration froze the digest of
             # that checkout, so the proof is rechecked against the delivered
             # version. If the checkout is gone the recorded digest can no
@@ -437,7 +454,10 @@ def load_session(session_id: str) -> SessionData | None:
             skills=data.get("skills", []),
             mcp_servers=data.get("mcp_servers", []),
             permission_mode=data.get("permission_mode", "default"),
-            access_mode=data.get("access_mode", "auto"),
+            access_mode={
+                "trust_commands": "auto",
+                "default": "ask",
+            }.get(data.get("access_mode", "auto"), data.get("access_mode", "auto")),
             profile=data.get("profile", "default"),
             plan_file_path=data.get("plan_file_path"),
             model_settings=data.get("model_settings", {}),

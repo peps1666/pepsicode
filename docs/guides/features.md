@@ -223,7 +223,13 @@ Worker 的 `ready` 先显示为结果待核验；Worker 明确报告 `failed`/`b
 | `eventMaxDelayMs` | 1000 | 合并等待的绝对上限；用户输入和停止不被延后 |
 | `coordinatorReserveRequests` | 2 | 从父任务预算中保留给协调收尾的请求数 |
 
-`workerIsolation` 取代了早期草案中的 `workspaceMode`：`shared` 对应共享串行，`workspace` 对应独立 worktree，`hardened` 仅在 Linux Bubblewrap 可用时生效。无人看护授权仍由 `.pepsi-code/service/policy.json` 配置，不放进 `settings.json`。退出交互宿主会停止它持有的运行。
+`workerIsolation` 取代了早期草案中的 `workspaceMode`：`shared` 对应共享串行，`workspace` 对应独立隔离工作区（Git 仓库用 worktree，空目录或非 Git 目录自动使用独立目录工作区），`hardened` 仅在 Linux Bubblewrap 可用时生效且要求 Git 仓库基线。`workerTimeoutSeconds` 可配置单个受管 Worker 进程的墙钟超时（默认 300 秒）。无人看护授权仍由 `.pepsi-code/service/policy.json` 配置，不放进 `settings.json`。退出交互宿主会停止它持有的运行。
+
+在空目录或非 Git 目录开启 `workspace` 隔离后，也可以直接并行派发实施 Worker（各自运行在 `.pepsi-code/m2/<work_id>/checkout` 独立目录中，互不干扰；`worker_reports` 保留各自工作区产出，`project` 支持无冲突合并回当前目录，仅远端推送/提 PR 仍需要 Git）。Agent 状态显示「排队」时，Worker 仍在等待宿主启动。
+
+在空目录启动 PepsiCode，终端新会话显示 Plan 时，先在空输入框按 `Tab` 切到 Build。然后可以直接说「做一个双击就能用的离线单位换算网页，文件叫 index.html」。在共享或 `workspace` 模式下，主 Agent 可以直接在这个文件夹创建、运行和检查文件，无需预先初始化 Git 或填写 `verificationCommands`。完成后在原目录打开入口文件即可。
+
+想看并行试做的结果时，可以说「让两个 Worker 分头试做，样例留在各自工作区，把改动和测试结果发我」。请在已有提交的仓库根目录启动 PepsiCode。从子目录启动时，派工提示会给出实际仓库根目录；在那个目录开启新会话即可沿用已有提交。成功派工后，输入 `/agents` 查看各个 Worker 的追踪编号与状态。
 
 ## 常驻服务（实验性，M3）
 

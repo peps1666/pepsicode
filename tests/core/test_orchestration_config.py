@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import subprocess
 import time
 from queue import SimpleQueue
 from threading import Event, Thread
@@ -8,6 +9,7 @@ import pytest
 
 from pepsicode import config
 from pepsicode.core import session as sessions
+from pepsicode.core.input_queue import TurnInputQueue
 from pepsicode.core.session_tree import recording_session
 from pepsicode.core.task_control import begin_task
 from pepsicode.execution.runtime import (
@@ -20,7 +22,7 @@ from pepsicode.execution.runtime import (
 from pepsicode.llm.cost_tracker import CostTracker
 from pepsicode.orchestration.coordinator import coordinator_turn
 from pepsicode.orchestration.delivery import deliver_pending
-from pepsicode.orchestration.runtime import _collect_finished, run_owned
+from pepsicode.orchestration.runtime import _collect_finished, _deliver_results, run_owned
 from pepsicode.orchestration.store import (
     admit_work,
     claim_activation,
@@ -31,6 +33,7 @@ from pepsicode.orchestration.store import (
 from pepsicode.orchestration.worker import WorkerExecutor
 from pepsicode.permissions import PermissionManager
 from pepsicode.tooling import ToolContext, ToolRegistry
+from pepsicode.tools.task_state import task_state_tool
 
 
 @pytest.fixture
@@ -100,6 +103,7 @@ def test_config_exposes_documented_orchestration_defaults(monkeypatch):
         "eventDebounceMs": 250,
         "eventMaxDelayMs": 1000,
         "coordinatorReserveRequests": 2,
+        "workerTimeoutSeconds": 300,
     }
 
 
@@ -205,6 +209,156 @@ def test_coordinator_dispatch_uses_configured_queue_limit(session, scope):
 
     assert first.ok
     assert not second.ok and "queue is full" in second.output
+
+
+@pytest.mark.parametrize("outcome", ["failed", "waiting_user"])
+def test_report_batch_wakes_for_action_while_sibling_is_running(session, outcome):
+    task = session.task_control["task"]
+    first = admit_work(
+        session,
+        task_id=task["id"],
+        revision=1,
+        work_key="one",
+        specification={"goal": "Inspect", "deliverable": "worker_reports"},
+    )
+    _dispatch(session, "two")
+    _dispatch(session, "three")
+    for _ in range(3):
+        claim_launch(session, generation="host")
+    settle_launch(session, generation="host", attempt_id=first["attempt_id"], outcome="result_ready", summary="Done.")
+    delivered = []
+
+    def receive(current, _):
+        delivered.append(deliver_pending(current))
+
+    _deliver_results(session, receive, batch_reports=True)
+    assert not delivered
+    second = session.task_control["orchestration"]["work"][1]
+    settle_launch(
+        session, generation="host", attempt_id=second["attempt_id"], outcome=outcome, summary="Needs attention"
+    )
+    _deliver_results(session, receive, batch_reports=True)
+    assert len(delivered) == 1 and len(delivered[0]) == 2
+
+
+def test_caller_requirements_and_first_dispatch_preserve_project_deliverable(session):
+    task = session.task_control["task"]
+
+    def request_reports():
+        admit_work(
+            session,
+            task_id=task["id"],
+            revision=1,
+            work_key="two",
+            specification={"goal": "two", "deliverable": "worker_reports"},
+        )
+
+    task["requirements"] = {"behavior": True}
+    with pytest.raises(ValueError, match="requires project delivery"):
+        request_reports()
+    session.task_control["task"]["requirements"] = {}
+    _dispatch(session, "one")
+    with pytest.raises(ValueError, match="different deliverable"):
+        request_reports()
+    assert session.task_control["task"]["orchestration_output"]["kind"] == "project"
+
+
+def test_dispatch_allows_non_git_workspace_isolation_and_checks_git_for_hardened(session, scope):
+    def git(*args):
+        subprocess.run(["git", *args], cwd=session.workspace, check=True, capture_output=True, timeout=15)
+
+    def dispatch(tools, kind, key=None):
+        return tools.execute(
+            "task_dispatch",
+            {"work_key": key or kind, "goal": "Handle module", "agent_type": kind},
+            ToolContext(session.workspace, permissions=scope.permissions, execution=scope),
+        )
+
+    # workspace isolation supports non-Git/empty folders via directory-isolated workspaces
+    workspace_runtime = {"orchestration": {"workerIsolation": "workspace"}}
+    with bind_scope(scope), coordinator_turn(session, runtime=workspace_runtime) as tools:
+        assert dispatch(tools, "general", key="dir-worker").ok
+
+    # hardened isolation still requires a Git repository root with an initial commit
+    hardened_runtime = {"orchestration": {"workerIsolation": "hardened"}}
+    with bind_scope(scope), coordinator_turn(session, runtime=hardened_runtime) as tools:
+        missing_repo = dispatch(tools, "general")
+        assert not missing_repo.ok and "派工未入队" in missing_repo.output
+        assert dispatch(tools, "explore").ok
+        git("init")
+        missing_head = dispatch(tools, "general")
+        assert not missing_head.ok and "没有可用的 HEAD 提交" in missing_head.output
+        git("-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "--allow-empty", "-m", "Base")
+        assert dispatch(tools, "general").ok
+
+    assert [item["work_key"] for item in session.task_control["orchestration"]["work"]] == [
+        "dir-worker",
+        "explore",
+        "general",
+    ]
+
+
+def test_dispatch_uses_updated_contract_but_waits_for_undelivered_steering(session, scope):
+    queue = TurnInputQueue()
+    queue.bind_session(session)
+    queue.start()
+    context = ToolContext(session.workspace, permissions=scope.permissions, execution=scope)
+    task = session.task_control["task"]
+    with bind_scope(scope), coordinator_turn(session, admitted_only=True) as tools:
+        assert (
+            ToolRegistry([task_state_tool])
+            .execute(
+                "task_state",
+                {
+                    "action": "define",
+                    "task_id": task["id"],
+                    "revision": 1,
+                    "criteria": [{"id": "feature", "kind": "file_exists", "path": "feature.py"}],
+                },
+                context,
+            )
+            .ok
+        )
+        assignment = {"work_key": "first", "goal": "Implement feature", "agent_type": "general"}
+        dispatched = tools.execute("task_dispatch", assignment, context)
+        assert dispatched.ok and dispatched.details["revision"] == 1
+        queue.enqueue("Change the format used by the implementation")
+        stale = tools.execute("task_dispatch", {**assignment, "work_key": "second"}, context)
+        assert not stale.ok and "requested revision" in stale.output
+
+
+@pytest.mark.parametrize("deliverable", ["project", "worker_reports"])
+def test_retry_checks_git_baseline_for_hardened_and_allows_directory_workspace(session, scope, deliverable):
+    item = admit_work(
+        session,
+        task_id=session.task_control["task"]["id"],
+        revision=1,
+        work_key="implement",
+        specification={"goal": "Implement feature", "agent_type": "general", "deliverable": deliverable},
+    )
+    assert claim_launch(session, generation="host")
+    assert settle_launch(session, attempt_id=item["attempt_id"], generation="host", outcome="failed", summary="Failed")
+    hardened_runtime = {"orchestration": {"workerIsolation": "hardened"}}
+    context = ToolContext(session.workspace, permissions=scope.permissions, execution=scope)
+    with bind_scope(scope), coordinator_turn(session, cancel=lambda *_: None, runtime=hardened_runtime) as tools:
+        result = tools.execute("task_retry", {"attempt_id": item["attempt_id"]}, context)
+        assert not result.ok and "派工未入队" in result.output
+        assert result.awaitUser == (deliverable == "worker_reports")
+    assert len(session.task_control["orchestration"]["work"]) == 1
+
+    workspace_runtime = {"orchestration": {"workerIsolation": "workspace"}}
+    with bind_scope(scope), coordinator_turn(session, cancel=lambda *_: None, runtime=workspace_runtime) as tools:
+        retried = tools.execute("task_retry", {"attempt_id": item["attempt_id"]}, context)
+        assert retried.ok
+    assert len(session.task_control["orchestration"]["work"]) == 2
+
+
+def test_config_validates_worker_timeout_seconds(monkeypatch):
+    runtime = _runtime(monkeypatch, {"workerTimeoutSeconds": 450})
+    assert runtime["orchestration"]["workerTimeoutSeconds"] == 450
+    for invalid in (0, -5, True, "60", float("inf")):
+        with pytest.raises(ValueError, match="workerTimeoutSeconds"):
+            _runtime(monkeypatch, {"workerTimeoutSeconds": invalid})
 
 
 def test_coordinator_dispatch_uses_configured_active_limit(session, scope):

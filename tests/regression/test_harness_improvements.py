@@ -423,7 +423,7 @@ def test_task_command_grants_are_visible_and_bound_to_input_contents(tmp_path):
         assert check().is_allowed and len(prompts) == 2
         permissions.set_access_mode("read_only")
         assert not check().is_allowed
-        permissions.set_access_mode("auto")
+        permissions.set_access_mode("ask")
         assert check().is_allowed and len(prompts) == 3
         permissions.clear_task_grants()
         assert check().is_allowed and len(prompts) == 4

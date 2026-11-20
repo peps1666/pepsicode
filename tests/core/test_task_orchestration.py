@@ -125,6 +125,9 @@ def test_acceptance_checks_real_artifact_and_persists_evidence(session):
 
 
 def test_task_definition_uses_cas_and_cannot_weaken_conditions(tmp_path):
+    from pepsicode.core.task_control import edit_control
+    from pepsicode.core.task_intent import apply_user_instruction
+
     scope = ExecutionScope(str(tmp_path), budget=RequestBudget(CostTracker()))
     context = ToolContext(str(tmp_path), execution=scope)
     registry = ToolRegistry([task_state_tool])
@@ -137,12 +140,16 @@ def test_task_definition_uses_cas_and_cannot_weaken_conditions(tmp_path):
             "criteria": [{"id": "artifact", "kind": "file_exists", "path": "feature.py"}],
         }
         assert registry.execute("task_state", args, context).ok
-        assert not registry.execute("task_state", args, context).ok
+        assert registry.execute("task_state", args, context).ok
         assert not scope.has_unknown
-        current = snapshot()["task"]
+        assert snapshot()["task"]["revision"] == task["revision"]
         assert not registry.execute(
-            "task_state", {**args, "revision": current["revision"], "kind": "answer"}, context
+            "task_state", {**args, "criteria": [{**args["criteria"][0], "path": "other.py"}]}, context
         ).ok
+        assert not registry.execute("task_state", {**args, "kind": "answer"}, context).ok
+        with edit_control(context) as control:
+            apply_user_instruction(control["task"], "new-instruction", "Also support a second format", delivered=True)
+        assert not registry.execute("task_state", args, context).ok
         assert snapshot()["task"]["criteria"][0]["path"] == "feature.py"
 
 

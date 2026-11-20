@@ -1,6 +1,9 @@
-from pepsicode.core.agent_loop import run_agent_turn
+import pytest
+
+from pepsicode import config
+from pepsicode.core.agent_loop import run_agent_turn, run_agent_turn_stream
 from pepsicode.tooling import ToolDefinition, ToolRegistry, ToolResult
-from pepsicode.types import AgentStep, ChatMessage, ModelAdapter, StepDiagnostics
+from pepsicode.types import AgentStep, ChatMessage, ModelAdapter, StepDiagnostics, StreamToken
 
 
 class ScriptedModel(ModelAdapter):
@@ -12,6 +15,28 @@ class ScriptedModel(ModelAdapter):
         step = self._steps[self.calls]
         self.calls += 1
         return step
+
+
+@pytest.mark.parametrize("runner", [run_agent_turn, run_agent_turn_stream])
+def test_progress_yields_to_orchestration_host(runner, tmp_path, monkeypatch):
+    class ProgressModel(ScriptedModel):
+        def next_stream(self, messages):
+            step = self.next(messages)
+            yield StreamToken(type="text", content=f"<progress>{step.content}</progress>")
+            yield StreamToken(type="done")
+
+    monkeypatch.setattr(config, "PEPSI_CODE_DIR", tmp_path / "home")
+    model = ProgressModel([AgentStep(type="assistant", kind="progress", content="Worker queued.")])
+    output = runner(
+        model=model,
+        tools=ToolRegistry([]),
+        messages=[{"role": "user", "content": "Implement feature"}],
+        cwd=str(tmp_path),
+        yield_after_progress=lambda: True,
+    )
+
+    assert output[-1] == {"role": "assistant_progress", "content": "Worker queued."}
+    assert model.calls == 1
 
 
 def test_agent_turn_executes_tool_and_returns_assistant() -> None:

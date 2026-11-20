@@ -140,7 +140,7 @@ def test_verification_permission_denial_is_blocked_not_retried(tmp_path, monkeyp
         ],
     }
     agent = Mock(return_value=[{"role": "assistant", "content": "done"}])
-    permissions = PermissionManager(str(tmp_path), mode="auto", prompt=lambda request: {"decision": "deny_once"})
+    permissions = PermissionManager(str(tmp_path), mode="ask", prompt=lambda request: {"decision": "deny_once"})
     run_verified_turn(
         runtime=runtime,
         runner=agent,

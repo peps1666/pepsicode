@@ -50,7 +50,7 @@ export function loadConfig(filename, env = process.env) {
   const workspace = fs.realpathSync(path.resolve(path.dirname(file), raw.workspace));
   if (!fs.statSync(workspace).isDirectory()) throw new Error('workspace 必须是已有目录');
   const accessMode = raw.accessMode ?? 'auto';
-  if (!['auto', 'read_only'].includes(accessMode)) throw new Error('accessMode 只允许 auto 或 read_only');
+  if (!['ask', 'auto', 'read_only'].includes(accessMode)) throw new Error('accessMode 只允许 ask、auto 或 read_only');
   const mode = raw.backend?.mode ?? 'managed';
   if (!['managed', 'external'].includes(mode)) throw new Error('backend.mode 只允许 managed 或 external');
   const python = raw.backend?.python ?? env.PEPSI_PYTHON ?? 'python';

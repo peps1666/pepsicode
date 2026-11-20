@@ -76,7 +76,7 @@ def test_default_permission_selection_preserves_current_mode(terminal):
     press(args, state, "down")
     assert "高风险" in state.command_picker.options[2].label
     press(args, state, "return")
-    assert get_workspace_default(args.cwd) == "trust_commands"
+    assert get_workspace_default(args.cwd) == "full_access"
     assert args.permissions.access_mode.value == "auto"
 
 

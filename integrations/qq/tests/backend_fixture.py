@@ -66,7 +66,11 @@ class ChatFixtureModel(MockModelAdapter):
                     {
                         "id": "fixture-command",
                         "toolName": "run_command",
-                        "input": {"command": sys.executable, "args": ["-c", "print('QQ_APPROVED')"]},
+                        "input": {
+                            "command": sys.executable,
+                            "args": ["-c", "print('QQ_APPROVED')"],
+                            "cwd": str(root.parent),
+                        },
                     }
                 ],
             )

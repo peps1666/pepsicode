@@ -36,6 +36,7 @@ def deliver_pending(session, *, batch_limit=_BATCH_LIMIT, context_limit=_CONTEXT
             with edit_control(session=session) as control:
                 task = control.get("task") or {}
                 work = {item["attempt_id"]: item for item in state["work"]}
+                environments = state.get("environments", {})
                 remaining = context_limit
                 for event in pending:
                     if (event["task_id"], event["revision"]) != (task.get("id"), task.get("revision")):
@@ -44,10 +45,12 @@ def deliver_pending(session, *, batch_limit=_BATCH_LIMIT, context_limit=_CONTEXT
                     if task.get("status") not in {"active", "waiting_user"}:
                         continue
                     item = work[event["attempt_id"]]
+                    checkout = environments.get(item["work_id"], {}).get("worktree")
                     content = (
                         f"Worker result data for attempt {event['attempt_id']}, "
                         f"revision {event['revision']}: {event['kind']}.\n"
-                        f"{item.get('summary', '')}"
+                        + (f"Managed checkout: {checkout}\n" if checkout else "")
+                        + f"{item.get('summary', '')}"
                     )
                     if len(delivered) == batch_limit or remaining < len(content):
                         break
@@ -56,7 +59,7 @@ def deliver_pending(session, *, batch_limit=_BATCH_LIMIT, context_limit=_CONTEXT
                         {
                             "role": "user",
                             "internal": True,
-                            "source": {"kind": "orchestration-event", "id": message_id},
+                            "source": {"kind": "orchestration-event", "id": message_id, "trace_id": item["trace_id"]},
                             "content": content,
                         }
                     )

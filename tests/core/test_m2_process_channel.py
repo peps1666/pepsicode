@@ -39,6 +39,8 @@ if mode == "crash_during_operation":
     sys.exit(9)
 response = json.loads(sys.stdin.readline())
 if mode == "crash":
+    sys.stderr.write("fatal child diagnostic boom\\n")
+    sys.stderr.flush()
     sys.exit(7)
 send("result", 2, {"pid": os.getpid(), "granted": response["payload"]["granted"]})
 """
@@ -95,6 +97,7 @@ def test_crashing_worker_does_not_stop_sibling_and_both_charge_host_budget(works
         with pytest.raises(WorkerProcessError) as error:
             crashed.result(timeout=15)
         assert error.value.exit_code == 7
+        assert "fatal child diagnostic boom" in str(error.value)
         result = surviving.result(timeout=15)
     assert result.payload == {"pid": result.pid, "granted": True}
     assert budget.requests == 2

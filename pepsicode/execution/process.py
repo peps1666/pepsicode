@@ -8,6 +8,7 @@ import signal
 import subprocess
 import threading
 import time
+from contextlib import nullcontext
 from pathlib import Path
 
 from pepsicode.cancellation import TurnCancelledError
@@ -60,49 +61,57 @@ def checked_argv(argv, *, context=None, cwd=None, reason=None, environment=None)
             raise PermissionError("Resolve the previous unknown operation before starting more processes")
     if context.cancellation_event is not None and context.cancellation_event.is_set():
         raise TurnCancelledError("Process cancelled before dispatch")
-    target = resolve_tool_path(context, str(cwd or context.cwd), "command_cwd")
     permissions = context.permissions
-    actual = resolve_argv(list(argv), target, environment if environment is not None else dict(os.environ))
-    enforcement = "none"
-    if permissions is not None:
-        mode = permissions.mode
-        command = Path(actual[0]).name.lower()
-        # A program name is not an observation capability: PATH can resolve
-        # even "echo" or "pwd" to arbitrary user/project code.
-        force = reason or "Run a local program with the current user's process permissions"
-        if command in {"docker", "docker.exe", "sed", "sed.exe", "rg", "rg.exe"}:
-            force = force or "This command can execute code or affect external resources"
-        if command in {"git", "git.exe"} and any(
-            arg in {"commit", "config", "worktree", "merge", "rebase", "push", "reset", "clean", "add"}
-            for arg in actual[1:]
-        ):
-            force = force or "This Git operation changes repository or external state"
-        outcome = permissions.check_command(
-            actual[0],
-            actual[1:],
-            str(target),
-            force_prompt_reason=force,
-            environment=environment,
-            verification=context.for_verification,
-        )
-        if outcome.is_denied or outcome.is_unavailable:
-            raise PermissionError(outcome.denial_message(scope="process"))
-        policy = SandboxPolicy(
-            getattr(permissions, "process_sandbox_mode", SandboxMode.DANGER_FULL_ACCESS), permissions.workspace_root
-        )
-        backend = permissions.sandbox
-        if scope and scope.worker_sandbox:
-            backend = scope.worker_sandbox
-            policy = SandboxPolicy(SandboxMode.WORKSPACE_WRITE, scope.workspace_boundary, cwd=str(target))
-        confined = backend.confine(actual, policy)
-        if policy.mode != SandboxMode.DANGER_FULL_ACCESS and confined.enforcement != "full":
-            raise SandboxUnavailableError("Requested process confinement is unavailable; command not started")
-        actual = confined.argv
-        enforcement = confined.enforcement
-        if permissions.mode != mode:
-            raise PermissionError("Permissions changed during process approval")
-        if resolve_tool_path(context, str(cwd or context.cwd), "command_cwd") != target:
-            raise PermissionError("Process working directory changed during approval")
+    op_guard = (
+        permissions.operation()
+        if permissions is not None
+        and hasattr(permissions, "_operation_paths")
+        and permissions._operation_paths.get() is None
+        else nullcontext()
+    )
+    with op_guard:
+        target = resolve_tool_path(context, str(cwd or context.cwd), "command_cwd")
+        actual = resolve_argv(list(argv), target, environment if environment is not None else dict(os.environ))
+        enforcement = "none"
+        if permissions is not None:
+            mode = permissions.mode
+            command = Path(actual[0]).name.lower()
+            # A program name is not an observation capability: PATH can resolve
+            # even "echo" or "pwd" to arbitrary user/project code.
+            force = reason or "Run a local program with the current user's process permissions"
+            if command in {"docker", "docker.exe", "sed", "sed.exe", "rg", "rg.exe"}:
+                force = force or "This command can execute code or affect external resources"
+            if command in {"git", "git.exe"} and any(
+                arg in {"commit", "config", "worktree", "merge", "rebase", "push", "reset", "clean", "add"}
+                for arg in actual[1:]
+            ):
+                force = force or "This Git operation changes repository or external state"
+            outcome = permissions.check_command(
+                actual[0],
+                actual[1:],
+                str(target),
+                force_prompt_reason=force,
+                environment=environment,
+                verification=context.for_verification,
+            )
+            if outcome.is_denied or outcome.is_unavailable:
+                raise PermissionError(outcome.denial_message(scope="process"))
+            policy = SandboxPolicy(
+                getattr(permissions, "process_sandbox_mode", SandboxMode.DANGER_FULL_ACCESS), permissions.workspace_root
+            )
+            backend = permissions.sandbox
+            if scope and scope.worker_sandbox:
+                backend = scope.worker_sandbox
+                policy = SandboxPolicy(SandboxMode.WORKSPACE_WRITE, scope.workspace_boundary, cwd=str(target))
+            confined = backend.confine(actual, policy)
+            if policy.mode != SandboxMode.DANGER_FULL_ACCESS and confined.enforcement != "full":
+                raise SandboxUnavailableError("Requested process confinement is unavailable; command not started")
+            actual = confined.argv
+            enforcement = confined.enforcement
+            if permissions.mode != mode:
+                raise PermissionError("Permissions changed during process approval")
+            if resolve_tool_path(context, str(cwd or context.cwd), "command_cwd") != target:
+                raise PermissionError("Process working directory changed during approval")
     if scope:
         scope.check_cancelled()
         run_policy_checkpoint(scope, kind="command", argv=actual, path=str(target))

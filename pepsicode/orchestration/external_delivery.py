@@ -27,6 +27,8 @@ from urllib.parse import urlencode
 
 from pepsicode.core.task_control import edit_control
 from pepsicode.execution.external import authorize
+from pepsicode.execution.filesystem import FILES
+from pepsicode.orchestration.environment import snapshot_directory_files
 from pepsicode.orchestration.git_ops import run_git
 from pepsicode.orchestration.integration import _journalled, acceptance_command_digest, validate_integration
 from pepsicode.tooling import ToolContext
@@ -139,6 +141,42 @@ def deliver_integration(
 
     repo = Path(session.workspace).resolve()
     context = ToolContext(str(repo), permissions=scope.permissions, execution=scope)
+
+    if integration.get("workspace_kind") == "directory":
+        if push or pull_request:
+            raise ValueError("Push and pull request delivery require a Git repository")
+        record = _existing_delivery(session, integration["integration_id"], "local") or _new_record(
+            integration, "local", {"workspace": str(repo)}
+        )
+        if record["status"] == "pending":
+            checkout = Path(integration["worktree"])
+            baseline_files = dict(integration.get("baseline_files") or {})
+            changes = integration.get("changes") or {}
+            current_repo_files = snapshot_directory_files(repo)
+            touched = [*(changes.get("written") or []), *(changes.get("deleted") or [])]
+            diverged = [rel for rel in touched if current_repo_files.get(rel) != baseline_files.get(rel)]
+            if diverged:
+                raise ValueError(
+                    f"Workspace files changed since baseline before local delivery: {', '.join(diverged[:8])}"
+                )
+
+            def apply_local():
+                for rel in changes.get("written") or []:
+                    src = checkout / Path(rel)
+                    dst = repo / Path(rel)
+                    FILES.mkdir(dst.parent)
+                    FILES.write(context, dst, src.read_bytes())
+                for rel in changes.get("deleted") or []:
+                    target = repo / Path(rel)
+                    if target.exists():
+                        target.unlink()
+
+            _journalled(
+                scope, context, f"m4-deliver:{integration['integration_id']}:local", "m4_deliver_directory", apply_local
+            )
+            _update(record, status="local", attempt={"outcome": "local_directory_applied"})
+        _save_delivery(session, record)
+        return record
 
     # Local delivery is the default outcome: the integration branch already
     # exists in the repository; the record binds it to its evidence.

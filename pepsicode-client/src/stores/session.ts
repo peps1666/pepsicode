@@ -31,7 +31,7 @@ export interface TaskReport {
   instructions?: string[];
   evidence: Array<{ criterion_id: string; status: string; task_revision?: number; acceptance_run_id?: string; workspace_digest?: string }>;
   assurance?: string;
-  acceptance?: { valid: boolean; task_revision: number; acceptance_run_id: string; workspace: { digest: string }; reason_code?: string } | null;
+  acceptance?: { valid: boolean; task_revision: number; kind?: "worker_reports"; acceptance_run_id?: string; workspace?: { digest: string }; reason_code?: string } | null;
 }
 
 export interface VerificationReport {
@@ -132,10 +132,10 @@ interface SessionState {
   task: TaskReport | null;
   cacheHitPercentage: number | null;
   latestUsage: { input_total: number | null; cache_read: number | null; cache_write: number | null; cost_usd: number | null } | null;
-  accessMode: "read_only" | "auto" | "trust_commands" | "full_access";
+  accessMode: "ask" | "auto" | "full_access" | "read_only";
   permissionUpdating: boolean;
-  updatePermissions: (mode: SessionState["accessMode"]) => Promise<void>;
-  setWorkspaceDefaultPermissions: (mode: SessionState["accessMode"]) => Promise<void>;
+  updatePermissions: (mode: "ask" | "auto" | "full_access") => Promise<void>;
+  setWorkspaceDefaultPermissions: (mode: "ask" | "auto" | "full_access") => Promise<void>;
   messages: ChatMessage[];
   isRunning: boolean;
   isStopping: boolean;

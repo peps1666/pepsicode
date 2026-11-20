@@ -304,6 +304,14 @@ def load_runtime_config(cwd: str | Path | None = None) -> dict[str, Any]:
         and orchestration.get("environmentRetentionSeconds") is not None
         else None
     )
+    worker_timeout_seconds = orchestration.get("workerTimeoutSeconds", 300)
+    if (
+        isinstance(worker_timeout_seconds, bool)
+        or not isinstance(worker_timeout_seconds, (int, float))
+        or not math.isfinite(worker_timeout_seconds)
+        or worker_timeout_seconds <= 0
+    ):
+        raise ValueError("orchestration.workerTimeoutSeconds must be a positive finite duration in seconds")
     if orchestration.get("enabled", False) and coordinator_reserve_requests >= request_limit:
         raise ValueError("orchestration.coordinatorReserveRequests must be less than modelRequestLimit")
     service = validate_service_settings(effective.get("service", {}))
@@ -344,6 +352,7 @@ def load_runtime_config(cwd: str | Path | None = None) -> dict[str, Any]:
             "eventDebounceMs": event_debounce_ms,
             "eventMaxDelayMs": event_max_delay_ms,
             "coordinatorReserveRequests": coordinator_reserve_requests,
+            "workerTimeoutSeconds": worker_timeout_seconds,
             **({"maxTotalActiveWorkers": max_total_active_workers} if max_total_active_workers is not None else {}),
             **(
                 {"environmentRetentionSeconds": environment_retention_seconds}

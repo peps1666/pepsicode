@@ -46,6 +46,7 @@ from pepsicode.approval.local_backend import PromptHandler
 from pepsicode.sandbox import (
     LocalSandboxBackend,
     SandboxBackend,
+    classify_auto_command_risk,
     classify_dangerous_command,
     format_command_signature,
 )
@@ -56,6 +57,7 @@ __all__ = [
     "PermissionManager",
     "PermissionMode",
     "PromptHandler",
+    "normalize_access_mode",
 ]
 
 
@@ -64,13 +66,37 @@ PermissionDecision = str  # one of ApprovalDecision values
 
 
 class PermissionMode(str, Enum):
-    READ_ONLY = "read_only"
+    ASK = "ask"
     AUTO = "auto"
-    TRUST_COMMANDS = "trust_commands"
     FULL_ACCESS = "full_access"
-    # Legacy callers can retain per-file approval; new sessions use AUTO.
+    # Kept for QQ read-only mode, legacy session restore, and low-level tests.
+    READ_ONLY = "read_only"
+    TRUST_COMMANDS = "trust_commands"
     DEFAULT = "default"
     PLAN = "plan"
+
+
+def normalize_access_mode(mode: PermissionMode | str, *, allow_read_only: bool = True) -> PermissionMode:
+    """Normalize a user or persisted access mode to the canonical 3-mode model.
+
+    Legacy ``trust_commands`` maps to ``auto`` (never escalates to
+    ``full_access``) and legacy ``default`` maps to ``ask``. ``read_only`` is
+    retained when ``allow_read_only=True`` so QQ read-only configs and legacy
+    read-only sessions keep strict read-only boundaries.
+    """
+    try:
+        candidate = PermissionMode(mode)
+    except ValueError as error:
+        raise ValueError("Choose ask, auto, or full_access") from error
+    if candidate in {PermissionMode.ASK, PermissionMode.DEFAULT}:
+        return PermissionMode.ASK
+    if candidate in {PermissionMode.AUTO, PermissionMode.TRUST_COMMANDS}:
+        return PermissionMode.AUTO
+    if candidate == PermissionMode.FULL_ACCESS:
+        return PermissionMode.FULL_ACCESS
+    if candidate == PermissionMode.READ_ONLY and allow_read_only:
+        return PermissionMode.READ_ONLY
+    raise ValueError("Choose ask, auto, or full_access")
 
 
 _PLAN_CONTROL_TOOLS = frozenset({"ask_user", "task", "exit_plan_mode"})
@@ -219,14 +245,7 @@ class PermissionManager:
 
     def set_access_mode(self, mode: str) -> None:
         self._task_command_grants.clear()
-        candidate = PermissionMode(mode)
-        if candidate not in {
-            PermissionMode.READ_ONLY,
-            PermissionMode.AUTO,
-            PermissionMode.TRUST_COMMANDS,
-            PermissionMode.FULL_ACCESS,
-        }:
-            raise ValueError("Choose read_only, auto, trust_commands, or full_access")
+        candidate = normalize_access_mode(mode, allow_read_only=True)
         if self.is_plan_mode:
             self.previous_mode = candidate
         else:
@@ -609,44 +628,56 @@ class PermissionManager:
         if path_outcome.is_denied or path_outcome.is_unavailable:
             return path_outcome
 
-        if self.mode == PermissionMode.TRUST_COMMANDS:
-            # Trust applies to processes, but an explicit denial for this exact
-            # command and working directory remains authoritative.
-            grant_key = _command_grant_key(command, args, command_cwd)
-            cached = self.store.lookup(ApprovalKind.COMMAND, grant_key)
-            if cached is not None and cached.is_denied:
-                return cached
-            return ApprovalOutcome(decision=ApprovalDecision.ALLOW_ONCE)
-
-        # 2. Dangerous-command classification
-        reason = force_prompt_reason or classify_dangerous_command(command, args)
-        if not reason:
-            return ApprovalOutcome(decision=ApprovalDecision.ALLOW_ONCE)
-
-        # 3. Check cache
+        # 2. Explicit denial for this exact command and cwd always wins.
         signature = format_command_signature(command, args)
         grant_key = _command_grant_key(command, args, command_cwd)
+        cached = self.store.lookup(ApprovalKind.COMMAND, grant_key)
+        if cached is not None and cached.is_denied:
+            return cached
+
+        if self.mode == PermissionMode.TRUST_COMMANDS:
+            return ApprovalOutcome(decision=ApprovalDecision.ALLOW_ONCE)
+
+        # 3. Mode-specific command risk / prompt policy
+        if self.mode == PermissionMode.AUTO:
+            # Codex-style auto-approval: normal workspace commands run without
+            # prompting; high-risk, destructive, remote or system commands ask.
+            reason = classify_auto_command_risk(command, args)
+            if not reason:
+                return ApprovalOutcome(decision=ApprovalDecision.ALLOW_ONCE)
+            summary = "pepsicode wants to run a high-risk command"
+        elif self.mode == PermissionMode.ASK:
+            reason = (
+                force_prompt_reason
+                or classify_dangerous_command(command, args)
+                or "Ask mode requires confirmation before running local commands"
+            )
+            summary = "pepsicode wants approval for this command"
+        else:
+            # Legacy DEFAULT mode keeps existing prompt behavior for direct callers.
+            reason = force_prompt_reason or classify_dangerous_command(command, args)
+            if not reason:
+                return ApprovalOutcome(decision=ApprovalDecision.ALLOW_ONCE)
+            summary = (
+                "pepsicode wants to run a dangerous command"
+                if not force_prompt_reason
+                else "pepsicode wants approval for this command"
+            )
+
+        # 4. Check allow cache
         try:
             task_key = self._task_command_key(command, args, command_cwd, environment, verification)
         except (OSError, ValueError):
             task_key = None
-        cached = self.store.lookup(ApprovalKind.COMMAND, grant_key)
-        if cached is not None and cached.is_denied:
-            return cached
         if task_key and task_key in self._task_command_grants:
             return ApprovalOutcome(ApprovalDecision.ALLOW_TASK)
         if cached is not None:
             return cached
 
-        # 4. Prompt
+        # 5. Prompt
         if self.prompt is None and isinstance(self.approval, LocalApprovalBackend):
             return ApprovalOutcome(decision=ApprovalDecision.UNAVAILABLE)
 
-        summary = (
-            "pepsicode wants to run a dangerous command"
-            if not force_prompt_reason
-            else "pepsicode wants approval for this command"
-        )
         req = ApprovalRequest(
             kind=ApprovalKind.COMMAND,
             summary=summary,

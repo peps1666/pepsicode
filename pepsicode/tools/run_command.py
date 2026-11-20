@@ -184,7 +184,9 @@ def _validate(input_data: dict) -> dict:
 
 def _run(input_data: dict, context) -> ToolResult:
     environment = {**os.environ, **(getattr(context, "environment", None) or {})}
-    effective_cwd = str(resolve_tool_path(context, input_data["cwd"], "list")) if input_data.get("cwd") else context.cwd
+    effective_cwd = (
+        str(resolve_tool_path(context, input_data["cwd"], "command_cwd")) if input_data.get("cwd") else context.cwd
+    )
     timeout = int(input_data.get("timeout", COMMAND_TIMEOUT))
     preserve_argv = getattr(context, "command_is_argv", False)
     normalized_command, normalized_args = _normalize_command_input(input_data, preserve_argv=preserve_argv)

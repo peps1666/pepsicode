@@ -349,7 +349,12 @@ def test_verified_session_wakes_for_steering_before_worker_finishes(session, wor
                     {
                         "id": "dispatch",
                         "toolName": "task_dispatch",
-                        "input": {"work_key": "one", "goal": "Inspect", "agent_type": "explore"},
+                        "input": {
+                            "work_key": "one",
+                            "goal": "Inspect",
+                            "agent_type": "explore",
+                            "deliverable": "project",
+                        },
                     }
                 ],
             )
@@ -511,7 +516,12 @@ def test_interactive_worker_report_cannot_replace_acceptance(session, worker_sco
                     {
                         "id": "dispatch",
                         "toolName": "task_dispatch",
-                        "input": {"work_key": "one", "goal": "Create feature.py", "agent_type": "general"},
+                        "input": {
+                            "work_key": "one",
+                            "goal": "Create feature.py",
+                            "agent_type": "general",
+                            "deliverable": "project",
+                        },
                     }
                 ],
             )

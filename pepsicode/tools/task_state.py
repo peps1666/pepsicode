@@ -131,12 +131,18 @@ def _run(value, context):
                         "input_id": criterion.get("input_id", task["inputs"][-1]),
                         "purpose": criterion.get("purpose", criterion["id"]),
                     }
-            if previous_kind != task["kind"] or task["criteria"] != list(existing.values()):
+            criteria = list(existing.values())
+            if previous_kind != task["kind"]:
                 task["revision"] += 1
                 task["admitted_revision"] = task["revision"]
-            task["criteria"] = list(existing.values())
+            if previous_kind != task["kind"] or task["criteria"] != criteria:
+                if task.get("acceptance"):
+                    task.setdefault("acceptance_history", []).append(
+                        {"acceptance": task["acceptance"], "evidence": task.get("evidence", [])}
+                    )
+                task.update(evidence=[], acceptance=None)
+            task["criteria"] = criteria
             task["criteria_revision"] = task["revision"]
-            task["evidence"] = []
     state = snapshot(context)
     task = state.get("task")
     view = (

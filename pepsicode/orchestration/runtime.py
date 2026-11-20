@@ -17,6 +17,7 @@ from threading import Condition, Event, RLock
 
 from pepsicode.core import session as sessions
 from pepsicode.orchestration.coordinator import coordinator_turn
+from pepsicode.orchestration.reporting import worker_report_only
 from pepsicode.orchestration.store import (
     cancel_queued,
     claim_activation,
@@ -86,27 +87,38 @@ def own_workspace(workspace):
     return _own_lock(root / f"{digest}.lock", "workspace")
 
 
-def _deliver_results(session, on_result):
+def _deliver_results(session, on_result, *, batch_reports=False):
     """Offer current pending results until the callback stops acknowledging them."""
     while True:
         task = session.task_control.get("task") or {}
         if task.get("status") not in {"active", "waiting_user"}:
             return
-        pending = next(
-            (
-                event
-                for event in session.task_control.get("orchestration", {}).get("events", [])
-                if event["state"] == "pending"
-                and (event["task_id"], event["revision"]) == (task.get("id"), task.get("revision"))
-            ),
-            None,
-        )
-        if pending is None:
+        state = session.task_control.get("orchestration") or {}
+        identity = task["id"], task["revision"]
+        pending = [
+            event
+            for event in state.get("events", [])
+            if event["state"] == "pending" and (event["task_id"], event["revision"]) == identity
+        ]
+        if not pending:
             return
-        on_result(session, pending["attempt_id"])
+        if (
+            batch_reports
+            and task["status"] == "active"
+            and worker_report_only(task)
+            and all(event["kind"] == "result_ready" for event in pending)
+            and any(
+                (item["task_id"], item["revision"]) == identity
+                and item["state"] in {"queued", "starting", "stop_requested"}
+                for item in state["work"]
+            )
+        ):
+            return
+        first = pending[0]
+        on_result(session, first["attempt_id"])
         # A callback can elect to leave results pending, for example when
         # the coordinator cannot accept any more input.
-        if pending["state"] == "pending":
+        if first["state"] == "pending":
             return
 
 
@@ -382,6 +394,7 @@ def _schedule(
                 session,
                 cancel=cancel if scope is not None else None,
                 admitted_only=prepare_coordinate is not None,
+                require_deliverable=prepare_coordinate is not None,
                 runtime=runtime,
                 workspace_owned=True,
             ) as tools:
@@ -391,7 +404,7 @@ def _schedule(
     with steering, ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="orchestration") as pool:
         if start_turn and (session.task_control.get("task") or {}).get("status") == "active":
             notify(session, None)
-        _deliver_results(session, notify)
+        _deliver_results(session, notify, batch_reports=batch_results)
         active = {}
         failure = None
         while True:
@@ -427,8 +440,15 @@ def _schedule(
                     if candidate and eligible(candidate) and candidate["specification"]["agent_type"] == "general":
                         from pepsicode.orchestration.environment import prepare_owned
 
+                        worker_timeout = ((runtime or {}).get("orchestration") or {}).get("workerTimeoutSeconds", 300)
                         try:
-                            prepare_owned(session, candidate["work_id"], scope=scope, isolation=launch_isolation)
+                            prepare_owned(
+                                session,
+                                candidate["work_id"],
+                                scope=scope,
+                                isolation=launch_isolation,
+                                worker_timeout=worker_timeout,
+                            )
                         except (ValueError, RuntimeError, OSError) as error:
                             if scope is not None and scope.has_unknown:
                                 failure = error
@@ -505,7 +525,7 @@ def _schedule(
             if failure is None and prepare_wake:
                 try:
                     if batch_results:
-                        _deliver_results(session, notify)
+                        _deliver_results(session, notify, batch_reports=True)
                     else:
                         for attempt_id in prepare_wake:
                             notify(session, attempt_id)
@@ -568,7 +588,7 @@ def _schedule(
             if failure is None and wake:
                 try:
                     if batch_results:
-                        _deliver_results(session, notify)
+                        _deliver_results(session, notify, batch_reports=True)
                     else:
                         for attempt_id in wake:
                             notify(session, attempt_id)

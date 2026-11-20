@@ -87,6 +87,7 @@ class WorkerExecutor:
     prepared_process: bool = False
     isolation: str = "shared"
     coordinator_reserve: int = 2
+    worker_timeout: float = 300
 
     def is_read_only(self, item):
         # Explore is forced through the read-only allowlist by the Task tool.
@@ -194,6 +195,9 @@ class WorkerExecutor:
                     return "cancelled", "The Worker was stopped during checkout validation."
                 except (KeyError, OSError, RuntimeError, ValueError) as error:
                     return "blocked", f"Worker environment unavailable: {error}"
+                configured_timeout = ((self.runtime or {}).get("orchestration") or {}).get(
+                    "workerTimeoutSeconds", self.worker_timeout
+                )
                 worker_runner = create_process_runner(
                     run_id=item["run_id"],
                     attempt_id=item["attempt_id"],
@@ -201,6 +205,7 @@ class WorkerExecutor:
                     directories=directories,
                     sandbox=sandbox,
                     port_range=environment.get("port_range"),
+                    timeout=configured_timeout,
                 )
             tool = create_task_tool(
                 session.workspace,

@@ -27,9 +27,37 @@ from pepsicode.tooling import ToolContext
 _DRIVER = Path(__file__).with_name("process_worker_child.py").resolve()
 _DRIVER_SOURCE = _DRIVER.read_text(encoding="utf-8") if _DRIVER.is_file() else ""
 _INCOMPLETE = {"max_tokens", "pause_turn", "stream_incomplete"}
+_HARDENED_ENV_KEYS = ("PATH", "SystemRoot", "WINDIR", "SystemDrive", "PATHEXT")
+_WORKSPACE_ENV_KEYS = (
+    *_HARDENED_ENV_KEYS,
+    "COMSPEC",
+    "USERPROFILE",
+    "HOMEDRIVE",
+    "HOMEPATH",
+    "HOME",
+    "APPDATA",
+    "LOCALAPPDATA",
+    "PROGRAMDATA",
+    "PROGRAMFILES",
+    "PROGRAMFILES(X86)",
+    "COMMONPROGRAMFILES",
+    "NUMBER_OF_PROCESSORS",
+    "PROCESSOR_ARCHITECTURE",
+    "VIRTUAL_ENV",
+    "CONDA_PREFIX",
+    "CONDA_DEFAULT_ENV",
+    "PYTHONUTF8",
+    "PYTHONIOENCODING",
+    "LANG",
+    "LC_ALL",
+    "LC_CTYPE",
+    "TERM",
+    "XDG_CACHE_HOME",
+    "XDG_CONFIG_HOME",
+)
 
 
-def create_process_runner(*, run_id, attempt_id, generation, directories, sandbox=None, port_range=None):
+def create_process_runner(*, run_id, attempt_id, generation, directories, sandbox=None, port_range=None, timeout=300):
     @scoped_turn
     def run(
         *,
@@ -62,11 +90,8 @@ def create_process_runner(*, run_id, attempt_id, generation, directories, sandbo
         scope.workspace_boundary = str(Path(cwd).resolve())
         scope.worker_sandbox = sandbox
         scope.allow_background_processes = False
-        scope.process_environment = {
-            name: os.environ[name]
-            for name in ("PATH", "SystemRoot", "WINDIR", "SystemDrive", "PATHEXT")
-            if name in os.environ
-        }
+        env_keys = _HARDENED_ENV_KEYS if sandbox is not None else _WORKSPACE_ENV_KEYS
+        scope.process_environment = {name: os.environ[name] for name in env_keys if name in os.environ}
         scope.process_environment.update(
             TMP=directories["tmp"],
             TEMP=directories["tmp"],
@@ -215,6 +240,7 @@ def create_process_runner(*, run_id, attempt_id, generation, directories, sandbo
             generation=generation,
             payload={"max_rounds": max_steps},
             operations={"next": next_model, "tools": execute_tools},
+            timeout=timeout,
         )
         if status is None or result.payload:
             raise WorkerProtocolError("Worker exited without a host-confirmed result")

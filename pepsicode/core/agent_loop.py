@@ -631,6 +631,7 @@ def run_agent_turn(
     on_tool_event: Callable[[str, dict[str, Any]], None] | None = None,
     on_assistant_message: Callable[[str], None] | None = None,
     on_progress_message: Callable[[str], None] | None = None,
+    yield_after_progress: Callable[[], bool] | None = None,
     context_manager: ContextManager | None = None,
     cost_tracker: CostTracker | None = None,
     cost_limit_usd: float | None = None,
@@ -892,6 +893,10 @@ def run_agent_turn(
                 if on_progress_message:
                     on_progress_message(next_step.content)
                 current_messages.append({"role": "assistant_progress", "content": next_step.content})
+                if yield_after_progress is not None and yield_after_progress():
+                    return _finish_hook_turn(
+                        current_messages, hook_engine, cwd=cwd, permissions=permissions, agent_scope=agent_scope
+                    )
                 current_messages.append(
                     {
                         "role": "user",
@@ -1254,6 +1259,7 @@ def run_agent_turn_stream(
     on_assistant_message: Callable[[str], None] | None = None,
     on_error_message: Callable[[str], None] | None = None,
     on_progress_message: Callable[[str], None] | None = None,
+    yield_after_progress: Callable[[], bool] | None = None,
     context_manager: ContextManager | None = None,
     cost_tracker: CostTracker | None = None,
     cost_limit_usd: float | None = None,
@@ -1684,6 +1690,10 @@ def run_agent_turn_stream(
             if on_progress_message:
                 on_progress_message(text_content)
             current_messages.append({"role": "assistant_progress", "content": text_content})
+            if yield_after_progress is not None and yield_after_progress():
+                return _finish_hook_turn(
+                    current_messages, hook_engine, cwd=cwd, permissions=permissions, agent_scope=agent_scope
+                )
             current_messages.append({"role": "user", "content": NUDGE_CONTINUE, "internal": True})
             continue
 

@@ -63,6 +63,15 @@ def validate_control(control):
             raise ValueError("Invalid persisted task collections")
         if not all(isinstance(value, str) for key in ("inputs", "instructions") for value in task[key]):
             raise ValueError("Invalid persisted task input")
+        if "orchestration_output" in task:
+            output = task["orchestration_output"]
+            if (
+                not isinstance(output, dict)
+                or output.get("kind") not in ("project", "worker_reports")
+                or type(output.get("revision")) is not int
+                or not 1 <= output["revision"] <= task["revision"]
+            ):
+                raise ValueError("Invalid persisted orchestration deliverable")
         from pepsicode.core.task_acceptance import validate_criteria
 
         validate_criteria(task["criteria"])
@@ -373,6 +382,18 @@ def task_context():
             "content": "Parent task projection (read-only): "
             + json.dumps(view, ensure_ascii=False)
             + "\nDo not change the parent task or treat your report as acceptance evidence.",
+        }
+    from pepsicode.orchestration.reporting import worker_report_only
+
+    if worker_report_only(task):
+        return {
+            "role": "system",
+            "internal": True,
+            "source": {"kind": "task-policy"},
+            "content": "Current task contract: "
+            + json.dumps(view, ensure_ascii=False)
+            + "\nThe deliverable is a summary of the current Workers' reports. The host checks collection, "
+            "revision and pending questions. Summarize what the Workers actually reported.",
         }
     return {
         "role": "system",

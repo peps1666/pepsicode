@@ -19,6 +19,7 @@ from pepsicode.orchestration.repair import (
     classify_failure,
     record_repair,
 )
+from pepsicode.orchestration.reporting import bind_worker_output
 
 
 def _check_capacity(state, task_id, revision, limit):
@@ -94,6 +95,7 @@ def admit_work(
         state = control.setdefault("orchestration", {"version": 1, "work": [], "effects": []})
         if state.get("version") != 1:
             raise ValueError("Unsupported orchestration state")
+        bind_worker_output(task, specification.get("deliverable"))
         run_id = _run_identity(state, session, task_id)
         receipts = state.setdefault("dispatch_receipts", {}) if receipt_key else {}
         for item in reversed(state["work"]):

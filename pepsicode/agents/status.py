@@ -104,6 +104,14 @@ def project(
         and item.get("workspace_digest") == workspace_digest
     } & {item["id"] for item in criteria}
     verified = task.get("status") == "complete" and current_proof and len(passed) == len(criteria)
+    collected = (
+        not stale
+        and task.get("status") == "complete"
+        and proof.get("kind") == "worker_reports"
+        and proof.get("valid")
+        and proof.get("task_revision") == node.spawn_revision
+        and any(worker["trace_id"] == node.trace_id for worker in proof.get("workers", []))
+    )
     if recovery or node.status == "interrupted":
         stage = "recovery_pending"
     elif node.ended_at is not None and node.status not in {"completed", "awaiting_user"}:
@@ -115,7 +123,7 @@ def project(
     elif activities:
         stage = "running"
     elif applicable_report and applicable_report.status == "ready":
-        stage = "verified" if verified else "pending_verification"
+        stage = "verified" if verified else "completed" if collected else "pending_verification"
     elif applicable_report and applicable_report.status in {"blocked", "failed", "dropped"}:
         stage = f"reported_{applicable_report.status}"
     elif node.status == "awaiting_user" and not required:

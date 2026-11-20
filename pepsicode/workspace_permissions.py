@@ -10,7 +10,12 @@ from pathlib import Path
 from pepsicode.config import PEPSI_CODE_DIR
 
 WORKSPACE_PERMISSIONS_PATH = PEPSI_CODE_DIR / "workspace-permissions.json"
-ACCESS_MODES = frozenset({"read_only", "auto", "trust_commands", "full_access"})
+ACCESS_MODES = frozenset({"ask", "auto", "full_access"})
+_LEGACY_WORKSPACE_MODES = {
+    "trust_commands": "auto",
+    "default": "ask",
+    "read_only": "ask",
+}
 
 
 def _workspace_key(workspace: str) -> str:
@@ -33,12 +38,17 @@ def get_workspace_default(workspace: str) -> str:
         mode = defaults.get(_workspace_key(workspace)) if isinstance(defaults, dict) else None
     except (OSError, ValueError):
         return "auto"
-    return mode if isinstance(mode, str) and mode in ACCESS_MODES else "auto"
+    if isinstance(mode, str):
+        if mode in ACCESS_MODES:
+            return mode
+        if mode in _LEGACY_WORKSPACE_MODES:
+            return _LEGACY_WORKSPACE_MODES[mode]
+    return "auto"
 
 
 def set_workspace_default(workspace: str, mode: str) -> None:
     if not isinstance(mode, str) or mode not in ACCESS_MODES:
-        raise ValueError("Choose read_only, auto, trust_commands, or full_access")
+        raise ValueError("Choose ask, auto, or full_access")
     data = _read()
     defaults = data.get("workspaceDefaults", {})
     if not isinstance(defaults, dict):

@@ -19,3 +19,12 @@ test("artifact proof is qualified and stale or mixed evidence is never counted",
   assert.equal(taskOutcome(task), "需要重新核对");
   assert.equal(satisfiedCount(task), 0);
 });
+
+test("collected Worker reports do not count as project acceptance", () => {
+  const task = { revision: 1, status: "complete", criteria: [], evidence: [],
+    acceptance: { kind: "worker_reports", valid: true, task_revision: 1 } };
+  assert.equal(taskOutcome(task), "已汇总 Worker 结果");
+  assert.equal(satisfiedCount(task), 0);
+  task.revision += 1;
+  assert.equal(taskOutcome(task), "需要重新核对");
+});

@@ -101,7 +101,7 @@ def test_plan_and_build_labels_keep_following_content_aligned(terminal):
     )
 
 
-@pytest.mark.parametrize("access", ["auto", "read_only", "trust_commands", "full_access"])
+@pytest.mark.parametrize("access", ["ask", "auto", "full_access", "read_only"])
 def test_tab_toggles_without_approving_and_preserves_draft_and_access(terminal, access):
     args, state = terminal
     args.permissions.set_access_mode(access)

@@ -312,14 +312,33 @@ def create_task_tool(
 
             from pepsicode.prompts import load_harness_instructions
 
-            worktree_note = (
-                "\nYou are running in an isolated Git worktree. After modifying files and running project checks, "
-                "stage and commit your changes (git add and git commit -m ...) in the current working directory before "
-                "finishing so your deliverable can be integrated. If a required check fails and remains unresolved, "
-                "report status='failed' via agent_report."
-                if attempt is not None and worker_runner is not None
-                else ""
-            )
+            worktree_note = ""
+            if attempt is not None and worker_runner is not None:
+                from pepsicode.orchestration.environment import is_directory_environment
+                from pepsicode.orchestration.reporting import worker_report_only
+
+                task = (session.task_control.get("task") or {}) if session else {}
+                environments = (
+                    (session.task_control.get("orchestration") or {}).get("environments") or {} if session else {}
+                )
+                environment = environments.get(attempt.get("work_id"))
+                if is_directory_environment(environment):
+                    worktree_note = (
+                        "\nYou are running in an isolated workspace directory (not a Git worktree). "
+                        "Keep your changes inside this checkout directory and report exact file paths, "
+                        "test commands, and actual test results. Do not run git commit. "
+                    )
+                else:
+                    worktree_note = "\nYou are running in an isolated Git worktree. "
+                    if worker_report_only(task):
+                        worktree_note += "Keep changes in this checkout and report the changed files and actual test results. Do not commit. "
+                    else:
+                        worktree_note += (
+                            "After running checks, stage and commit your changes so they can be integrated. "
+                        )
+                worktree_note += (
+                    "If a required check fails and remains unresolved, report status='failed' via agent_report."
+                )
             sub_messages: list[ChatMessage] = [
                 {
                     "role": "system",

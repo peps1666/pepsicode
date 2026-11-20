@@ -8,11 +8,14 @@ export function satisfiedCount(task: TaskReport): number {
   if (!hasCurrentAcceptance(task)) return 0;
   const proof = task.acceptance!;
   return task.evidence.filter(item => item.status === "satisfied" && item.task_revision === task.revision &&
-    item.acceptance_run_id === proof.acceptance_run_id && item.workspace_digest === proof.workspace.digest).length;
+    item.acceptance_run_id === proof.acceptance_run_id && item.workspace_digest === proof.workspace?.digest).length;
 }
 
 export function taskOutcome(task: TaskReport): string {
   if (task.status === "complete") {
+    if (task.acceptance?.kind === "worker_reports" && task.acceptance.valid && task.acceptance.task_revision === task.revision) {
+      return "已汇总 Worker 结果";
+    }
     if (!hasCurrentAcceptance(task)) return "需要重新核对";
     return task.assurance === "behavior_checked" ? "声明的行为检查已通过" : "产物已检查，行为未验证";
   }

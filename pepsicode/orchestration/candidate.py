@@ -13,6 +13,7 @@ import time
 from pathlib import Path
 
 from pepsicode.core.task_control import edit_control
+from pepsicode.orchestration.environment import directory_digest, is_directory_environment, snapshot_directory_files
 from pepsicode.orchestration.git_ops import run_git
 from pepsicode.tooling import ToolContext
 
@@ -78,6 +79,38 @@ def record_candidate(session, scope, work_id):
     if scope is None or scope.permissions is None:
         raise ValueError("Candidate recording requires an execution authority")
     checkout = Path(environment["worktree"])
+    if is_directory_environment(environment):
+        if not checkout.is_dir():
+            raise ValueError("The candidate workspace directory is missing")
+        baseline = dict(environment.get("baseline_files") or {})
+        current = snapshot_directory_files(checkout)
+        added = {path: sha for path, sha in current.items() if path not in baseline}
+        modified = {path: sha for path, sha in current.items() if path in baseline and baseline[path] != sha}
+        deleted = sorted(path for path in baseline if path not in current)
+        if not added and not modified and not deleted:
+            raise ValueError("The candidate workspace has no changes beyond the baseline")
+        changed = sorted({*added, *modified, *deleted})
+        record = {
+            "workspace_kind": "directory",
+            "work_id": work_id,
+            "attempt_id": latest["attempt_id"],
+            "task_id": task["id"],
+            "revision": task["revision"],
+            "base_sha": environment["base_sha"],
+            "baseline_files": baseline,
+            "branch": "",
+            "head_sha": directory_digest(current),
+            "worktree": str(checkout),
+            "state": "recorded",
+            "recorded_at": time.time(),
+            "shortstat": f"{len(changed)} file(s) changed (+{len(added)} ~{len(modified)} -{len(deleted)})",
+            "changed_files": changed[:_MAX_CHANGED_FILES],
+            "changed_files_truncated": len(changed) > _MAX_CHANGED_FILES,
+            "changes": {"added": added, "modified": modified, "deleted": deleted},
+        }
+        with edit_control(session=session) as control:
+            control.setdefault("orchestration", {}).setdefault("candidates", {})[work_id] = record
+        return record
     context = ToolContext(str(repo), permissions=scope.permissions, execution=scope)
     branch, head, dirty = _head_info(context, checkout)
     if dirty:
@@ -120,6 +153,14 @@ def validate_candidate(session, scope, work_id):
         with edit_control(session=session) as control:
             control.setdefault("orchestration", {}).setdefault("candidates", {})[work_id] = stale
         return stale
+    if record.get("workspace_kind") == "directory":
+        head = directory_digest(snapshot_directory_files(checkout))
+        if head != record["head_sha"]:
+            stale = {**record, "state": "stale", "stale_reason": "workspace directory contents changed"}
+            with edit_control(session=session) as control:
+                control.setdefault("orchestration", {}).setdefault("candidates", {})[work_id] = stale
+            return stale
+        return record
     branch, head, _dirty = _head_info(context, checkout)
     if (branch, head) != (record["branch"], record["head_sha"]):
         stale = {**record, "state": "stale", "stale_reason": "worktree head or branch changed"}

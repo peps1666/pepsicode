@@ -11,7 +11,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
-from threading import Event
+from threading import Event, Thread
 
 from pepsicode.execution import process
 from pepsicode.execution.runtime import bind_scope
@@ -19,6 +19,26 @@ from pepsicode.tooling import ToolContext
 
 _FRAME_BYTES = 64 * 1024
 _MAX_MESSAGES = 256
+_MAX_STDERR_BYTES = 4096
+_DEFAULT_WORKER_TIMEOUT = 300
+_DRIVER_ENV_KEYS = (
+    "PATH",
+    "SystemRoot",
+    "WINDIR",
+    "SystemDrive",
+    "PATHEXT",
+    "COMSPEC",
+    "USERPROFILE",
+    "HOMEDRIVE",
+    "HOMEPATH",
+    "HOME",
+    "APPDATA",
+    "LOCALAPPDATA",
+    "VIRTUAL_ENV",
+    "CONDA_PREFIX",
+    "PYTHONUTF8",
+    "PYTHONIOENCODING",
+)
 
 
 class WorkerProtocolError(RuntimeError):
@@ -26,9 +46,11 @@ class WorkerProtocolError(RuntimeError):
 
 
 class WorkerProcessError(RuntimeError):
-    def __init__(self, exit_code):
+    def __init__(self, exit_code, stderr=""):
         self.exit_code = exit_code
-        super().__init__(f"Worker process exited with code {exit_code} without a successful result")
+        self.stderr = stderr
+        detail = f": {stderr.strip()}" if stderr and stderr.strip() else ""
+        super().__init__(f"Worker process exited with code {exit_code} without a successful result{detail}")
 
 
 @dataclass(frozen=True)
@@ -75,7 +97,7 @@ def run_worker_process(
     generation,
     payload,
     operations,
-    timeout=60,
+    timeout=_DEFAULT_WORKER_TIMEOUT,
 ):
     """Run a trusted Worker executable and broker its explicitly supplied host operations.
 
@@ -108,13 +130,27 @@ def run_worker_process(
     context = ToolContext(
         str(cwd), permissions=scope.permissions, cancellation_event=scope.cancellation_event, execution=scope
     )
-    env = {
-        name: os.environ[name]
-        for name in ("PATH", "SystemRoot", "WINDIR", "SystemDrive", "PATHEXT")
-        if name in os.environ
-    }
+    env = {name: os.environ[name] for name in _DRIVER_ENV_KEYS if name in os.environ}
     deadline = time.monotonic() + timeout
     scope.deadline = min(scope.deadline, deadline) if scope.deadline is not None else deadline
+    stderr_chunks: list[bytes] = []
+
+    def stderr_text():
+        raw = b"".join(stderr_chunks)[-_MAX_STDERR_BYTES:]
+        return raw.decode("utf-8", errors="replace").strip()
+
+    def drain_stderr(stream):
+        total = 0
+        try:
+            while True:
+                chunk = stream.read(1024)
+                if not chunk:
+                    break
+                if total < _MAX_STDERR_BYTES * 2:
+                    stderr_chunks.append(chunk)
+                    total += len(chunk)
+        except OSError:
+            pass
 
     def check():
         if time.monotonic() >= deadline:
@@ -157,7 +193,7 @@ def run_worker_process(
             if exit_code is None:
                 exit_code = child.poll()
             if exit_code is not None:
-                raise WorkerProcessError(exit_code)
+                raise WorkerProcessError(exit_code, stderr_text())
 
     with bind_scope(scope), ThreadPoolExecutor(max_workers=1, thread_name_prefix="worker-ipc") as pool:
         check()
@@ -168,9 +204,11 @@ def run_worker_process(
             env=env,
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
             reason="Start the managed Worker process",
         )
+        stderr_thread = Thread(target=drain_stderr, args=(child.stderr,), daemon=True, name="worker-stderr")
+        stderr_thread.start()
         try:
             scope.record(
                 "orchestration/worker_process_started",
@@ -183,7 +221,9 @@ def run_worker_process(
             for sequence in range(1, _MAX_MESSAGES + 1):
                 frame = exchange(pool, _read, child.stdout)
                 if frame is None:
-                    raise WorkerProcessError(exchange(pool, child.wait))
+                    code = exchange(pool, child.wait)
+                    stderr_thread.join(timeout=0.2)
+                    raise WorkerProcessError(code, stderr_text())
                 if (
                     not isinstance(frame, dict)
                     or any(frame.get(key) != value for key, value in identity.items())
@@ -198,7 +238,8 @@ def run_worker_process(
                         raise WorkerProtocolError("Worker sent data after its result")
                     exit_code = exchange(pool, child.wait)
                     if exit_code:
-                        raise WorkerProcessError(exit_code)
+                        stderr_thread.join(timeout=0.2)
+                        raise WorkerProcessError(exit_code, stderr_text())
                     return WorkerProcessResult(child.pid, data)
                 operation = data.get("operation")
                 arguments = data.get("arguments")
@@ -221,11 +262,17 @@ def run_worker_process(
             finally:
                 child.stdin.close()
                 child.stdout.close()
+                stderr_thread.join(timeout=0.2)
+                if child.stderr is not None:
+                    child.stderr.close()
+                exit_code = child.poll()
+                excerpt = stderr_text()[:800] if exit_code else ""
                 scope.record(
                     "orchestration/worker_process_ended",
                     run_id=run_id,
                     attempt_id=attempt_id,
                     generation=generation,
                     pid=child.pid,
-                    exit_code=child.poll(),
+                    exit_code=exit_code,
+                    **({"stderr_excerpt": excerpt} if excerpt else {}),
                 )

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import os
 import re
 import shutil
@@ -16,7 +18,7 @@ from pepsicode.core.task_control import edit_control
 from pepsicode.execution import process
 from pepsicode.execution.filesystem import FILES
 from pepsicode.execution.runtime import bind_scope, bind_tool_context, execution_journal_dir, recover_execution_calls
-from pepsicode.orchestration.git_ops import run_git
+from pepsicode.orchestration.git_ops import has_worktree_baseline, run_git
 from pepsicode.orchestration.runtime import own_session, own_workspace
 from pepsicode.sandbox.bubblewrap import BubblewrapBackend
 from pepsicode.sandbox.types import SandboxMode, SandboxPolicy
@@ -25,6 +27,22 @@ from pepsicode.tooling import ToolContext
 _SHA = re.compile(r"(?:[0-9a-f]{40}|[0-9a-f]{64})\Z")
 _WORK_ID = re.compile(r"[0-9a-f]{32}\Z")
 _ENV_DIRS = ("dependencies", "build", "tmp", "test-data")
+_DIR_EXCLUDED_NAMES = frozenset(
+    {
+        ".git",
+        ".pepsi-code",
+        ".venv",
+        "venv",
+        "node_modules",
+        "__pycache__",
+        ".pytest_cache",
+        ".mypy_cache",
+        ".ruff_cache",
+    }
+)
+_DIR_MAX_FILES = 5000
+_DIR_MAX_BYTES = 128 * 1024 * 1024
+_DEFAULT_WORKER_TIMEOUT = 300
 _LOCKFILES = (
     "pyproject.toml",
     "uv.lock",
@@ -81,9 +99,45 @@ def _allocate_port_range(session, work_id):
     raise ValueError("No free managed Worker port range available")
 
 
-def _resource_limits(isolation):
+def snapshot_directory_files(root: Path, *, max_files=_DIR_MAX_FILES, max_bytes=_DIR_MAX_BYTES) -> dict[str, str]:
+    """Snapshot regular files under ``root`` as ``{posix_rel_path: sha256}``."""
+    base = Path(root).resolve()
+    files: dict[str, str] = {}
+    total_bytes = 0
+    for dirpath, dirnames, filenames in os.walk(base, followlinks=False):
+        dirnames[:] = sorted(
+            name for name in dirnames if name not in _DIR_EXCLUDED_NAMES and not (Path(dirpath) / name).is_symlink()
+        )
+        for name in sorted(filenames):
+            if name in _DIR_EXCLUDED_NAMES:
+                continue
+            path = Path(dirpath) / name
+            if path.is_symlink() or not path.is_file():
+                continue
+            if len(files) >= max_files:
+                raise ValueError(f"Directory workspace snapshot exceeds {max_files} files")
+            data = path.read_bytes()
+            total_bytes += len(data)
+            if total_bytes > max_bytes:
+                raise ValueError(f"Directory workspace snapshot exceeds {max_bytes // (1024 * 1024)} MiB")
+            rel = path.relative_to(base).as_posix()
+            files[rel] = hashlib.sha256(data).hexdigest()
+    return files
+
+
+def directory_digest(files: dict[str, str]) -> str:
+    """Deterministic SHA-256 digest of a directory file-hash map."""
+    payload = json.dumps(files, sort_keys=True, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
+
+
+def is_directory_environment(environment: dict | None) -> bool:
+    return isinstance(environment, dict) and environment.get("workspace_kind") == "directory"
+
+
+def _resource_limits(isolation, worker_timeout=_DEFAULT_WORKER_TIMEOUT):
     return {
-        "wall_time_seconds": {"limit": 60, "enforcement": "enforced"},
+        "wall_time_seconds": {"limit": worker_timeout, "enforcement": "enforced"},
         "ipc_frame_bytes": {"limit": 65536, "enforcement": "enforced"},
         "ipc_messages": {"limit": 256, "enforcement": "enforced"},
         "process_tree": {"limit": "owned_group_or_job", "enforcement": "enforced"},
@@ -175,7 +229,7 @@ def attribute_managed_output(session, item, scope):
     the same recorded identity.
     """
     environment = session.task_control.get("orchestration", {}).get("environments", {}).get(item["work_id"])
-    if not environment or environment.get("state") != "prepared":
+    if not environment or environment.get("state") != "prepared" or is_directory_environment(environment):
         return None
     checkout = Path(environment["worktree"])
     context = ToolContext(str(Path(session.workspace).resolve()), permissions=scope.permissions, execution=scope)
@@ -199,6 +253,24 @@ def validate_prepared_environment(session, item, scope):
     environment = session.task_control["orchestration"]["environments"][item["work_id"]]
     repo = Path(session.workspace).resolve()
     checkout = _literal(repo / ".pepsi-code" / "m2" / item["work_id"] / "checkout")
+    if is_directory_environment(environment):
+        if (
+            environment["state"] != "prepared"
+            or environment["revision"] != item["revision"]
+            or Path(environment["worktree"]) != checkout
+            or not checkout.is_dir()
+        ):
+            raise ValueError("The Worker environment does not match the current assignment")
+        for name in (".venv", "node_modules"):
+            _literal(checkout / name)
+        runtime = _literal(checkout.parent / "runtime")
+        if any(
+            Path(environment["directories"].get(name, "")) != (target := _literal(runtime / name))
+            or not target.is_dir()
+            for name in _ENV_DIRS
+        ):
+            raise ValueError("A Worker runtime directory is missing or changed")
+        return str(checkout), dict(environment["directories"])
     if (
         environment["state"] != "prepared"
         or environment["revision"] != item["revision"]
@@ -269,7 +341,7 @@ def _repair_baseline(session):
     return latest
 
 
-def prepare_owned(session, work_id, *, scope, isolation, base_sha=None):
+def prepare_owned(session, work_id, *, scope, isolation, base_sha=None, worker_timeout=_DEFAULT_WORKER_TIMEOUT):
     """Prepare a queued WorkItem while the caller owns the workspace and session."""
     if isolation == "hardened":
         BubblewrapBackend()
@@ -287,6 +359,11 @@ def prepare_owned(session, work_id, *, scope, isolation, base_sha=None):
         journal_path = scope.journal.path.resolve()
         if journal_path.parent != execution_journal_dir(scope.cwd) or journal_path.suffix != ".jsonl":
             raise ValueError("The preparation journal must belong to this workspace")
+        saved = session.task_control["orchestration"].get("environments", {}).get(work_id)
+        if is_directory_environment(saved) or (
+            isolation == "workspace" and base_sha is None and not has_worktree_baseline(context, str(repo))
+        ):
+            return _prepare_directory(session, item, context, repo, isolation=isolation, worker_timeout=worker_timeout)
         top = _git(context, repo, "rev-parse", "--show-toplevel").stdout.strip()
         if Path(top).resolve() != repo:
             raise ValueError("Prepare a managed worktree from the repository root")
@@ -297,7 +374,6 @@ def prepare_owned(session, work_id, *, scope, isolation, base_sha=None):
             raise ValueError("Managed preparation requires Git metadata inside the repository workspace")
         with own_workspace(common):
             if base_sha is None:
-                saved = session.task_control["orchestration"].get("environments", {}).get(work_id)
                 if saved:
                     base_sha = saved["base_sha"]
                     base_integration = saved.get("base_integration")
@@ -311,10 +387,194 @@ def prepare_owned(session, work_id, *, scope, isolation, base_sha=None):
                         base_integration = None
             else:
                 base_integration = None
-            return _prepare(session, item, context, repo, common, base_sha, isolation, base_integration)
+            return _prepare(
+                session,
+                item,
+                context,
+                repo,
+                common,
+                base_sha,
+                isolation,
+                base_integration,
+                worker_timeout=worker_timeout,
+            )
 
 
-def _prepare(session, item, context, repo, common, base_sha, isolation="workspace", base_integration=None):
+def _prepare_directory(session, item, context, repo, *, isolation="workspace", worker_timeout=_DEFAULT_WORKER_TIMEOUT):
+    """Prepare a directory-isolated Worker workspace when no Git baseline exists."""
+    work_id = item["work_id"]
+    saved = session.task_control["orchestration"].get("environments", {}).get(work_id)
+    root = _literal(repo / ".pepsi-code" / "m2" / work_id)
+    checkout = _literal(root / "checkout")
+    support = _literal(root / "runtime")
+    paths = {name: str(_literal(support / name)) for name in _ENV_DIRS}
+    port_range = _allocate_port_range(session, work_id)
+    cache_lock = str(_literal(repo / ".pepsi-code" / "m2") / "cache.lock")
+    if saved:
+        if saved["state"] == "prepare_failed" and not saved.get("effect_unknown") and not checkout.exists():
+            if root.exists():
+                shutil.rmtree(root, ignore_errors=True)
+            saved = None
+    if saved:
+        if saved["state"] != "prepared":
+            raise ValueError("Previous environment preparation requires review")
+        if (
+            not is_directory_environment(saved)
+            or Path(saved["worktree"]) != checkout
+            or not checkout.is_dir()
+            or saved.get("isolation_requested") != isolation
+        ):
+            raise ValueError("Saved managed environment does not match the requested identity")
+        for name in (".venv", "node_modules"):
+            _literal(checkout / name)
+        if not all(Path(path).is_dir() for path in paths.values()):
+            raise ValueError("A managed runtime directory is missing")
+        if saved["revision"] != item["revision"]:
+            saved = {**saved, "revision": item["revision"]}
+            _save_environment(session, work_id, saved)
+        return saved
+
+    if root.exists():
+        raise ValueError("An unowned managed environment path already exists")
+    baseline_files = snapshot_directory_files(repo)
+    base_digest = directory_digest(baseline_files)
+    manifest = {
+        "workspace_kind": "directory",
+        "repository": "",
+        "base_sha": base_digest,
+        "expected_head": base_digest,
+        "baseline_files": baseline_files,
+        "branch": "",
+        "worktree": str(checkout),
+        "directories": paths,
+        "port_range": port_range,
+        "lockfile_digests": {name: baseline_files[name] for name in _LOCKFILES if name in baseline_files},
+        "cache_policy": {
+            "mode": "isolated_per_worker",
+            "shared_cache_lock": cache_lock,
+            "writable_symlinks_allowed": False,
+        },
+        "environment_contract": {
+            "runtime_version": f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}",
+            "env_keys": [
+                "PATH",
+                "TMP",
+                "TEMP",
+                "TMPDIR",
+                "PIP_CACHE_DIR",
+                "npm_config_cache",
+                "PYTHONPYCACHEPREFIX",
+                "PEPSI_WORKER_PORT_START",
+                "PEPSI_WORKER_PORT_END",
+                "PEPSI_TEST_DATA_DIR",
+            ],
+            "test_data_source": str(paths["test-data"]),
+            "network_policy": "workspace_policy",
+        },
+        "resource_limits": _resource_limits(isolation, worker_timeout=worker_timeout),
+        "revision": item["revision"],
+        "isolation_requested": isolation,
+        "isolation_effective": isolation,
+        "base_integration": None,
+    }
+    manifest.update(state="prepare_pending", steps=[], isolation_effective=None)
+    _save_environment(session, work_id, manifest)
+    manifest["state"] = "preparing"
+    _save_environment(session, work_id, manifest)
+    scope = context.execution
+    call_id = f"m2-prepare:{work_id}"
+    scope.record("orchestration/environment_preparing", work_id=work_id, workspace_kind="directory")
+    checkpoint_execution(scope.snapshot())
+    scope.record("tool/started", call_id=call_id, tool="m2_prepare_environment", mutating=True)
+    checkout_started = False
+    context.effect_state = "none"
+    try:
+        FILES.mkdir(root)
+        FILES.mkdir(checkout)
+        checkout_started = True
+        for rel in sorted(baseline_files):
+            source = repo / Path(rel)
+            destination = checkout / Path(rel)
+            FILES.mkdir(destination.parent)
+            FILES.write(context, destination, source.read_bytes())
+        manifest["steps"] = ["checkout"]
+        _save_environment(session, work_id, manifest)
+        for path in paths.values():
+            FILES.mkdir(path)
+        steps = ["checkout", "directories"]
+        install_cmd = (item.get("specification") or {}).get("install_command")
+        if install_cmd is not None:
+            if (
+                not isinstance(install_cmd, list)
+                or not install_cmd
+                or not all(isinstance(part, str) and part for part in install_cmd)
+            ):
+                raise ValueError("Worker install_command must be a non-empty list of strings")
+            install_env = {
+                name: os.environ[name]
+                for name in ("PATH", "SystemRoot", "WINDIR", "SystemDrive", "PATHEXT", "COMSPEC", "USERPROFILE", "HOME")
+                if name in os.environ
+            }
+            install_env.update(
+                TMP=paths["tmp"],
+                TEMP=paths["tmp"],
+                TMPDIR=paths["tmp"],
+                PIP_CACHE_DIR=str(Path(paths["dependencies"]) / "pip-cache"),
+                npm_config_cache=str(Path(paths["dependencies"]) / "npm-cache"),
+                PYTHONPYCACHEPREFIX=str(Path(paths["build"]) / "python-cache"),
+                PEPSI_WORKER_PORT_START=str(port_range["start"]),
+                PEPSI_WORKER_PORT_END=str(port_range["end"]),
+                PEPSI_TEST_DATA_DIR=str(paths["test-data"]),
+            )
+            with own_dependency_cache(repo):
+                process.run(
+                    install_cmd,
+                    context=context,
+                    cwd=checkout,
+                    env=install_env,
+                    check=True,
+                    capture_output=True,
+                    timeout=60,
+                    reason="Install dependencies inside the managed Worker environment",
+                )
+            steps.append("dependencies")
+        manifest.update(state="prepared", steps=steps, isolation_effective=isolation)
+        _save_environment(session, work_id, manifest)
+    except Exception as error:
+        unknown = checkout_started or context.effect_state in {"started", "completed", "unknown"}
+        if unknown:
+            scope.mark_unknown(call_id, tool="m2_prepare_environment", work_id=work_id)
+        scope.record(
+            "tool/settled",
+            call_id=call_id,
+            state="unknown" if unknown else "failed",
+            effect_state="unknown" if unknown else "none",
+        )
+        if not unknown and not checkout.exists() and root.exists():
+            shutil.rmtree(root, ignore_errors=True)
+        manifest.update(
+            state="prepare_failed",
+            isolation_effective=None,
+            effect_unknown=bool(unknown),
+            error=str(error)[:1000],
+        )
+        _save_environment(session, work_id, manifest)
+        raise
+    scope.record("tool/settled", call_id=call_id, state="succeeded", effect_state="committed")
+    return manifest
+
+
+def _prepare(
+    session,
+    item,
+    context,
+    repo,
+    common,
+    base_sha,
+    isolation="workspace",
+    base_integration=None,
+    worker_timeout=_DEFAULT_WORKER_TIMEOUT,
+):
     work_id = item["work_id"]
     saved = session.task_control["orchestration"].get("environments", {}).get(work_id)
     root = _literal(repo / ".pepsi-code" / "m2" / work_id)
@@ -324,6 +584,7 @@ def _prepare(session, item, context, repo, common, base_sha, isolation="workspac
     port_range = _allocate_port_range(session, work_id)
     cache_lock = str(_literal(repo / ".pepsi-code" / "m2") / "cache.lock")
     manifest = {
+        "workspace_kind": "git_worktree",
         "repository": str(common),
         "base_sha": base_sha,
         "expected_head": base_sha,
@@ -354,7 +615,7 @@ def _prepare(session, item, context, repo, common, base_sha, isolation="workspac
             "test_data_source": str(paths["test-data"]),
             "network_policy": "loopback_only" if isolation == "hardened" else "workspace_policy",
         },
-        "resource_limits": _resource_limits(isolation),
+        "resource_limits": _resource_limits(isolation, worker_timeout=worker_timeout),
         "revision": item["revision"],
         "isolation_requested": isolation,
         "isolation_effective": isolation,
@@ -368,7 +629,11 @@ def _prepare(session, item, context, repo, common, base_sha, isolation="workspac
     if saved:
         if saved["state"] != "prepared":
             raise ValueError("Previous environment preparation requires review")
-        if any(saved.get(key) != value for key, value in manifest.items() if key != "revision"):
+        if any(
+            saved.get(key) != value
+            for key, value in manifest.items()
+            if key not in {"revision", "workspace_kind", "resource_limits"}
+        ):
             raise ValueError("Saved managed environment does not match the requested identity")
         _verify_checkout(context, saved)
         if not all(Path(path).is_dir() for path in paths.values()):
@@ -499,7 +764,11 @@ def prune_environment(session, scope, work_id, *, retention_seconds=0, now=None,
     repo = Path(session.workspace).resolve()
     root = _literal(repo / ".pepsi-code" / "m2" / work_id)
     checkout = _literal(root / "checkout")
-    if (
+    directory_env = is_directory_environment(environment)
+    if directory_env:
+        if Path(environment["worktree"]) != checkout:
+            raise ValueError("Managed environment does not belong to this workspace")
+    elif (
         Path(environment["worktree"]) != checkout
         or environment.get("branch") != f"codex/m2-{work_id}"
         or not Path(environment["repository"]).resolve().is_relative_to(repo)
@@ -520,10 +789,15 @@ def prune_environment(session, scope, work_id, *, retention_seconds=0, now=None,
         if settled_at is None or (current_time - settled_at) < retention_seconds:
             raise ValueError("Worker environment is still within its retention period")
     context = ToolContext(str(repo), permissions=scope.permissions, execution=scope)
-    _verify_checkout(context, environment)
-    if _git(context, checkout, "status", "--porcelain", "--untracked-files=all").stdout.strip():
-        raise ValueError("Worker worktree has uncommitted or untracked changes")
-    head = _git(context, checkout, "rev-parse", "--verify", "HEAD").stdout.strip()
+    if directory_env:
+        if not checkout.is_dir():
+            raise ValueError("Worker checkout directory is missing")
+        head = directory_digest(snapshot_directory_files(checkout))
+    else:
+        _verify_checkout(context, environment)
+        if _git(context, checkout, "status", "--porcelain", "--untracked-files=all").stdout.strip():
+            raise ValueError("Worker worktree has uncommitted or untracked changes")
+        head = _git(context, checkout, "rev-parse", "--verify", "HEAD").stdout.strip()
     if head != environment["base_sha"]:
         delivered_ids = {
             record.get("integration_id")
@@ -539,10 +813,10 @@ def prune_environment(session, scope, work_id, *, retention_seconds=0, now=None,
         )
         if not delivered:
             raise ValueError("Worker environment contains undelivered committed output")
-    common = Path(environment["repository"]).resolve()
+    common_lock = nullcontext() if directory_env else own_workspace(Path(environment["repository"]).resolve())
     with (
         nullcontext() if owns_workspace else own_workspace(repo),
-        own_workspace(common),
+        common_lock,
         recording_session(session),
         bind_scope(scope),
         bind_tool_context(context),
@@ -552,7 +826,8 @@ def prune_environment(session, scope, work_id, *, retention_seconds=0, now=None,
         checkpoint_execution(scope.snapshot())
         context.effect_state = "none"
         try:
-            _git(context, repo, "worktree", "remove", str(checkout))
+            if not directory_env:
+                _git(context, repo, "worktree", "remove", str(checkout))
             shutil.rmtree(root, ignore_errors=True)
         except Exception:
             unknown = context.effect_state in {"started", "completed", "unknown"}

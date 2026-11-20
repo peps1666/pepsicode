@@ -30,7 +30,7 @@ from pepsicode.tools.write_file import write_file_tool
 
 
 def denying(root):
-    return PermissionManager(str(root), mode="auto", prompt=lambda _request: {"decision": "deny_once"})
+    return PermissionManager(str(root), mode="ask", prompt=lambda _request: {"decision": "deny_once"})
 
 
 def test_managed_worker_cannot_start_persistent_process(tmp_path, monkeypatch):

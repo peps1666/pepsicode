@@ -27,7 +27,9 @@ from pepsicode.core.session_tree import checkpoint_execution, recording_session
 from pepsicode.core.task_control import edit_control
 from pepsicode.core.verification_discovery import discover_checks
 from pepsicode.execution import process
+from pepsicode.execution.filesystem import FILES
 from pepsicode.orchestration.candidate import record_candidate, validate_candidate
+from pepsicode.orchestration.environment import directory_digest, snapshot_directory_files
 from pepsicode.orchestration.git_ops import run_git
 from pepsicode.orchestration.runtime import own_workspace
 from pepsicode.tooling import ToolContext
@@ -115,6 +117,21 @@ def integrate_candidates(session, scope, work_ids, *, workspace_owned=False):
 
     repo = Path(session.workspace).resolve()
     integration_id = uuid.uuid4().hex[:12]
+    kinds = {record.get("workspace_kind", "git_worktree") for record in records}
+    if len(kinds) != 1:
+        raise ValueError("Cannot mix Git worktree and directory workspace candidates in one integration")
+    if kinds == {"directory"}:
+        return _integrate_directory_candidates(
+            session,
+            scope,
+            task,
+            records,
+            work_ids,
+            base_sha=base_sha,
+            repo=repo,
+            integration_id=integration_id,
+            workspace_owned=workspace_owned,
+        )
     branch = f"codex/integrate-{integration_id}"
     root = repo / ".pepsi-code" / _INTEGRATION_ROOT / integration_id
     checkout = root / "checkout"
@@ -206,6 +223,111 @@ def integrate_candidates(session, scope, work_ids, *, workspace_owned=False):
     return manifest
 
 
+def _integrate_directory_candidates(
+    session, scope, task, records, work_ids, *, base_sha, repo, integration_id, workspace_owned=False
+):
+    root = repo / ".pepsi-code" / _INTEGRATION_ROOT / integration_id
+    checkout = root / "checkout"
+    baseline_files = dict(records[0].get("baseline_files") or {})
+    manifest = {
+        "workspace_kind": "directory",
+        "integration_id": integration_id,
+        "task_id": task["id"],
+        "revision": task["revision"],
+        "base_sha": base_sha,
+        "baseline_files": baseline_files,
+        "branch": "",
+        "worktree": str(checkout),
+        "candidates": list(work_ids),
+        "candidate_heads": {record["work_id"]: record["head_sha"] for record in records},
+        "conflicts": [],
+        "changes": {"written": [], "deleted": []},
+        "acceptance": None,
+        "state": "preparing",
+        "created_at": time.time(),
+    }
+    _save_integration(session, manifest)
+    context = ToolContext(str(repo), permissions=scope.permissions, execution=scope)
+    with nullcontext() if workspace_owned else own_workspace(repo), recording_session(session):
+        try:
+
+            def create_checkout():
+                FILES.mkdir(checkout)
+                for rel in sorted(baseline_files):
+                    src = repo / Path(rel)
+                    if src.is_file():
+                        dst = checkout / Path(rel)
+                        FILES.mkdir(dst.parent)
+                        FILES.write(context, dst, src.read_bytes())
+
+            _journalled(
+                scope,
+                context,
+                f"m4-integrate:{integration_id}:create",
+                "m4_create_integration",
+                create_checkout,
+            )
+            manifest["state"] = "integrating"
+            _save_integration(session, manifest)
+            applied_state: dict[str, tuple[str, str | None]] = {}
+            written_paths: set[str] = set()
+            deleted_paths: set[str] = set()
+            for record in records:
+                work_id = record["work_id"]
+                changes = record.get("changes") or {}
+                candidate_root = Path(record["worktree"])
+                conflicts = []
+                for rel, sha in {**(changes.get("added") or {}), **(changes.get("modified") or {})}.items():
+                    if rel in applied_state and applied_state[rel] != ("write", sha):
+                        conflicts.append(rel)
+                for rel in changes.get("deleted") or []:
+                    if rel in applied_state and applied_state[rel] != ("delete", None):
+                        conflicts.append(rel)
+                if conflicts:
+                    manifest["conflicts"].append({"work_id": work_id, "files": sorted(set(conflicts))[:32]})
+                    manifest["state"] = "conflict"
+                    _save_integration(session, manifest)
+                    return manifest
+
+                def apply_candidate(candidate_root=candidate_root, changes=changes):
+                    for rel in sorted({*(changes.get("added") or {}), *(changes.get("modified") or {})}):
+                        src = candidate_root / Path(rel)
+                        dst = checkout / Path(rel)
+                        FILES.mkdir(dst.parent)
+                        FILES.write(context, dst, src.read_bytes())
+                    for rel in sorted(changes.get("deleted") or []):
+                        target = checkout / Path(rel)
+                        if target.exists():
+                            target.unlink()
+
+                _journalled(
+                    scope,
+                    context,
+                    f"m4-integrate:{integration_id}:apply:{work_id}",
+                    "m4_apply_directory_candidate",
+                    apply_candidate,
+                )
+                for rel, sha in {**(changes.get("added") or {}), **(changes.get("modified") or {})}.items():
+                    applied_state[rel] = ("write", sha)
+                    written_paths.add(rel)
+                    deleted_paths.discard(rel)
+                for rel in changes.get("deleted") or []:
+                    applied_state[rel] = ("delete", None)
+                    deleted_paths.add(rel)
+                    written_paths.discard(rel)
+
+            manifest["changes"] = {"written": sorted(written_paths), "deleted": sorted(deleted_paths)}
+            manifest["head_sha"] = directory_digest(snapshot_directory_files(checkout))
+            manifest["state"] = "integrated"
+            _save_integration(session, manifest)
+        except Exception as error:
+            manifest["state"] = "integration_failed"
+            manifest["error"] = str(error)[:1000]
+            _save_integration(session, manifest)
+            raise
+    return manifest
+
+
 def validate_integration(session, scope, integration_id):
     """Revalidate the integration checkout and every candidate head (B17)."""
     state = session.task_control.get("orchestration") or {}
@@ -222,6 +344,10 @@ def validate_integration(session, scope, integration_id):
         stale_reason = "parent task or revision changed"
     elif not checkout.is_dir():
         stale_reason = "integration worktree is missing"
+    elif record.get("workspace_kind") == "directory":
+        head = directory_digest(snapshot_directory_files(checkout))
+        if head != record.get("head_sha", ""):
+            stale_reason = "integration directory contents changed"
     else:
         branch, head = _head(context, checkout)
         if (branch, head) != (record["branch"], record.get("head_sha", "")):
@@ -257,8 +383,9 @@ def run_integration_acceptance(session, scope, integration_id, *, runtime=None):
     repo = Path(session.workspace).resolve()
     checkout = Path(record["worktree"])
     context = ToolContext(str(repo), permissions=scope.permissions, execution=scope)
-    head_before = _head(context, checkout)[1]
-    clean_before = _clean(context, checkout)
+    is_directory = record.get("workspace_kind") == "directory"
+    head_before = directory_digest(snapshot_directory_files(checkout)) if is_directory else _head(context, checkout)[1]
+    clean_before = True if is_directory else _clean(context, checkout)
     results = []
     for index, check in enumerate(discover_checks(str(checkout), commands) if clean_before else []):
         argv = check.argv
@@ -298,8 +425,8 @@ def run_integration_acceptance(session, scope, integration_id, *, runtime=None):
                 "duration_seconds": round(time.monotonic() - started, 3),
             }
         )
-    head_after = _head(context, checkout)[1]
-    clean_after = _clean(context, checkout)
+    head_after = directory_digest(snapshot_directory_files(checkout)) if is_directory else _head(context, checkout)[1]
+    clean_after = True if is_directory else _clean(context, checkout)
     task = session.task_control.get("task") or {}
     valid = (
         bool(results)
@@ -338,18 +465,26 @@ def prune_integration(session, scope, integration_id):
         raise ValueError("Only accepted, conflicted or stale integrations can be pruned")
     repo = Path(session.workspace).resolve()
     context = ToolContext(str(repo), permissions=scope.permissions, execution=scope)
-    common = Path(
-        run_git(context, repo, "rev-parse", "--path-format=absolute", "--git-common-dir").stdout.strip()
-    ).resolve()
-    with own_workspace(repo), own_workspace(common):
-        checkout = Path(record["worktree"])
-        _journalled(
-            scope,
-            context,
-            f"m4-prune:{integration_id}",
-            "m4_prune_integration",
-            lambda: run_git(context, repo, "worktree", "remove", str(checkout)),
+    is_directory = record.get("workspace_kind") == "directory"
+    common_lock = (
+        nullcontext()
+        if is_directory
+        else own_workspace(
+            Path(
+                run_git(context, repo, "rev-parse", "--path-format=absolute", "--git-common-dir").stdout.strip()
+            ).resolve()
         )
+    )
+    with own_workspace(repo), common_lock:
+        checkout = Path(record["worktree"])
+        if not is_directory:
+            _journalled(
+                scope,
+                context,
+                f"m4-prune:{integration_id}",
+                "m4_prune_integration",
+                lambda: run_git(context, repo, "worktree", "remove", str(checkout)),
+            )
         root = repo / ".pepsi-code" / _INTEGRATION_ROOT / integration_id
         if root.exists():
             shutil.rmtree(root, ignore_errors=True)

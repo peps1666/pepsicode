@@ -19,6 +19,11 @@ def deliver_agent_notices(messages):
             for message in [*(entry["message"] for entry in branch), *messages]
             if message.get("source", {}).get("kind") == "agent-notice"
         }
+        delivered_results = {
+            message["source"].get("trace_id")
+            for message in messages
+            if message.get("source", {}).get("kind") == "orchestration-event"
+        }
         task = session.task_control.get("task") or {}
         questions = {q["id"]: q for q in session.task_control.get("questions", [])}
         notices = []
@@ -51,6 +56,8 @@ def deliver_agent_notices(messages):
                         f"Question [{question['id']}] ({question['status']}): {question['question']}",
                     )
             report = next((item for item in reversed(node.reports) if item.status != "progress"), None)
+            if node.trace_id in delivered_results:
+                continue
             if node.ended_at and node.status != "awaiting_user":
                 report_text = f"Worker {report.status}: {report.summary}" if report else ""
                 enqueue(

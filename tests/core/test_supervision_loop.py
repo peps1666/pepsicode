@@ -32,15 +32,16 @@ import pytest
 
 from pepsicode import config
 from pepsicode.core import session as sessions
-from pepsicode.core.agent_loop import run_agent_turn
+from pepsicode.core.agent_loop import run_agent_turn, run_agent_turn_stream
 from pepsicode.core.session_tree import recording_session
 from pepsicode.core.verification import run_verified_turn
 from pepsicode.execution.runtime import current_scope
 from pepsicode.permissions import PermissionManager
 from pepsicode.tooling import ToolRegistry
 from pepsicode.tools.run_command import run_command_tool
+from pepsicode.tools.task_state import task_state_tool
 from pepsicode.tools.write_file import write_file_tool
-from pepsicode.types import AgentStep
+from pepsicode.types import AgentStep, StreamToken
 
 COMBINED_CHECK = """
 from pathlib import Path
@@ -187,7 +188,12 @@ def run_single_worker_scenario(project, monkeypatch):
                     (
                         "dispatch",
                         "task_dispatch",
-                        {"work_key": "normalize", "goal": "Fix feature.txt and run check.py", "agent_type": "general"},
+                        {
+                            "work_key": "normalize",
+                            "goal": "Fix feature.txt and run check.py",
+                            "agent_type": "general",
+                            "deliverable": "project",
+                        },
                     )
                 )
             assert not results["dispatch"]["isError"], results["dispatch"]
@@ -199,6 +205,23 @@ def run_single_worker_scenario(project, monkeypatch):
                 assert not results["retry"]["isError"], results["retry"]
                 if not any(": result_ready." in event for event in events):
                     return AgentStep(type="assistant", content="Yield to scheduler.")
+                if "define" not in results:
+                    return calls(
+                        (
+                            "define",
+                            "task_state",
+                            {
+                                "action": "define",
+                                "task_id": session.task_control["task"]["id"],
+                                "revision": receipt["revision"],
+                                "criteria": [
+                                    {"id": "artifact", "kind": "file_contains", "path": "feature.txt", "text": "fixed"}
+                                ],
+                            },
+                        )
+                    )
+                assert not results["define"]["isError"], results["define"]
+                assert json.loads(results["define"]["content"])["revision"] == receipt["revision"]
                 return calls(("integrate", "task_integrate", {"work_ids": [receipt["work_id"]]}))
             if "integrate" in results and "deliver" not in results:
                 assert not results["integrate"]["isError"], results["integrate"]
@@ -226,12 +249,11 @@ def run_single_worker_scenario(project, monkeypatch):
                 },
                 runner=run_agent_turn,
                 model=Model(),
-                tools=ToolRegistry([run_command_tool, write_file_tool]),
+                tools=ToolRegistry([run_command_tool, write_file_tool, task_state_tool]),
                 messages=[{"role": "user", "content": "Implement feature.txt with normalization and pass check.py."}],
                 cwd=session.workspace,
                 permissions=permissions,
                 task_kind="change",
-                acceptance=[{"id": "artifact", "kind": "file_contains", "path": "feature.txt", "text": "fixed"}],
             )
     except Exception as exc:  # noqa: BLE001
         error = f"{type(exc).__name__}: {exc}"
@@ -243,6 +265,378 @@ def run_single_worker_scenario(project, monkeypatch):
     seen["messages"] = saved.messages
     seen["workspace"] = session.workspace
     return seen
+
+
+def test_empty_folder_builds_a_runnable_product_in_place(tmp_path, monkeypatch):
+    project = tmp_path / "new-project"
+    project.mkdir()
+    monkeypatch.setattr(config, "PEPSI_CODE_DIR", tmp_path / "state")
+    monkeypatch.setattr(sessions, "PEPSI_CODE_DIR", config.PEPSI_CODE_DIR)
+    monkeypatch.setattr(sessions, "SESSIONS_DIR", config.PEPSI_CODE_DIR / "sessions")
+    session = sessions.create_new_session(str(project))
+    permissions = PermissionManager(str(project), mode="full_access")
+    registry = ToolRegistry([task_state_tool, write_file_tool, run_command_tool])
+
+    class Model:
+        def next(self, messages):
+            results = result_map(messages)
+            assert not current_scope().parent_task_id
+            if "write" not in results:
+                return calls(("write", "write_file", {"path": "converter.py", "content": "print(100 * 9 / 5 + 32)\n"}))
+            assert not results["write"]["isError"]
+            if "define" not in results:
+                task = session.task_control["task"]
+                return calls(
+                    (
+                        "define",
+                        "task_state",
+                        {
+                            "action": "define",
+                            "task_id": task["id"],
+                            "revision": task["revision"],
+                            "criteria": [
+                                {"id": "run", "kind": "command", "argv": [sys.executable, "-B", "converter.py"]}
+                            ],
+                        },
+                    )
+                )
+            return AgentStep(type="assistant", content="Run python converter.py.")
+
+    try:
+        with recording_session(session):
+            output = run_verified_turn(
+                runtime={"orchestration": {"enabled": True, "workerIsolation": "workspace"}},
+                runner=run_agent_turn,
+                model=Model(),
+                tools=registry,
+                messages=[{"role": "user", "content": "Make a runnable temperature converter in converter.py"}],
+                cwd=str(project),
+                permissions=permissions,
+            )
+    finally:
+        permissions.close()
+    assert not (project / ".git").exists()
+    assert not session.task_control["orchestration"]["work"]
+    # The parent registry records the editor operation and the verifier's command.
+    assert registry.mutation_count == 2
+    assert session.task_control["task"]["status"] == "complete", output[-1]
+    assert subprocess.check_output([sys.executable, "-B", "converter.py"], cwd=project, text=True).strip() == "212.0"
+
+
+def test_hardened_report_dispatch_from_subdirectory_stops_without_local_substitution(feature_project):
+    parent, _ = feature_project
+    folder = Path(parent.workspace) / "1"
+    folder.mkdir()
+    session = sessions.create_new_session(str(folder))
+    permissions = PermissionManager(str(folder), mode="full_access")
+
+    class Model:
+        def next_stream(self, messages):
+            assert not result_map(messages), "A blocked report-only dispatch must return control to the user"
+            for key in ("temperature", "duration"):
+                yield StreamToken(
+                    type="tool_use",
+                    tool_id=key,
+                    tool_name="task_dispatch",
+                    tool_input_partial=json.dumps(
+                        {
+                            "work_key": key,
+                            "goal": key,
+                            "agent_type": "general",
+                            "deliverable": "worker_reports",
+                        }
+                    ),
+                )
+            yield StreamToken(type="done", stop_reason="tool_use")
+
+    try:
+        with recording_session(session):
+            output = run_verified_turn(
+                runtime={"orchestration": {"enabled": True, "workerIsolation": "hardened"}},
+                runner=run_agent_turn_stream,
+                model=Model(),
+                tools=ToolRegistry([write_file_tool, run_command_tool]),
+                messages=[{"role": "user", "content": "派两个 Worker 并行试做，成果留在各自工作区。"}],
+                cwd=str(folder),
+                permissions=permissions,
+            )
+    finally:
+        permissions.close()
+    assert output[-1]["awaitingUser"]
+    assert f"Git 仓库根目录 {parent.workspace} 启动" in output[-1]["content"]
+    assert "首次提交" not in output[-1]["content"]
+    assert all(result_map(output)[key]["isError"] for key in ("temperature", "duration"))
+    assert session.task_control["task"]["status"] == "waiting_user"
+    assert not session.task_control["orchestration"]["work"]
+    assert not (folder / "temperature").exists() and not (folder / "duration").exists()
+
+
+def test_empty_non_git_folder_runs_parallel_directory_workers_under_auto_mode(tmp_path, monkeypatch):
+    monkeypatch.setattr(sessions, "PEPSI_CODE_DIR", tmp_path / "home")
+    monkeypatch.setattr(sessions, "SESSIONS_DIR", tmp_path / "home" / "sessions")
+    monkeypatch.setattr("pepsicode.config.PEPSI_CODE_DIR", tmp_path / "home")
+    monkeypatch.setattr("pepsicode.approval.store.PEPSI_CODE_PERMISSIONS_PATH", tmp_path / "permissions.json")
+    empty = tmp_path / "empty_folder"
+    empty.mkdir()
+    session = sessions.create_new_session(str(empty))
+    prompts = []
+    permissions = PermissionManager(
+        str(empty), mode="auto", prompt=lambda req: prompts.append(req) or {"decision": "deny_once"}
+    )
+
+    class Model:
+        tools = ToolRegistry([])
+
+        def next(self, messages):
+            results = result_map(messages)
+            scope = current_scope()
+            if scope.parent_task_id:
+                assert "isolated workspace directory" in messages[0]["content"]
+                assert "Do not run git commit" in messages[0]["content"]
+                goal = messages[1]["content"]
+                filename = "temp.py" if "celsius" in goal else "fmt.py"
+                code = (
+                    "def c_to_f(c):\n    return c * 9 / 5 + 32\nassert c_to_f(100) == 212\n"
+                    if filename == "temp.py"
+                    else "def fmt(s):\n    return f'{s // 3600:02d}:{(s % 3600) // 60:02d}:{s % 60:02d}'\nassert fmt(3661) == '01:01:01'\n"
+                )
+                if "write" not in results:
+                    return calls(("write", "write_file", {"path": filename, "content": code}))
+                if "test" not in results:
+                    return calls(command("test", sys.executable, "-B", filename))
+                assert not results["test"]["isError"], results["test"]["content"]
+                return AgentStep(type="assistant", content=f"{filename} passed in isolated checkout")
+
+            events = [m["content"] for m in messages if m.get("source", {}).get("kind") == "orchestration-event"]
+            if not events and not results:
+                return calls(
+                    (
+                        "w1",
+                        "task_dispatch",
+                        {
+                            "work_key": "celsius",
+                            "goal": "Implement celsius converter",
+                            "agent_type": "general",
+                            "deliverable": "worker_reports",
+                        },
+                    ),
+                    (
+                        "w2",
+                        "task_dispatch",
+                        {
+                            "work_key": "seconds",
+                            "goal": "Implement seconds formatter",
+                            "agent_type": "general",
+                            "deliverable": "worker_reports",
+                        },
+                    ),
+                )
+            if not events:
+                return AgentStep(type="assistant", content="Two directory-isolated Workers dispatched.")
+            return AgentStep(type="assistant", content="Both Workers finished in their own workspaces.")
+
+    monkeypatch.setattr("pepsicode.orchestration.interactive.MockModelAdapter", Model)
+    try:
+        with recording_session(session):
+            output = run_verified_turn(
+                runtime={"orchestration": {"enabled": True, "workerIsolation": "workspace", "maxConcurrentWorkers": 2}},
+                runner=run_agent_turn,
+                model=Model(),
+                tools=ToolRegistry([write_file_tool, run_command_tool]),
+                messages=[{"role": "user", "content": "派两个 Worker 并行试做，样例留在各自工作区并汇报结果。"}],
+                cwd=str(empty),
+                permissions=permissions,
+            )
+    finally:
+        permissions.close()
+
+    assert not prompts, f"Codex-style auto mode should not prompt for normal workspace work: {prompts}"
+    task = session.task_control["task"]
+    assert task["status"] == "complete" and task["assurance"] == "worker_reports"
+    envs = session.task_control["orchestration"]["environments"]
+    assert len(envs) == 2
+    assert all(env["workspace_kind"] == "directory" for env in envs.values())
+    checkouts = [Path(env["worktree"]) for env in envs.values()]
+    assert any((c / "temp.py").is_file() for c in checkouts)
+    assert any((c / "fmt.py").is_file() for c in checkouts)
+    assert not (empty / "temp.py").exists() and not (empty / "fmt.py").exists()
+    assert output[-1]["verification"]["reason_code"] == "worker_reports_collected"
+
+
+def test_non_git_directory_workers_integrate_deliver_and_detect_conflicts(tmp_path, monkeypatch):
+    from threading import Event
+
+    from pepsicode.core.task_control import begin_task
+    from pepsicode.execution.runtime import (
+        ExecutionJournal,
+        ExecutionScope,
+        RequestBudget,
+        bind_scope,
+        execution_journal_dir,
+    )
+    from pepsicode.llm.cost_tracker import CostTracker
+    from pepsicode.orchestration.environment import prepare_owned
+    from pepsicode.orchestration.external_delivery import deliver_integration
+    from pepsicode.orchestration.integration import integrate_candidates, run_integration_acceptance
+    from pepsicode.orchestration.store import admit_work, claim_launch, settle_launch
+
+    monkeypatch.setattr(sessions, "PEPSI_CODE_DIR", tmp_path / "home")
+    monkeypatch.setattr(sessions, "SESSIONS_DIR", tmp_path / "home" / "sessions")
+    monkeypatch.setattr("pepsicode.config.PEPSI_CODE_DIR", tmp_path / "home")
+    monkeypatch.setattr("pepsicode.approval.store.PEPSI_CODE_PERMISSIONS_PATH", tmp_path / "permissions.json")
+    folder = tmp_path / "plain_project"
+    folder.mkdir()
+    (folder / "base.txt").write_text("base\n", encoding="utf-8")
+    session = sessions.create_new_session(str(folder))
+    permissions = PermissionManager(str(folder), mode="auto")
+    journal = ExecutionJournal(execution_journal_dir(str(folder)) / "dir_integ.jsonl")
+    scope = ExecutionScope(
+        str(folder),
+        permissions=permissions,
+        cancellation_event=Event(),
+        budget=RequestBudget(CostTracker()),
+        journal=journal,
+    )
+    with recording_session(session), bind_scope(scope):
+        task = begin_task([{"role": "user", "content": "Build two modules"}], {})
+        w1 = admit_work(
+            session,
+            task_id=task["id"],
+            revision=1,
+            work_key="mod-a",
+            specification={"goal": "a", "agent_type": "general", "deliverable": "project"},
+        )
+        w2 = admit_work(
+            session,
+            task_id=task["id"],
+            revision=1,
+            work_key="mod-b",
+            specification={"goal": "b", "agent_type": "general", "deliverable": "project"},
+        )
+        env1 = prepare_owned(session, w1["work_id"], scope=scope, isolation="workspace")
+        env2 = prepare_owned(session, w2["work_id"], scope=scope, isolation="workspace")
+        assert env1["workspace_kind"] == "directory" and env2["workspace_kind"] == "directory"
+        assert (Path(env1["worktree"]) / "base.txt").read_text(encoding="utf-8") == "base\n"
+        assert claim_launch(session, generation="host") and claim_launch(session, generation="host")
+        (Path(env1["worktree"]) / "a.py").write_text("A = 1\n", encoding="utf-8")
+        (Path(env2["worktree"]) / "b.py").write_text("B = 2\n", encoding="utf-8")
+        assert settle_launch(
+            session, attempt_id=w1["attempt_id"], generation="host", outcome="result_ready", summary="ok"
+        )
+        assert settle_launch(
+            session, attempt_id=w2["attempt_id"], generation="host", outcome="result_ready", summary="ok"
+        )
+
+        integrated = integrate_candidates(session, scope, [w1["work_id"], w2["work_id"]])
+        assert integrated["state"] == "integrated" and integrated["workspace_kind"] == "directory"
+        runtime = {
+            "verificationCommands": [
+                {"name": "check", "command": [sys.executable, "-c", "import a, b; assert a.A + b.B == 3"]}
+            ]
+        }
+        accepted = run_integration_acceptance(session, scope, integrated["integration_id"], runtime=runtime)
+        assert accepted["state"] == "accepted" and accepted["acceptance"]["valid"] is True
+
+        with pytest.raises(ValueError, match="Git repository"):
+            deliver_integration(session, scope, accepted["integration_id"], push=True, runtime=runtime)
+        delivered = deliver_integration(session, scope, accepted["integration_id"], runtime=runtime)
+        assert delivered["status"] == "local"
+        assert (folder / "a.py").read_text(encoding="utf-8") == "A = 1\n"
+        assert (folder / "b.py").read_text(encoding="utf-8") == "B = 2\n"
+
+        # Conflict check: two directory Workers modifying the same file differently
+        (Path(env1["worktree"]) / "shared.py").write_text("X = 1\n", encoding="utf-8")
+        (Path(env2["worktree"]) / "shared.py").write_text("X = 2\n", encoding="utf-8")
+        conflicted = integrate_candidates(session, scope, [w1["work_id"], w2["work_id"]])
+        assert conflicted["state"] == "conflict"
+        assert conflicted["conflicts"] and "shared.py" in conflicted["conflicts"][0]["files"]
+    permissions.close()
+
+
+def test_reports_only_accepts_worker_results_without_integrating(feature_project, monkeypatch):
+    session, permissions = feature_project
+    quote = "这次成果各自留在工作区，给我看看两边跑出来的结果就行"
+    result_batches = []
+
+    class Model:
+        tools = ToolRegistry([])
+
+        def next(self, messages):
+            results = result_map(messages)
+            scope = current_scope()
+            if scope.parent_task_id:
+                assert "Do not commit" in messages[0]["content"]
+                if "write" not in results:
+                    return calls(("write", "write_file", {"path": "feature.txt", "content": "fixed"}))
+                if "test" not in results:
+                    return calls(command("test", sys.executable, "-B", "check.py"))
+                assert not results["test"]["isError"], results["test"]
+                return AgentStep(type="assistant", content="Created feature.txt; check.py passed.")
+            if "dispatch" not in results:
+                return calls(
+                    (
+                        "dispatch",
+                        "task_dispatch",
+                        {
+                            "work_key": "normalize",
+                            "goal": "Write feature.txt and run check.py",
+                            "agent_type": "general",
+                            "deliverable": "worker_reports",
+                        },
+                    ),
+                    (
+                        "second",
+                        "task_dispatch",
+                        {
+                            "work_key": "other",
+                            "goal": "Try another version",
+                            "agent_type": "general",
+                            "deliverable": "worker_reports",
+                        },
+                    ),
+                )
+            events = orchestration_events(messages)
+            if events:
+                assert self.tools.find("task_integrate") is None
+                assert self.tools.find("task_deliver") is None
+                assert not any(m.get("source", {}).get("kind") == "agent-notice" for m in messages)
+                result_batches.append(len(events))
+            return AgentStep(type="assistant", content="\n".join(events) or "Queued.")
+
+    monkeypatch.setattr("pepsicode.orchestration.interactive.MockModelAdapter", Model)
+    with recording_session(session):
+        output = run_verified_turn(
+            runtime={
+                "orchestration": {"enabled": True, "workerIsolation": "workspace", "maxConcurrentWorkers": 1},
+                "maxIterations": 1,
+            },
+            runner=run_agent_turn,
+            model=Model(),
+            tools=ToolRegistry([run_command_tool, write_file_tool]),
+            messages=[
+                {
+                    "role": "user",
+                    "content": f"让两个人分别实现 feature.txt、运行 check.py。{quote}。",
+                }
+            ],
+            cwd=session.workspace,
+            permissions=permissions,
+            task_kind="change",
+        )
+    saved = sessions.load_session(session.session_id)
+    task = saved.task_control["task"]
+    orchestration = saved.task_control["orchestration"]
+    worktree = Path(task["acceptance"]["workers"][0]["worktree"])
+    assert task["status"] == "complete" and task["assurance"] == "worker_reports"
+    assert result_batches == [2]
+    assert task["orchestration_output"]["kind"] == "worker_reports"
+    assert len(task["acceptance"]["workers"]) == 2
+    assert output[-1]["verification"]["reason_code"] == "worker_reports_collected"
+    assert str(worktree) in output[-1]["content"] and "check.py passed" in output[-1]["content"]
+    assert (worktree / "feature.txt").read_text(encoding="utf-8") == "fixed"
+    assert git(worktree, "rev-parse", "HEAD") == git(session.workspace, "rev-parse", "HEAD")
+    assert not (Path(session.workspace) / "feature.txt").exists()
+    assert not orchestration.get("integrations") and not orchestration.get("deliveries")
 
 
 def test_failed_worker_repairs_retests_and_delivers(feature_project, monkeypatch):
@@ -354,7 +748,9 @@ def run_two_candidate_scenario(project, monkeypatch):
             seen["dispatch"] = {}
             for role in ("alpha", "beta"):
                 result = tools.execute(
-                    "task_dispatch", {"work_key": role, "goal": role, "agent_type": "general"}, ctx()
+                    "task_dispatch",
+                    {"work_key": role, "goal": role, "agent_type": "general", "deliverable": "project"},
+                    ctx(),
                 )
                 assert result.ok, result.output
                 seen["dispatch"][role] = result.details
@@ -378,7 +774,12 @@ def run_two_candidate_scenario(project, monkeypatch):
             seen["retry_refused"] = not retry.ok
             repair = tools.execute(
                 "task_dispatch",
-                {"work_key": "repair", "goal": "repair the combined contract", "agent_type": "general"},
+                {
+                    "work_key": "repair",
+                    "goal": "repair the combined contract",
+                    "agent_type": "general",
+                    "deliverable": "project",
+                },
                 ctx(),
             )
             assert repair.ok, repair.output
@@ -524,7 +925,9 @@ def run_conflict_resolution_scenario(project, monkeypatch):
             seen["dispatch"] = {}
             for role in ("alpha", "beta"):
                 result = tools.execute(
-                    "task_dispatch", {"work_key": role, "goal": role, "agent_type": "general"}, ctx()
+                    "task_dispatch",
+                    {"work_key": role, "goal": role, "agent_type": "general", "deliverable": "project"},
+                    ctx(),
                 )
                 assert result.ok, result.output
                 seen["dispatch"][role] = result.details
@@ -548,6 +951,7 @@ def run_conflict_resolution_scenario(project, monkeypatch):
                 "task_dispatch",
                 {
                     "work_key": "resolve",
+                    "deliverable": "project",
                     "goal": (
                         f"resolve:codex/m2-{seen['dispatch']['alpha']['work_id']},"
                         f"codex/m2-{seen['dispatch']['beta']['work_id']}"

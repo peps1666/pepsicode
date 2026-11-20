@@ -13,10 +13,11 @@ from tempfile import TemporaryDirectory
 
 from pepsicode.core.loop_engine import VerificationResult
 from pepsicode.core.session_tree import current_session
-from pepsicode.core.task_control import edit_control, snapshot
+from pepsicode.core.task_control import edit_control, pending_questions, snapshot
 from pepsicode.core.workspace_state import digest, summary, task_paths, workspace_state
 from pepsicode.execution.filesystem import FILES
 from pepsicode.execution.runtime import current_scope
+from pepsicode.orchestration.reporting import worker_report_only, worker_results
 from pepsicode.tooling import ToolContext
 from pepsicode.tools.run_command import run_command_tool
 
@@ -160,8 +161,55 @@ class TaskVerifier:
         self.project = project
         self.runtime = runtime
 
+    def _verify_worker_reports(self, session, task):
+        with edit_control(session=session) as control:
+            latest = control["task"]
+            if (latest["id"], latest["revision"]) != (task["id"], task["revision"]) or latest.get(
+                "admitted_revision"
+            ) != latest["revision"]:
+                return VerificationResult(False, "Task changed before Worker reports were collected", status="blocked")
+            scope = current_scope()
+            if scope and scope.has_unknown:
+                return VerificationResult(False, "Reconcile unknown effects before reporting", status="blocked")
+            if any(q["required"] for q in pending_questions(control, task["id"])):
+                return VerificationResult(
+                    False, "Required Worker question remains unanswered", status="blocked", reason_code="awaiting_user"
+                )
+            workers = worker_results(control, task)
+            if not workers or any(item["state"] != "result_ready" for item in workers):
+                return VerificationResult(
+                    False,
+                    "Some Worker results are missing or unfinished",
+                    json.dumps(workers, ensure_ascii=False),
+                    status="blocked",
+                    reason_code="worker_reports_incomplete",
+                )
+            proof = {
+                "kind": "worker_reports",
+                "task_revision": task["revision"],
+                "valid": True,
+                "workers": workers,
+            }
+            latest.update(status="complete", assurance="worker_reports", acceptance=proof, evidence=[])
+        return VerificationResult(
+            True,
+            "Worker reports collected from their workspaces",
+            json.dumps(workers, ensure_ascii=False),
+            status="passed",
+            reason_code="worker_reports_collected",
+            state=proof,
+        )
+
     def verify(self, *, messages, tools, cwd, permissions):
         task = snapshot().get("task")
+        session = current_session()
+        if (
+            session is not None
+            and task
+            and self.runtime.get("orchestration", {}).get("enabled")
+            and worker_report_only(task)
+        ):
+            return self._verify_worker_reports(session, task)
         mode = self.runtime.get("verificationMode", "always" if self.runtime.get("verifierEnabled") else "auto")
         plain_answer = (
             task
@@ -170,7 +218,6 @@ class TaskVerifier:
             and not task.get("required_artifacts")
             and not task.get("requirements", {}).get("behavior")
         )
-        session = current_session()
         if (
             plain_answer
             and session is not None
@@ -369,8 +416,6 @@ class TaskVerifier:
         if report.status in {"failed", "blocked", "cancelled"}:
             return report
         state = snapshot()
-        from pepsicode.core.task_control import pending_questions
-
         if any(q["required"] for q in pending_questions(state, task["id"])):
             return VerificationResult(
                 False, "Required user question remains unanswered", status="blocked", reason_code="awaiting_user"

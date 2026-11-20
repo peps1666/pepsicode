@@ -8,11 +8,14 @@ import { effortLabels } from "./ModelSettings";
 import PermissionPrompt from "./PermissionPrompt";
 
 const accessModes = {
-  read_only: { label: "只读", description: "查看文件和搜索，禁止编辑及命令执行。" },
-  auto: { label: "自动", description: "项目内编辑免确认；本地命令、项目外访问和外部工具需确认。" },
-  trust_commands: { label: "命令免确认（高风险）", description: "所有程序以当前用户权限运行，可访问项目外文件和网络；内置工具访问项目外及外部工具仍需确认。" },
-  full_access: { label: "完全访问", description: "编辑、命令和外部工具均免确认，可访问项目外的文件。" },
-};
+  ask: { label: "每次询问", description: "编辑文件、执行本地命令、访问项目外路径和外部工具均需确认。" },
+  auto: { label: "自动审批", description: "项目内编辑与常规命令自动放行；高风险命令、项目外访问和外部工具仍需确认。" },
+  full_access: { label: "完全信任（高风险）", description: "编辑、命令和外部工具均免确认，可访问项目外的文件。" },
+} as const;
+
+type SelectableAccessMode = keyof typeof accessModes;
+
+const legacyReadOnlyDisplay = { label: "只读", description: "查看文件和搜索，禁止编辑及命令执行。" };
 
 interface ComposerProps {
   onSend: (input: string, mode?: InputMode) => Promise<void>;
@@ -180,20 +183,20 @@ export default function Composer({ onSend, disabled, running, onOpenSettings }: 
               }
             }}>
             <summary aria-label="权限模式" aria-disabled={disabled || running || permissionUpdating}
-              title={accessModes[accessMode].description}
+              title={(accessMode === "read_only" ? legacyReadOnlyDisplay : accessModes[accessMode]).description}
               onClick={(event) => {
                 event.preventDefault();
                 if (!disabled && !running && !permissionUpdating) setPermissionsOpen((value) => !value);
               }}>
-              <Icon name="shield" size={14} />{accessModes[accessMode].label}<Icon name="chevron" size={12} />
+              <Icon name="shield" size={14} />{(accessMode === "read_only" ? legacyReadOnlyDisplay : accessModes[accessMode]).label}<Icon name="chevron" size={12} />
             </summary>
             <div className={styles.permissionOptions} role="group" aria-label="选择权限模式">
-              {Object.entries(accessModes).map(([value, mode]) => (
+              {(Object.entries(accessModes) as Array<[SelectableAccessMode, (typeof accessModes)[SelectableAccessMode]]>).map(([value, mode]) => (
                 <button key={value} type="button" aria-pressed={value === accessMode}
                   disabled={disabled || running || permissionUpdating}
                   onClick={() => {
                     setPermissionError("");
-                    void updatePermissions(value as keyof typeof accessModes)
+                    void updatePermissions(value)
                       .then(() => setPermissionsOpen(false))
                       .catch((error) => setPermissionError(error instanceof Error ? error.message : String(error)));
                   }}>
@@ -204,7 +207,8 @@ export default function Composer({ onSend, disabled, running, onOpenSettings }: 
               <button type="button" disabled={disabled || running || permissionUpdating} onClick={() => {
                 setPermissionError("");
                 setPermissionNotice("");
-                void setWorkspaceDefaultPermissions(accessMode)
+                const defaultMode: SelectableAccessMode = accessMode === "read_only" ? "ask" : accessMode;
+                void setWorkspaceDefaultPermissions(defaultMode)
                   .then(() => { setPermissionNotice("已保存工作区默认权限，适用于新会话"); setPermissionsOpen(false); })
                   .catch((error) => setPermissionError(error instanceof Error ? error.message : String(error)));
               }}><span>将当前模式设为工作区默认</span><small>仅影响此工作区的新会话，不更改当前会话。</small></button>

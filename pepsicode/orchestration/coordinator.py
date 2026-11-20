@@ -4,19 +4,22 @@ from __future__ import annotations
 
 import json
 from contextlib import contextmanager
+from functools import partial
 from threading import get_ident
 
 from pepsicode.core.session_tree import current_session, recording_session
 from pepsicode.execution.runtime import current_scope
 from pepsicode.llm.cost_tracker import BudgetExceededError
+from pepsicode.orchestration.git_ops import WorktreeBaselineError, check_worktree_baseline
+from pepsicode.orchestration.reporting import worker_report_only
 from pepsicode.orchestration.store import admit_work, note_work, retry_work
 from pepsicode.permissions import PermissionMode
 from pepsicode.tooling import ToolCapability, ToolDefinition, ToolRegistry, ToolResult
 from pepsicode.tools.agent_status import create_agent_status
 
 
-def _validate(data):
-    if not isinstance(data, dict) or set(data) != {"work_key", "goal", "agent_type"}:
+def _validate(data, *, require_deliverable=False):
+    if not isinstance(data, dict) or set(data) - {"deliverable"} != {"work_key", "goal", "agent_type"}:
         raise ValueError("Specify work_key, goal and agent_type")
     key, goal, agent_type = data["work_key"], data["goal"], data["agent_type"]
     if not isinstance(key, str) or not 0 < len(key.strip()) <= 128:
@@ -25,24 +28,36 @@ def _validate(data):
         raise ValueError("goal must contain 1–4000 characters")
     if agent_type not in ("explore", "general"):
         raise ValueError("agent_type must be explore or general")
-    return key.strip(), {"goal": goal.strip(), "agent_type": agent_type}
+    specification = {"goal": goal.strip(), "agent_type": agent_type}
+    if require_deliverable or "deliverable" in data:
+        if data.get("deliverable") not in ("project", "worker_reports"):
+            raise ValueError("Choose the parent deliverable: project or worker_reports")
+        specification["deliverable"] = data["deliverable"]
+    return key.strip(), specification
 
 
 @contextmanager
-def coordinator_turn(session, *, cancel=None, admitted_only=False, runtime=None, workspace_owned=False):
+def coordinator_turn(
+    session, *, cancel=None, admitted_only=False, require_deliverable=False, runtime=None, workspace_owned=False
+):
     """Expose dispatch and status while the scheduler owns this callback."""
     owner_thread = get_ident()
     task = session.task_control.get("task") or {}
-    task_id, revision = task.get("id"), task.get("revision")
-    if admitted_only:
-        revision = task.get("admitted_revision", revision)
+    task_id = task.get("id")
     settings = runtime if runtime is not None else getattr(session, "runtime", None) or {}
     orchestration_settings = settings.get("orchestration") or {}
     queue_limit = orchestration_settings.get("maxQueuedWorkItems", 32)
     active_limit = orchestration_settings.get("maxActiveWorkItemsPerRun", 32)
     max_repair_attempts = orchestration_settings.get("maxRepairAttempts", 2)
     max_auto_retries = orchestration_settings.get("maxAutoRetries", 1)
+    require_git_baseline = orchestration_settings.get("workerIsolation", "shared") == "hardened"
     active = True
+
+    def current_revision():
+        task = session.task_control.get("task") or {}
+        if admitted_only:
+            return task.get("admitted_revision", task.get("revision"))
+        return task.get("revision")
 
     def authorize(context):
         if not active or get_ident() != owner_thread or current_session() is not session:
@@ -59,13 +74,18 @@ def coordinator_turn(session, *, cancel=None, admitted_only=False, runtime=None,
         if denied := authorize(context):
             return denied
         work_key, specification = arguments
-        if specification["agent_type"] == "general" and task.get("classification", {}).get("read_only_request"):
+        general = specification["agent_type"] == "general"
+        task = session.task_control.get("task") or {}
+        if general and task.get("classification", {}).get("read_only_request"):
             return ToolResult(False, "Only investigation can be dispatched for a read-only request.", status="blocked")
+        revision = current_revision()
         try:
             scope = current_scope()
             budget = scope.budget
             if budget is not None:
                 budget.check_worker()
+            if general and require_git_baseline:
+                check_worktree_baseline(context, session.workspace)
             item = admit_work(
                 session,
                 task_id=task_id,
@@ -76,12 +96,17 @@ def coordinator_turn(session, *, cancel=None, admitted_only=False, runtime=None,
                 active_limit=active_limit,
                 receipt_key=f"{scope.task_id}:{context.tool_use_id}" if scope.journal and context.tool_use_id else None,
             )
-        except (ValueError, BudgetExceededError, RuntimeError) as error:
+        except WorktreeBaselineError as error:
+            return ToolResult(
+                False, str(error), status="blocked", awaitUser=specification.get("deliverable") == "worker_reports"
+            )
+        except (ValueError, PermissionError, BudgetExceededError, RuntimeError) as error:
             return ToolResult(False, str(error), status="blocked")
         except OSError:
             return ToolResult(False, "Dispatch could not be saved.", status="failed")
         receipt = {
             "accepted": True,
+            "deliverable": session.task_control["task"]["orchestration_output"]["kind"],
             **{key: item[key] for key in ("run_id", "work_id", "attempt_id", "trace_id", "state", "revision")},
         }
         return ToolResult(True, json.dumps(receipt), details=receipt)
@@ -95,11 +120,16 @@ def coordinator_turn(session, *, cancel=None, admitted_only=False, runtime=None,
                 "work_key": {"type": "string", "maxLength": 128},
                 "goal": {"type": "string", "maxLength": 4000},
                 "agent_type": {"enum": ["explore", "general"]},
+                "deliverable": {
+                    "type": "string",
+                    "enum": ["project", "worker_reports"],
+                    "description": "Final outcome requested by the user for the whole task. Choose project for a usable implementation in the project, even when a summary is also requested. Choose worker_reports when the user only wants findings or asks to leave examples in the Workers' own workspaces and review the results.",
+                },
             },
-            "required": ["work_key", "goal", "agent_type"],
+            "required": ["work_key", "goal", "agent_type"] + (["deliverable"] if require_deliverable else []),
             "additionalProperties": False,
         },
-        validator=_validate,
+        validator=partial(_validate, require_deliverable=require_deliverable),
         run=dispatch,
         capabilities={ToolCapability.SESSION_METADATA},
         affects_workspace=False,
@@ -119,7 +149,7 @@ def coordinator_turn(session, *, cancel=None, admitted_only=False, runtime=None,
             if denied := authorize(context):
                 return denied
             try:
-                state = cancel(task_id, revision, attempt_id)
+                state = cancel(task_id, current_revision(), attempt_id)
             except ValueError as error:
                 return ToolResult(False, str(error), status="blocked")
             except OSError:
@@ -147,8 +177,18 @@ def coordinator_turn(session, *, cancel=None, admitted_only=False, runtime=None,
         def retry(attempt_id, context):
             if denied := authorize(context):
                 return denied
+            revision = current_revision()
             try:
                 current_scope().budget.check_worker()
+                if require_git_baseline:
+                    state = session.task_control.get("orchestration") or {}
+                    attempt = next((row for row in state.get("work", []) if row["attempt_id"] == attempt_id), None)
+                    if (
+                        attempt
+                        and attempt["specification"].get("agent_type") == "general"
+                        and attempt["work_id"] not in state.get("environments", {})
+                    ):
+                        check_worktree_baseline(context, session.workspace)
                 item = retry_work(
                     session,
                     task_id=task_id,
@@ -159,7 +199,11 @@ def coordinator_turn(session, *, cancel=None, admitted_only=False, runtime=None,
                     queue_limit=queue_limit,
                     active_limit=active_limit,
                 )
-            except (ValueError, BudgetExceededError, RuntimeError) as error:
+            except WorktreeBaselineError as error:
+                return ToolResult(
+                    False, str(error), status="blocked", awaitUser=worker_report_only(session.task_control["task"])
+                )
+            except (ValueError, PermissionError, BudgetExceededError, RuntimeError) as error:
                 return ToolResult(False, str(error), status="blocked")
             except OSError:
                 return ToolResult(False, "Retry could not be saved.", status="failed")
@@ -178,7 +222,9 @@ def coordinator_turn(session, *, cancel=None, admitted_only=False, runtime=None,
                 return denied
             attempt_id, content = arguments
             try:
-                count = note_work(session, task_id=task_id, revision=revision, attempt_id=attempt_id, note=content)
+                count = note_work(
+                    session, task_id=task_id, revision=current_revision(), attempt_id=attempt_id, note=content
+                )
             except ValueError as error:
                 return ToolResult(False, str(error), status="blocked")
             except OSError:
@@ -189,6 +235,7 @@ def coordinator_turn(session, *, cancel=None, admitted_only=False, runtime=None,
             if denied := authorize(context):
                 return denied
             attempt_id, question = arguments
+            revision = current_revision()
             state = session.task_control.get("orchestration") or {}
             original = next(
                 (

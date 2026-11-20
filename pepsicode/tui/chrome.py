@@ -531,7 +531,7 @@ def render_footer_bar(
     if background_tasks is None:
         background_tasks = []
     width, _ = _cached_terminal_size()
-    risk = " 高风险" if mode == "trust_commands" else ""
+    risk = " 高风险" if mode in {"full_access", "trust_commands"} else ""
     color = YELLOW if mode in {"trust_commands", "full_access"} else SUBTLE
     left = f"{BRIGHT_CYAN if plan else ACCENT}{'PLAN ' if plan else 'BUILD'}{RESET} {color}mode: {mode}{risk}{RESET}  {render_status_line(status)}"
 

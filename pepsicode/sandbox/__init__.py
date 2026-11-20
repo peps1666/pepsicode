@@ -10,7 +10,11 @@ remote execution) can be slotted in without touching the agent loop.
 """
 
 from pepsicode.sandbox.backend import SandboxBackend
-from pepsicode.sandbox.classifier import classify_dangerous_command, format_command_signature
+from pepsicode.sandbox.classifier import (
+    classify_auto_command_risk,
+    classify_dangerous_command,
+    format_command_signature,
+)
 from pepsicode.sandbox.local_backend import LocalSandboxBackend
 from pepsicode.sandbox.types import ConfinedArgs, SandboxMode, SandboxPolicy
 
@@ -20,6 +24,7 @@ __all__ = [
     "SandboxBackend",
     "SandboxMode",
     "SandboxPolicy",
+    "classify_auto_command_risk",
     "classify_dangerous_command",
     "format_command_signature",
 ]

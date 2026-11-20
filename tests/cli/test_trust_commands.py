@@ -48,21 +48,21 @@ def test_trusted_commands_respects_exact_denial_and_read_only_boundaries(tmp_pat
     assert manager.check_command("git", ["status"], str(tmp_path)).is_denied
 
 
-def test_rejected_command_stays_denied_when_switching_to_trusted_mode(tmp_path):
+def test_rejected_command_stays_denied_when_switching_to_auto_mode(tmp_path):
     prompts = []
     manager = PermissionManager(
-        str(tmp_path), mode="auto", prompt=lambda req: prompts.append(req) or {"decision": "deny_once"}
+        str(tmp_path), mode="ask", prompt=lambda req: prompts.append(req) or {"decision": "deny_once"}
     )
     context = ToolContext(str(tmp_path), permissions=manager)
     with pytest.raises(PermissionError):
         checked_argv(["git", "status"], context=context)
-    manager.set_access_mode("trust_commands")
+    manager.set_access_mode("auto")
     with pytest.raises(PermissionError):
         checked_argv(["git", "status"], context=context)
     assert len(prompts) == 1
 
 
-def test_trusted_mode_survives_session_and_plan_restore(tmp_path):
+def test_legacy_trust_commands_session_restores_as_auto_preserving_plan(tmp_path):
     manager = PermissionManager(str(tmp_path), mode="trust_commands")
     plan = manager.enter_plan_mode()
     session = create_new_session(str(tmp_path))
@@ -71,9 +71,10 @@ def test_trusted_mode_survives_session_and_plan_restore(tmp_path):
     session.plan_file_path = plan
     save_session(session)
     saved = load_session(session.session_id)
-    restored = PermissionManager(str(tmp_path), mode="auto")
+    assert saved.access_mode == "auto"
+    restored = PermissionManager(str(tmp_path), mode="ask")
     restored.set_access_mode(saved.access_mode)
     restored.restore_plan_state(saved.permission_mode, saved.plan_file_path)
     assert restored.is_plan_mode
-    assert restored.access_mode == PermissionMode.TRUST_COMMANDS
+    assert restored.access_mode == PermissionMode.AUTO
     assert restored.check_command("git", ["status"], str(tmp_path)).is_denied
