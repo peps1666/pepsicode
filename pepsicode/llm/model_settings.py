@@ -81,8 +81,12 @@ def model_capabilities(runtime: dict[str, Any], model: str) -> dict[str, Any]:
     configured = next(
         (item for item in runtime.get("models", []) if isinstance(item, dict) and item.get("id") == model), {}
     )
-    discovered = next((item for item in runtime.get("_discoveredModels", []) if item["id"] == model), {})
-    cached = next((item for item in runtime.get("_cachedModelCapabilities", []) if item.get("id") == model), {})
+    discovered: dict[str, Any] = next(
+        (item for item in runtime.get("_discoveredModels", []) if item["id"] == model), {}
+    )
+    cached: dict[str, Any] = next(
+        (item for item in runtime.get("_cachedModelCapabilities", []) if item.get("id") == model), {}
+    )
     profile = {**configured, **discovered}
     sources = {}
     for field in ("contextWindow", "maxOutputTokens"):
@@ -144,7 +148,7 @@ def model_catalog(runtime: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def model_display_name(runtime: dict[str, Any], model: str | None = None) -> str:
-    return model_capabilities(runtime, model or runtime["model"])["name"]
+    return str(model_capabilities(runtime, model or runtime["model"])["name"])
 
 
 def validate_model_settings(runtime: dict[str, Any], model: Any, effort: Any) -> None:

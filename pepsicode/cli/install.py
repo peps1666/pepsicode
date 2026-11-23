@@ -46,10 +46,10 @@ def _mask_secret(secret: str | None) -> str:
     return "[saved]"
 
 
-def _install_launcher_script() -> str | None:
+def _install_launcher_script() -> tuple[str, str, str] | None:
     """Install launcher script to platform-specific bin directory.
 
-    Returns the installation path, or None if skipped.
+    Returns ``(launcher_path, launcher_command, target_bin_dir)``, or None if skipped.
     """
     home = Path.home()
 
@@ -100,7 +100,6 @@ def _install_launcher_script() -> str | None:
         )
         launcher_command = "pepsicode-py"
 
-    resolved = str(target_bin_dir.resolve())
     if ".." in str(target_bin_dir) or "~" in str(target_bin_dir):
         print("Warning: install path contains unsafe characters, skipping installation.")
         return None

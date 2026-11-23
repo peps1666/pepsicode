@@ -562,7 +562,7 @@ def _handle_settings_picker_event(
                     updated = create_settings_picker(candidate, "model", return_input=picker.return_input)
                     updated.persist = picker.persist
                     state.settings_picker = updated
-                except ValueError as error:
+                except ValueError:
                     state.settings_picker = None
                     state.provider_wizard = create_provider_wizard(option.value)
                 rerender()
@@ -2850,13 +2850,6 @@ def _handle_input(
         rerender()
 
     def on_tool_result(tool_name: str, output: str, is_error: bool) -> None:
-        # Compute and display the tool execution time
-        elapsed = ""
-        if state.tool_start_time is not None:
-            elapsed_secs = time.monotonic() - state.tool_start_time
-            if elapsed_secs > 1:
-                elapsed = f" ({elapsed_secs:.1f}s)"
-
         pending = pending_tool_entries.get(tool_name, [])
         entry_id = pending.pop(0) if pending else None
         if entry_id is not None:

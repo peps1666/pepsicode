@@ -125,8 +125,6 @@ class ApprovalStore:
         if _is_within_directory(self.workspace_root, normalized):
             return ApprovalOutcome(decision=ApprovalDecision.ALLOW_ONCE)
 
-        scope_dir = normalized if intent in {"list", "command_cwd"} else str(Path(normalized).parent)
-
         if normalized in self.session_denied_paths or _matches_directory_prefix(
             normalized, self.denied_directory_prefixes
         ):
@@ -311,7 +309,7 @@ def _read_permission_store() -> dict[str, Any]:
             return {}
         return data
     except (json.JSONDecodeError, OSError) as e:
-        warnings.warn(f"Corrupted permissions file, resetting: {e}")
+        warnings.warn(f"Corrupted permissions file, resetting: {e}", stacklevel=2)
         return {}
 
 

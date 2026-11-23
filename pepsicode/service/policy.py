@@ -16,11 +16,11 @@ from __future__ import annotations
 
 import json
 import math
-import os
-import tempfile
 from datetime import UTC, datetime
 from pathlib import Path
 from urllib.parse import urlsplit
+
+from pepsicode.service.state import atomic_write_json, service_dir
 
 POLICY_VERSION = 1
 
@@ -49,24 +49,7 @@ class PolicyError(ValueError):
 
 
 def policy_path(workspace: str | Path) -> Path:
-    return Path(workspace) / ".pepsi-code" / "service" / "policy.json"
-
-
-def _atomic_write_json(path: Path, payload: dict) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = None
-    try:
-        with tempfile.NamedTemporaryFile(
-            mode="w", encoding="utf-8", dir=path.parent, suffix=".tmp", delete=False
-        ) as stream:
-            temporary = Path(stream.name)
-            json.dump(payload, stream, ensure_ascii=False, indent=2)
-            stream.flush()
-            os.fsync(stream.fileno())
-        os.replace(temporary, path)
-    finally:
-        if temporary is not None:
-            temporary.unlink(missing_ok=True)
+    return service_dir(workspace) / "policy.json"
 
 
 def _string_list(policy: dict, key: str) -> list[str]:
@@ -133,7 +116,7 @@ def load_policy(workspace: str | Path) -> dict | None:
 
 
 def save_policy(workspace: str | Path, policy: dict) -> dict:
-    _atomic_write_json(policy_path(workspace), validate_policy(policy))
+    atomic_write_json(policy_path(workspace), validate_policy(policy))
     return policy
 
 
@@ -145,7 +128,7 @@ def revoke_policy(workspace: str | Path, *, when: datetime | None = None) -> dic
     stamp = (when or datetime.now(UTC)).isoformat(timespec="seconds")
     policy["revoked"] = True
     policy["revoked_at"] = stamp
-    _atomic_write_json(policy_path(workspace), policy)
+    atomic_write_json(policy_path(workspace), policy)
     return policy
 
 

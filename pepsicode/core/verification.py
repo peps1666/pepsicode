@@ -433,8 +433,8 @@ def _run_verified_turn_once(
     if permissions and hasattr(permissions, "clear_task_grants"):
         permissions.clear_task_grants()
     if report is not None:
-        for message in reversed(result.messages):
-            if message.get("role") == "assistant":
-                message["verification"] = report
+        for item in reversed(result.messages):
+            if item.get("role") == "assistant":
+                item["verification"] = report
                 break
     return result.messages

@@ -68,8 +68,6 @@ def main() -> None:
             f"{manifest}{os.pathsep}pepsicode",
             "--copy-metadata",
             "websockets",
-            "--copy-metadata",
-            "psycopg2-binary",
             "--distpath",
             str(root / "build/desktop-backend"),
             "--workpath",

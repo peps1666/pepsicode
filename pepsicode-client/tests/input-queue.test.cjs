@@ -19,7 +19,10 @@ async function session() {
     sendRequest: async (_ws, method, params, options) => {
       calls.push({ method, params });
       policies.push({ method, options });
-      if (method === "session/create") return { session_id: "test", cwd: "/project" };
+      if (method === "session/create") {
+        if (branchError) throw branchError;
+        return { session_id: params.cwd === "/another-project" ? "other" : "test", cwd: params.cwd || "/project" };
+      }
       if (method === "commands/list") return { commands: [
         { name: "/review", usage: "/review [focus]", description: "Review changes", source: "project" },
       ], diagnostics: ["invalid command file"] };
@@ -39,14 +42,26 @@ async function session() {
       return {};
     },
   };
-  const source = readFileSync(join(__dirname, "../src/stores/session.ts"), "utf8");
+  const storesDir = join(__dirname, "../src/stores");
+  const loadStoreModule = (id) => {
+    if (id === "./connection") return connection;
+    if (id.startsWith("./")) {
+      const target = join(storesDir, `${id.slice(2)}.ts`);
+      const mod = {};
+      const code = ts.transpileModule(readFileSync(target, "utf8"), {
+        compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
+      }).outputText;
+      new Function("require", "exports", code)(loadStoreModule, mod);
+      return mod;
+    }
+    return require(id);
+  };
+  const source = readFileSync(join(storesDir, "session.ts"), "utf8");
   const compiled = ts.transpileModule(source, {
     compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
   }).outputText;
   const result = {};
-  new Function("require", "exports", compiled)(
-    (id) => id === "./connection" ? connection : require(id), result,
-  );
+  new Function("require", "exports", compiled)(loadStoreModule, result);
   const store = result.useSessionStore;
   await store.getState().initialize();
   return {
@@ -198,6 +213,39 @@ test("a running turn blocks project switching", async () => {
   await api.store.getState().resumeSession("other-chat", "/another-project");
   assert.equal(api.calls.some((call) => call.method === "session/resume"), false);
   assert.equal(api.store.getState().cwd, "/project");
+});
+
+test("switching projects only replaces session state after the server accepts the change", async () => {
+  const api = await session();
+  const task = { id: "current", revision: 1 };
+  const verification = { status: "passed" };
+  api.store.setState({ task, verification, isRunning: true });
+  await api.store.getState().switchCwd("/another-project");
+  assert.equal(api.calls.filter(call => call.method === "session/create").length, 1);
+  assert.equal(api.store.getState().task, task);
+  assert.equal(api.store.getState().verification, verification);
+
+  api.store.setState({ isRunning: false });
+  api.rejectBranch();
+  await assert.rejects(api.store.getState().switchCwd("/another-project"), /invalid branch/);
+  assert.equal(api.store.getState().cwd, "/project");
+  assert.equal(api.store.getState().task, task);
+  assert.equal(api.store.getState().verification, verification);
+});
+
+test("a new project session drops the previous agent snapshot, queue and usage", async () => {
+  const api = await session();
+  api.store.setState({
+    agents: { session_id: "test", sequence: 8, records: [] },
+    pendingInputs: [{ id: "old", content: "previous task", mode: "follow_up" }],
+    latestUsage: { input_total: 200 },
+  });
+  await api.store.getState().switchCwd("/another-project");
+  const state = api.store.getState();
+  assert.equal(state.sessionId, "other");
+  assert.equal(state.agents, null);
+  assert.deepEqual(state.pendingInputs, []);
+  assert.equal(state.latestUsage, null);
 });
 
 test("busy Worker replies retain the exact question and withdrawing approval is scoped", async () => {

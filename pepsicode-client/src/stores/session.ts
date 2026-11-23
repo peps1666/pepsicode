@@ -1,292 +1,52 @@
 import { create } from "zustand";
 import { sendRequest, onMessage, useConnectionStore } from "./connection";
-import type { SlashCommandInfo } from "../conversation/commandCompletion";
+import type {
+  AgentSnapshot,
+  AgentStatus,
+  BranchNode,
+  ChatMessage,
+  ConversationTree,
+  InputMode,
+  ModelCapabilities,
+  PermissionRequest,
+  ProviderDraft,
+  QueuedInput,
+  SessionHistoryItem,
+  SessionMeta,
+  SessionState,
+  TaskReport,
+  VerificationReport,
+} from "./sessionTypes";
+import {
+  appendError,
+  applyMessageDelta,
+  applyMessageEnd,
+  hydrateSessionHistory,
+  mergeQueuedInputs,
+  modelSettings,
+  nextMsgId,
+  restoreDraftWithPending,
+  settleStreaming,
+  shouldApplyAgentSnapshot,
+} from "./sessionTransforms";
 
-export interface ChatMessage {
-  id: string;
-  role: "user" | "assistant" | "system" | "tool_call" | "tool_result" | "progress" | "thinking";
-  content: string;
-  toolName?: string;
-  toolInput?: Record<string, unknown>;
-  isError?: boolean;
-  isStreaming?: boolean;
-  thinkingId?: string;
-  thinkingStatus?: "completed" | "cancelled" | "interrupted";
-  timestamp: number;
-  entryId?: string;
-  callId?: string;
-  startedAt?: number;
-  durationMs?: number;
-  toolStatus?: string;
-  exitCode?: number;
-  activityKind?: "retry";
-  retry?: { attempt: number; limit: number; delay_ms: number; reason: string; started_at?: number };
-  verification?: VerificationReport;
-  task?: TaskReport;
-}
-
-export interface TaskReport {
-  id: string; revision: number; objective: string; status: string;
-  criteria: Array<{ id: string; kind: string; path?: string; argv?: string[]; text?: string; purpose?: string }>;
-  instructions?: string[];
-  evidence: Array<{ criterion_id: string; status: string; task_revision?: number; acceptance_run_id?: string; workspace_digest?: string }>;
-  assurance?: string;
-  acceptance?: { valid: boolean; task_revision: number; kind?: "worker_reports"; acceptance_run_id?: string; workspace?: { digest: string }; reason_code?: string } | null;
-}
-
-export interface VerificationReport {
-  status: string; reason: string; reason_code?: string; details?: string; ok: boolean;
-}
-
-export interface AgentStatus {
-  trace_id: string; parent_id: string | null; parent_call_id: string | null; name: string; task: string;
-  stage: string; status: string; elapsed_seconds: number; started_at: number; ended_at: number | null;
-  historical: boolean; stale: boolean; end_reason: string | null; result_summary: string;
-  can_stop?: boolean;
-  can_reply_running?: boolean;
-  activities: Array<{ id: string; kind: string; summary: string }>;
-  report: { id: string; status: string; summary: string; submitted_at: number } | null;
-  questions: Array<{ id: string; question: string; required: boolean; status: "pending" | "answered"; actionable: boolean }>;
-  acceptance: { passed: number; total: number };
-  recent_tools: Array<{ id: string; tool: string; summary: string; status: string; input_preview: string; output: string; duration_ms: number }>;
-}
-
-export interface AgentSnapshot {
-  version: number; session_id: string; sequence: number; records: AgentStatus[];
-  next_offset: number | null; persistence_error: string | null;
-}
-
-export interface BranchNode {
-  id: string;
-  parent_id: string | null;
-  role: "user" | "assistant";
-  preview: string;
-  depth: number;
-  active: boolean;
-}
-
-export interface ConversationTree {
-  nodes: BranchNode[];
-  leaf_id: string | null;
-  parent_session_id: string | null;
-}
-
-export interface PermissionRequest {
-  prompt_id: string;
-  kind: string;
-  summary: string;
-  details: string[];
-  scope: string;
-  choices: Array<{ key: string; label: string; decision: string }>;
-}
-
-export interface SessionMeta {
-  session_id: string;
-  created_at: number;
-  updated_at: number;
-  first_message: string;
-  message_count: number;
-  workspace: string;
-}
-
-export type InputMode = "steer" | "follow_up";
-
-export interface QueuedInput {
-  id: string;
-  content: string;
-  mode: InputMode;
-  display_content?: string | null;
-}
-
-interface SessionHistoryItem {
-  task?: TaskReport;
-  entry_id?: string;
-  role: "user" | "assistant" | "progress" | "tool_call" | "tool_result" | "thinking";
-  content?: string;
-  tool_name?: string;
-  tool_input?: unknown;
-  is_error?: boolean;
-  call_id?: string;
-  started_at?: number;
-  duration_ms?: number;
-  status?: string;
-  exit_code?: number;
-  activity_kind?: "retry";
-  retry?: ChatMessage["retry"];
-  verification?: VerificationReport;
-}
-
-interface SessionState {
-  agents: AgentSnapshot | null;
-  fetchAgents: (offset?: number, traceId?: string) => Promise<AgentSnapshot | null>;
-  stopWorker: (traceId: string) => Promise<void>;
-  tree: ConversationTree | null;
-  branchUpdating: boolean;
-  branchError: string;
-  refreshTree: () => Promise<void>;
-  checkoutEntry: (id: string) => Promise<void>;
-  forkSession: (id: string) => Promise<void>;
-  cloneSession: () => Promise<void>;
-  regenerate: (id: string) => Promise<void>;
-  verification: VerificationReport | null;
-  task: TaskReport | null;
-  cacheHitPercentage: number | null;
-  latestUsage: { input_total: number | null; cache_read: number | null; cache_write: number | null; cost_usd: number | null } | null;
-  accessMode: "ask" | "auto" | "full_access" | "read_only";
-  permissionUpdating: boolean;
-  updatePermissions: (mode: "ask" | "auto" | "full_access") => Promise<void>;
-  setWorkspaceDefaultPermissions: (mode: "ask" | "auto" | "full_access") => Promise<void>;
-  messages: ChatMessage[];
-  isRunning: boolean;
-  isStopping: boolean;
-  cancelTurn: () => Promise<void>;
-  pendingInputs: QueuedInput[];
-  commands: SlashCommandInfo[];
-  commandDiagnostics: string[];
-  commandError: string;
-  refreshCommands: (refresh?: boolean) => Promise<void>;
-  draft: string;
-  setDraft: (draft: string) => void;
-  removeQueuedInput: (id: string) => Promise<void>;
-  sessionId: string | null;
-  cwd: string;
-  model: string;
-  provider: string;
-  providers: Array<{ id: string; name: string; configured: boolean; baseUrl: string }>;
-  loadProviderModels: (provider: string, refresh?: boolean) => Promise<{ models: ModelCapabilities[]; catalogError: string }>;
-  probeProvider: (draft: ProviderDraft) => Promise<{ token: string; models: ModelCapabilities[]; catalogError: string; verified: boolean }>;
-  saveProvider: (token: string, model: string) => Promise<void>;
-  cancelProviderSetup: () => Promise<void>;
-  reasoningEffort: string;
-  models: ModelCapabilities[];
-  catalogError: string;
-  refreshModels: () => Promise<void>;
-  isMock: boolean;
-  modelUpdating: boolean;
-  inspectModel: (model: string) => Promise<ModelCapabilities>;
-  updateModel: (model: string, reasoningEffort: string, persist: boolean, provider?: string) => Promise<void>;
-  pendingPermission: PermissionRequest | null;
-  sessions: SessionMeta[];
-  sessionsLoading: boolean;
-  initialize: () => Promise<void>;
-  createSession: () => Promise<void>;
-  runTurn: (input: string, mode?: InputMode, answerTo?: string[]) => Promise<void>;
-  approvePermission: (decision: string, feedback?: string) => Promise<void>;
-  refreshSessions: () => Promise<void>;
-  resumeSession: (sessionId: string, workspace?: string) => Promise<void>;
-  enterPlanMode: () => Promise<void>;
-  exitPlanMode: () => Promise<void>;
-  refreshCost: () => Promise<void>;
-  refreshContext: () => Promise<void>;
-  switchCwd: (cwd: string) => Promise<void>;
-  costData: any;
-  contextData: any;
-  planMode: boolean;
-  planFile: string | null;
-  // M3 resident service: announced via connection/ready. Detaching only ends
-  // this control view — authorized service work keeps running.
-  serviceInfo: { generation: string; executionMode: string } | null;
-  serviceNotifications: number;
-  refreshServiceNotifications: () => Promise<void>;
-}
-
-export interface ModelCapabilities {
-  id: string;
-  name: string;
-  reasoningMode: string;
-  reasoningLevels: string[];
-}
-
-export interface ProviderDraft {
-  provider: string;
-  name: string;
-  baseUrl: string;
-  authType: string;
-  apiKey: string;
-  modelsUrl: string | false;
-}
-
-function modelSettings(result: any) {
-  return {
-    model: result.model || "unknown",
-    provider: result.provider || "",
-    providers: result.providers || [],
-    reasoningEffort: result.reasoningEffort || "default",
-    models: result.models || [],
-    catalogError: result.catalogError || "",
-    isMock: Boolean(result.isMock),
-  };
-}
-
-let messageIdCounter = 0;
-const nextMsgId = () => `msg-${++messageIdCounter}`;
-
-function errorMessage(content: unknown): ChatMessage {
-  const text = typeof content === "string" && content.trim()
-    ? content.trim()
-    : "The request failed. Check the server log for details.";
-  return {
-    id: nextMsgId(),
-    role: "assistant",
-    content: text,
-    isError: true,
-    timestamp: Date.now(),
-  };
-}
-
-function appendError(messages: ChatMessage[], content: unknown): ChatMessage[] {
-  const next = errorMessage(content);
-  const last = messages[messages.length - 1];
-  return last?.isError && last.content === next.content ? messages : [...messages, next];
-}
-
-function settleStreaming(messages: ChatMessage[], status: "cancelled" | "interrupted"): ChatMessage[] {
-  return messages.map(message => message.isStreaming ? {
-    ...message, isStreaming: false,
-    ...(message.role === "thinking" ? { thinkingStatus: status } : {}),
-  } : message);
-}
-
-function hydrateSessionHistory(value: unknown): ChatMessage[] {
-  if (!Array.isArray(value)) return [];
-  const baseTime = Date.now();
-  const supportedRoles = new Set<SessionHistoryItem["role"]>([
-    "user",
-    "assistant",
-    "progress",
-    "thinking",
-    "tool_call",
-    "tool_result",
-  ]);
-
-  return value.flatMap((raw, index) => {
-    if (!raw || typeof raw !== "object") return [];
-    const item = raw as Partial<SessionHistoryItem>;
-    if (!item.role || !supportedRoles.has(item.role)) return [];
-    const toolInput = item.tool_input && typeof item.tool_input === "object" && !Array.isArray(item.tool_input)
-      ? item.tool_input as Record<string, unknown>
-      : undefined;
-    return [{
-      id: nextMsgId(),
-      role: item.role,
-      content: typeof item.content === "string" ? item.content : "",
-      toolName: typeof item.tool_name === "string" ? item.tool_name : undefined,
-      toolInput,
-      isError: Boolean(item.is_error),
-      timestamp: baseTime + index,
-      entryId: item.entry_id,
-      callId: item.call_id,
-      startedAt: item.started_at,
-      durationMs: item.duration_ms,
-      toolStatus: item.status,
-      exitCode: item.exit_code,
-      activityKind: item.activity_kind,
-      retry: item.retry,
-      verification: item.verification,
-      task: item.task,
-    } satisfies ChatMessage];
-  });
-}
+export type {
+  AgentSnapshot,
+  AgentStatus,
+  BranchNode,
+  ChatMessage,
+  ConversationTree,
+  InputMode,
+  ModelCapabilities,
+  PermissionRequest,
+  ProviderDraft,
+  QueuedInput,
+  SessionHistoryItem,
+  SessionMeta,
+  SessionState,
+  TaskReport,
+  VerificationReport,
+};
 
 async function changeBranch(
   method: string, params: object,
@@ -348,7 +108,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       set((state) => ({
         isRunning: false, isStopping: false, branchError: String(error),
         messages: settleStreaming(state.messages, "interrupted"),
-        draft: [...state.pendingInputs.map((item) => item.display_content || item.content), ...(state.draft ? [state.draft] : [])].join("\n\n"),
+        draft: restoreDraftWithPending(state.pendingInputs, state.draft),
         pendingInputs: [],
       }));
     });
@@ -481,8 +241,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         case "agent/update": {
           const snapshot: AgentSnapshot = data;
           const previous = get().agents;
-          if (snapshot.version !== 1 || snapshot.session_id !== get().sessionId
-              || (previous && snapshot.sequence <= previous.sequence)) break;
+          if (!shouldApplyAgentSnapshot(previous, snapshot, get().sessionId)) break;
           // Updates carry a complete first page. Apply immediately and confirm
           // a gap via the active-session snapshot endpoint.
           set({ agents: snapshot });
@@ -514,15 +273,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
           break;
         }
         case "input/queue": {
-          const delivered: QueuedInput[] = data.delivered || [];
-          const returned: QueuedInput[] = data.returned || [];
-          set((state) => ({
-            pendingInputs: data.pending || [],
-            draft: [...returned.map((item) => item.display_content || item.content), ...(state.draft ? [state.draft] : [])].join("\n\n"),
-            messages: [...state.messages, ...delivered.map((item) => ({
-              id: item.id, role: "user" as const, content: item.display_content || item.content, timestamp: Date.now(),
-            }))],
-          }));
+          set((state) => mergeQueuedInputs(state, data));
           break;
         }
         case "verification/update": {
@@ -549,46 +300,11 @@ export const useSessionStore = create<SessionState>((set, get) => ({
           break;
         }
         case "message/delta": {
-          set((state) => {
-            const messages = [...state.messages];
-            const last = messages[messages.length - 1];
-            if (last?.role === "assistant" && last.isStreaming) {
-              messages[messages.length - 1] = { ...last, content: last.content + (data.text || "") };
-            }
-            return { messages };
-          });
+          set((state) => ({ messages: applyMessageDelta(state.messages, data.text || "") }));
           break;
         }
         case "message/end": {
-          set((state) => {
-            const messages = [...state.messages];
-            let streamingIndex = -1;
-            for (let index = messages.length - 1; index >= 0; index -= 1) {
-              if (messages[index].role === "assistant" && messages[index].isStreaming) {
-                streamingIndex = index;
-                break;
-              }
-            }
-            if (streamingIndex >= 0) {
-              const streaming = messages[streamingIndex];
-              messages[streamingIndex] = {
-                ...streaming,
-                role: data.role === "progress" ? "progress" : streaming.role,
-                isStreaming: false,
-                isError: Boolean(data.is_error),
-                content: data.content || streaming.content,
-              };
-            } else if (data.content) {
-              messages.push({
-                id: nextMsgId(),
-                role: "assistant",
-                content: data.content,
-                isError: Boolean(data.is_error),
-                timestamp: Date.now(),
-              });
-            }
-            return { messages };
-          });
+          set((state) => ({ messages: applyMessageEnd(state.messages, data) }));
           break;
         }
         case "thinking/start": {
@@ -716,17 +432,23 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     });
   },
 
-  createSession: async () => {
+  createSession: async (workspace) => {
     const { ws } = useConnectionStore.getState();
-    if (!ws || get().isRunning || get().modelUpdating || get().branchUpdating) return;
-    const result = await sendRequest(ws, "session/create", { cwd: get().cwd || undefined });
-    set({ verification: null, task: null });
+    const { cwd, isRunning, modelUpdating, branchUpdating, permissionUpdating } = get();
+    if (!ws || isRunning || modelUpdating || branchUpdating || permissionUpdating) return;
+    const result = await sendRequest(ws, "session/create", { cwd: workspace ?? (cwd || undefined) });
     set({
       sessionId: result.session_id,
       agents: result.agents || null,
       cwd: result.cwd,
+      ...(result.cwd !== cwd ? { sessions: [] } : {}),
       accessMode: result.access_mode || "auto",
       ...modelSettings(result),
+      verification: null,
+      task: null,
+      pendingInputs: [],
+      latestUsage: null,
+      branchError: "",
       messages: [],
       tree: null,
       isRunning: false,
@@ -768,7 +490,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       set((state) => ({
         isRunning: false,
         isStopping: false,
-        draft: [...state.pendingInputs.map((item) => item.display_content || item.content), ...(state.draft ? [state.draft] : [])].join("\n\n"),
+        draft: restoreDraftWithPending(state.pendingInputs, state.draft),
         pendingInputs: [],
         messages: settleStreaming(appendError(state.messages, e instanceof Error ? e.message : e), "interrupted"),
       }));
@@ -907,32 +629,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     }
   },
 
-  switchCwd: async (cwd: string) => {
-    set({ verification: null, task: null });
-    const { ws } = useConnectionStore.getState();
-    if (!ws || get().isRunning || get().modelUpdating || get().branchUpdating) return;
-    // Re-create the session on the server with the new cwd. The server's
-    // session/create reinitializes tools/permissions/model for the new workspace.
-    const result = await sendRequest(ws, "session/create", { cwd });
-    set({
-      sessionId: result.session_id,
-      cwd: result.cwd,
-      accessMode: result.access_mode || "auto",
-      ...modelSettings(result),
-      messages: [],
-      tree: null,
-      isRunning: false,
-      pendingPermission: null,
-      costData: null,
-      cacheHitPercentage: null,
-      contextData: null,
-      planMode: false,
-      planFile: null,
-      sessions: [],
-    });
-    await get().refreshSessions();
-    await Promise.all([get().refreshCost(), get().refreshContext(), get().refreshCommands()]);
-  },
+  switchCwd: (cwd) => get().createSession(cwd),
 
   refreshModels: async () => {
     const { ws } = useConnectionStore.getState();

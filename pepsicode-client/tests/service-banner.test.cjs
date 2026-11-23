@@ -26,14 +26,26 @@ async function serviceFixture() {
       return {};
     },
   };
-  const source = readFileSync(join(__dirname, "../src/stores/session.ts"), "utf8");
+  const storesDir = join(__dirname, "../src/stores");
+  const loadStoreModule = (id) => {
+    if (id === "./connection") return connection;
+    if (id.startsWith("./")) {
+      const target = join(storesDir, `${id.slice(2)}.ts`);
+      const mod = {};
+      const code = ts.transpileModule(readFileSync(target, "utf8"), {
+        compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
+      }).outputText;
+      new Function("require", "exports", code)(loadStoreModule, mod);
+      return mod;
+    }
+    return require(id);
+  };
+  const source = readFileSync(join(storesDir, "session.ts"), "utf8");
   const compiled = ts.transpileModule(source, {
     compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
   }).outputText;
   const result = {};
-  new Function("require", "exports", compiled)(
-    (id) => id === "./connection" ? connection : require(id), result,
-  );
+  new Function("require", "exports", compiled)(loadStoreModule, result);
   const store = result.useSessionStore;
   await store.getState().initialize();
   return {

@@ -5,9 +5,10 @@ from __future__ import annotations
 import copy
 import json
 import uuid
+from collections.abc import Sequence
 from contextlib import contextmanager
 from contextvars import ContextVar
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, cast
 
 if TYPE_CHECKING:
     from pepsicode.core.session import SessionData
@@ -46,7 +47,7 @@ def _index(session: SessionData) -> dict:
     return {node["id"]: node for node in session.tree.get("nodes", [])}
 
 
-def record_messages(session: SessionData, messages: list[dict]) -> None:
+def record_messages(session: SessionData, messages: Sequence[Any]) -> None:
     with session._tree_lock:
         if not session.tree:
             session.tree = {"version": 1, "nodes": [], "leaf_id": None}
@@ -72,7 +73,7 @@ def record_messages(session: SessionData, messages: list[dict]) -> None:
         session.messages = list(messages)
 
 
-def checkpoint_messages(messages: list[dict]) -> None:
+def checkpoint_messages(messages: Sequence[Any]) -> None:
     from pepsicode.execution.runtime import current_scope
 
     scope = current_scope()
@@ -203,7 +204,7 @@ def prepare_regeneration(session: SessionData, entry_id: str | None = None) -> d
         same_task = bool(task and prompt.get("source", {}).get("id") in task["inputs"])
         checkout_entry(session, node["id"], preserve_task=same_task)
         prompt.pop("entryId", None)
-        return prompt
+        return cast(dict[Any, Any], prompt)
 
 
 def copy_session(session: SessionData, *, entry_id: str | None = None, clone: bool = False):
@@ -249,7 +250,8 @@ def tree_view(session: SessionData) -> dict:
     with session._tree_lock:
         record_messages(session, session.messages)
         active = {node["id"] for node in branch_path(session)}
-        depths, rows = {}, []
+        depths: dict[str | None, int] = {}
+        rows: list[dict[str, Any]] = []
         for node in session.tree["nodes"]:
             depths[node["id"]] = depths.get(node["parent_id"], -1) + 1
             message = node["message"]
@@ -285,7 +287,7 @@ def format_tree(session: SessionData, *, users_only: bool = False) -> str:
 
 
 def rebuild_transcript(session: SessionData) -> None:
-    entries = []
+    entries: list[dict[str, Any]] = []
     for message in session.messages:
         role = message.get("role")
         if message.get("internal") or role in {"system", "assistant_thinking"}:

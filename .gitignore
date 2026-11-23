@@ -77,3 +77,13 @@ docs/superpowers/
 .pepsi-code/executions/
 .pepsi-code/m2/
 .pepsi-code/hooks.local.json
+.pepsi-code/sessions/
+.pepsi-code/sessions_index.json
+.pepsi-code/memory/
+.pepsi-code/model-capabilities/
+.pepsi-code/permissions.json
+.pepsi-code/cache/
+.pepsi-code/context/
+.pepsi-code/contexts/
+.pepsi-code/dbg-out.txt
+.pepsi-code/pytest-tmp*/

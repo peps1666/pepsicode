@@ -141,7 +141,7 @@ def create_code_intelligence_tools(manager: LanguageServers) -> list[ToolDefinit
                 text = FILES.read_text(path)
                 lines = text.splitlines()
                 if not 1 <= value["line"] <= len(lines):
-                    raise ValueError("line is outside the document")
+                    raise ValueError("line is outside the document") from None
                 line = lines[value["line"] - 1]
                 match = next(
                     (
@@ -152,7 +152,7 @@ def create_code_intelligence_tools(manager: LanguageServers) -> list[ToolDefinit
                     None,
                 )
                 if match is None:
-                    raise ValueError("Place the cursor on a symbol")
+                    raise ValueError("Place the cursor on a symbol") from None
                 name = match.group()
                 result = []
                 for file in fallback.source_files(Path(context.cwd)):

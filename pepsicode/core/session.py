@@ -15,7 +15,7 @@ import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 from tempfile import NamedTemporaryFile
-from typing import Any
+from typing import Any, cast
 
 from pepsicode.agents.trace import TraceManager
 from pepsicode.config import PEPSI_CODE_DIR
@@ -140,7 +140,7 @@ class SessionData:
     parent_entry_id: str | None = None
     _default_plan_start: bool = field(default=False, repr=False, compare=False)
     _tree_lock: Any = field(default_factory=threading.RLock, repr=False, compare=False)
-    metadata: SessionMetadata = field(default=None)
+    metadata: SessionMetadata = field(default=cast(SessionMetadata, None))
     agent_traces: TraceManager = field(init=False, repr=False, compare=False)
 
     def __post_init__(self):
@@ -309,6 +309,7 @@ def _save_session_locked(session: SessionData) -> None:
 
     # Save full session data
     session_path = _session_file(session.session_id)
+    traces_payload = session.agent_traces.serialize()
     serializable = {
         "session_id": session.session_id,
         "created_at": session.created_at,
@@ -328,7 +329,7 @@ def _save_session_locked(session: SessionData) -> None:
         "verification_state": session.verification_state,
         "execution_state": session.execution_state,
         "task_control": session.task_control,
-        "agent_traces": session.agent_traces.serialize(),
+        "agent_traces": traces_payload,
         "loaded_tools": session.loaded_tools,
         "tree": session.tree,
         "parent_session_id": session.parent_session_id,
@@ -346,7 +347,7 @@ def _save_session_locked(session: SessionData) -> None:
     }
     _atomic_write(session_path, json.dumps(serializable, indent=2, ensure_ascii=False) + "\n")
     session.agent_traces.set_persistence_error(None)
-    session.agent_traces.retain_recent(serializable["agent_traces"]["records"])
+    session.agent_traces.retain_recent(traces_payload["records"])
 
     # The session file is the authoritative commit. An auxiliary index failure
     # must not report rejection after input has already been durably accepted.
@@ -394,7 +395,7 @@ def load_session(session_id: str) -> SessionData | None:
             from pepsicode.orchestration.reporting import worker_report_only, worker_results
 
             workers = worker_results(control, task)
-            current_proof = (
+            current_proof = bool(
                 proof.get("valid")
                 and proof.get("task_revision") == task["revision"]
                 and worker_report_only(task)
@@ -428,7 +429,7 @@ def load_session(session_id: str) -> SessionData | None:
                     proof_workspace = checkout_path
                     delivered_ok = _read_git_head(Path(checkout_path)) == expected_sha
             try:
-                current_proof = (
+                current_proof = bool(
                     delivered_ok
                     and proof.get("valid")
                     and proof.get("task_revision") == task["revision"]

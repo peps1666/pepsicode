@@ -46,7 +46,7 @@ class Check:
 def command_timeout(value, name="verificationTimeout") -> int:
     if isinstance(value, bool) or not isinstance(value, int) or not 1 <= value <= COMMAND_TIMEOUT:
         raise ValueError(f"{name} must be an integer from 1 to {COMMAND_TIMEOUT}")
-    return value
+    return int(value)
 
 
 def _configured_checks(root: Path, configured) -> list[Check]:
@@ -105,7 +105,7 @@ def _package_manager(package: Path, root: Path, manifests: dict, override) -> st
     if override is not None:
         if override not in PACKAGE_LOCKS:
             raise ValueError("verificationDiscovery.packageManager must be npm, pnpm, yarn or bun")
-        return override
+        return str(override)
     current = package
     while True:
         declaration = manifests.get(current, {}).get("packageManager")
@@ -147,7 +147,7 @@ def discover_checks(cwd: str, configured=None, discovery=None) -> list[Check]:
     excluded = DEFAULT_EXCLUDES | set(excludes)
     manifests = {}
     python_projects = {root}
-    python_tests = []
+    python_tests: list[Path] = []
     pytest_projects = set()
     for visited, (parent, directories, files) in enumerate(os.walk(root), start=1):
         if visited > limit:

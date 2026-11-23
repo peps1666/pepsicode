@@ -73,7 +73,8 @@ class QueuedInput:
         if self.answer_to:
             message["source"]["answerTo"] = list(self.answer_to)
         if self.external:
-            message.update(internal=True, source={"kind": "external-event", "id": self.id})
+            message["internal"] = True
+            message["source"] = {"kind": "external-event", "id": self.id}
         return message
 
 

@@ -47,7 +47,7 @@ def classify_failure(attempt) -> str:
     """Classify one failed attempt from its persisted outcome text."""
     evidence = settled_evidence(attempt)
     if evidence is not None:
-        return evidence["class"]
+        return str(evidence["class"])
     text = str(attempt.get("summary") or attempt.get("error") or "").lower()
     if not text:
         return "unknown"

@@ -239,6 +239,7 @@ def cmd_foreground(args: argparse.Namespace) -> int:
             print(error)
             return 1
         return _run_foreground(args, workspace)
+    return 1
 
 
 def _run_foreground(args: argparse.Namespace, workspace: Path) -> int:
@@ -253,7 +254,7 @@ def _run_foreground(args: argparse.Namespace, workspace: Path) -> int:
     runtime = {**settings, "orchestration": {**settings.get("orchestration", {}), "executionMode": "service"}}
     port = args.port if args.port is not None else int((settings.get("service") or {}).get("port", 0))
     generation = secrets.token_urlsafe(8)
-    host = ServiceHost(workspace, runtime, token=token, port=port, generation=generation)
+    host = ServiceHost(str(workspace), runtime, token=token, port=port, generation=generation)
     server = PepsiCodeServer(port=port, host="127.0.0.1", token=token, service_host=host)
 
     import asyncio

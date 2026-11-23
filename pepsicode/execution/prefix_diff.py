@@ -41,7 +41,7 @@ def first_difference(before: Any, after: Any, path: str = "") -> str | None:
             label = key if key in _PUBLIC_KEYS else "key#" + hashlib.sha256(str(key).encode()).hexdigest()[:12]
             child = f"{path}.{label}" if path else label
             if key not in before or key not in after:
-                return child
+                return str(child)
             difference = first_difference(before[key], after[key], child)
             if difference is not None:
                 return difference
@@ -149,7 +149,7 @@ def compare_prepared(records: Iterable[dict[str, Any]], *, include_cross_task: b
                 if endpoint_changed
                 else "model"
                 if model_changed
-                else next((k for k in ("tools", "system", "messages") if diffs[k] is not None), None)
+                else (next((k for k in ("tools", "system", "messages") if diffs[k] is not None), "") or None)
             )
             if not intact
             else None

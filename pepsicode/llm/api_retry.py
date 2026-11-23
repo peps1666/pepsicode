@@ -82,7 +82,7 @@ def calculate_backoff(
     backoff = backoff + random.uniform(-jitter_range, jitter_range)
 
     # Ensure positive and capped
-    return max(0.1, min(backoff, max_wait))
+    return float(max(0.1, min(backoff, max_wait)))
 
 
 # ---------------------------------------------------------------------------
@@ -155,7 +155,7 @@ def retry_with_backoff(
                     f"API call failed after {max_retries + 1} attempts: {e}",
                     attempts=attempt + 1,
                     last_error=e,
-                )
+                ) from e
 
             # Extract Retry-After header if available
             retry_after = getattr(e, "retry_after", None)
@@ -294,7 +294,7 @@ async def retry_with_backoff_async(
                     f"API call failed after {max_retries + 1} attempts: {e}",
                     attempts=attempt + 1,
                     last_error=e,
-                )
+                ) from e
 
             retry_after = getattr(e, "retry_after", None)
             wait_time = calculate_backoff(

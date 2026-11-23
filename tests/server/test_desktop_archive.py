@@ -1,8 +1,21 @@
+import json
 import zipfile
+from pathlib import Path
 
 import pytest
 
 from scripts.archive_desktop import create_archive
+
+
+def test_desktop_package_extra_files_have_valid_utf8_names():
+    root = Path(__file__).resolve().parents[2]
+    client_dir = root / "pepsicode-client"
+    pkg = json.loads((client_dir / "package.json").read_text(encoding="utf-8"))
+    extra_files = pkg["build"]["extraFiles"]
+    mapping = {entry["from"]: entry["to"] for entry in extra_files}
+    assert mapping.get("../docs/portable-readme.txt") == "使用说明.txt"
+    for src in mapping:
+        assert (client_dir / src).is_file(), f"Missing extraFiles source: {src}"
 
 
 def test_archive_roundtrips_binary_and_unicode_paths(tmp_path):

@@ -5,7 +5,7 @@ from collections.abc import Callable, Generator, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import closing, nullcontext
 from contextvars import copy_context
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from typing import Any, cast
 
 from pepsicode.cancellation import TurnCancelledError, cancellable_turn, raise_if_cancelled
@@ -20,8 +20,16 @@ from pepsicode.llm.assistant_text import AssistantTextStream, parse_assistant_te
 from pepsicode.llm.cost_tracker import BudgetExceededError, CostTracker
 from pepsicode.logging_config import get_logger
 from pepsicode.permissions import PermissionManager
-from pepsicode.tooling import ToolContext, ToolRegistry, ToolResult
-from pepsicode.types import AgentStep, ChatMessage, ModelAdapter, StreamToken
+from pepsicode.tooling import ToolContext, ToolRegistry, ToolResult, ToolStatus
+from pepsicode.types import (
+    AgentStep,
+    ChatMessage,
+    ModelAdapter,
+    ProviderThinkingBlock,
+    StepDiagnostics,
+    StreamToken,
+    ToolCall,
+)
 from pepsicode.usage import prompt_tokens
 
 logger = get_logger("agent_loop")
@@ -33,13 +41,6 @@ MAX_PARALLEL_TOOLS = 8
 NUDGE_CONTINUE = (
     "Continue immediately from your <progress> update with concrete tool calls, "
     "code changes, or an explicit <final> answer only if the task is complete."
-)
-
-NUDGE_AFTER_TOOL_RESULT = (
-    "Continue from your progress update. You have already used tools in this turn, "
-    "so treat plain status text as progress, not a final answer. Respond with the "
-    "next concrete tool call, code change, or an explicit <final> answer only if "
-    "the task is truly complete."
 )
 
 NUDGE_AFTER_EMPTY_RESPONSE = (
@@ -92,17 +93,16 @@ def _is_recoverable_thinking_stop(
     return "thinking" in (block_types or []) or "thinking" in (ignored_block_types or [])
 
 
-def _should_treat_assistant_as_progress(*, kind: str | None, content: str, saw_tool_result: bool) -> bool:
-    if kind == "progress":
-        return True
-    if kind == "final":
-        return False
-    if not saw_tool_result:
-        return False
-    return False
-
-
-def _unfinished_step(reason, text, messages, hooks, cwd, permissions, agent_scope, callback=None):
+def _unfinished_step(
+    reason: str | None,
+    text: str,
+    messages: list[ChatMessage],
+    hooks: HookEngine | None,
+    cwd: str,
+    permissions: PermissionManager | None,
+    agent_scope: str,
+    callback: Callable[[str], None] | None = None,
+) -> list[ChatMessage] | None:
     if reason not in {"max_tokens", "stream_incomplete", "pause_turn", "refusal"}:
         return None
     message = (
@@ -139,7 +139,7 @@ def _record_cost_usage(model: ModelAdapter, cost_tracker: CostTracker | None) ->
     if cost_tracker is None:
         return
     if getattr(model, "_usage_recorded", False):
-        model._usage_recorded = False
+        cast(Any, model)._usage_recorded = False
         return
     usage = getattr(model, "last_usage", None)
     if not isinstance(usage, dict):
@@ -440,7 +440,40 @@ def _finish_hook_turn(
     return messages
 
 
-def _finish_cancelled_turn(messages, hooks, cwd, permissions, scope, notify):
+def _model_error_message(error: Exception) -> str:
+    if isinstance(error, ConnectionError):
+        return f"Network error (connection failed or dropped): {error}"
+    if isinstance(error, TimeoutError):
+        return f"Model API timeout: {error}"
+    return f"Model API error ({type(error).__name__}): {error}"
+
+
+def _finish_model_error(
+    messages: list[ChatMessage],
+    hooks: HookEngine | None,
+    cwd: str,
+    permissions: PermissionManager | None,
+    agent_scope: str,
+    message: str,
+    notify: Callable[[str], None] | None,
+) -> list[ChatMessage]:
+    logger.error("%s", message)
+    if notify:
+        notify(message)
+    messages.append({"role": "assistant", "content": message, "isError": True})
+    return _finish_hook_turn(
+        messages, hooks, cwd=cwd, permissions=permissions, agent_scope=agent_scope, status="error", error=message
+    )
+
+
+def _finish_cancelled_turn(
+    messages: list[ChatMessage],
+    hooks: HookEngine | None,
+    cwd: str,
+    permissions: PermissionManager | None,
+    scope: str,
+    notify: Callable[[str], None] | None,
+) -> list[ChatMessage]:
     message = "Task stopped by user."
     messages.append({"role": "assistant", "content": message})
     if notify:
@@ -588,7 +621,7 @@ def _execute_calls_in_order(
                 ToolResult(
                     False,
                     "exit_plan_mode must be the only tool call in its response; no tools were executed.",
-                    status="blocked",
+                    status=ToolStatus.BLOCKED,
                 ),
             )
             finish(k, results[k])
@@ -616,21 +649,48 @@ def _execute_calls_in_order(
     return results
 
 
-@scoped_turn
-@cancellable_turn
-def run_agent_turn(
+@dataclass(slots=True)
+class _TurnLoopState:
+    saw_tool_result: bool = False
+    empty_response_retry_count: int = 0
+    recoverable_thinking_retry_count: int = 0
+    overflow_retry_count: int = 0
+    tool_error_count: int = 0
+    step: int = 0
+
+
+@dataclass(slots=True)
+class _FetchedStep:
+    step: AgentStep
+    raw_content: str
+    stream_mode: bool = False
+
+
+_StepFetcher = Callable[[list[ChatMessage], list[ChatMessage]], _FetchedStep]
+
+
+def _append_thinking_blocks(current_messages: list[ChatMessage], step: AgentStep) -> None:
+    thinking_blocks = getattr(step, "thinkingBlocks", None)
+    if thinking_blocks:
+        current_messages.append({"role": "assistant_thinking", "blocks": thinking_blocks})
+
+
+def _run_turn_core(
     *,
     model: ModelAdapter,
     tools: ToolRegistry,
     messages: list[ChatMessage],
     cwd: str,
+    fetch_step: _StepFetcher,
     permissions: PermissionManager | None = None,
-    max_steps: int = 50,
+    max_steps: int | None = 50,
     on_tool_start: Callable[[str, dict], None] | None = None,
     on_tool_result: Callable[[str, str, bool], None] | None = None,
     on_tool_event: Callable[[str, dict[str, Any]], None] | None = None,
     on_assistant_message: Callable[[str], None] | None = None,
     on_progress_message: Callable[[str], None] | None = None,
+    error_notify: Callable[[str], None] | None = None,
+    cancel_notify: Callable[[str], None] | None = None,
     yield_after_progress: Callable[[], bool] | None = None,
     context_manager: ContextManager | None = None,
     cost_tracker: CostTracker | None = None,
@@ -644,12 +704,7 @@ def run_agent_turn(
 ) -> list[ChatMessage]:
     current_messages = list(messages)
     checkpoint_messages(current_messages)
-    saw_tool_result = False
-    empty_response_retry_count = 0
-    recoverable_thinking_retry_count = 0
-    overflow_retry_count = 0
-    tool_error_count = 0
-    step = 0
+    state = _TurnLoopState()
     artifact_store = ContextArtifactStore.for_workspace(cwd)
     start_event = HookEvent.SUBAGENT_START if agent_scope.startswith("subagent") else HookEvent.AGENT_START
     _emit_hook(
@@ -685,10 +740,11 @@ def run_agent_turn(
             if on_assistant_message:
                 on_assistant_message(context_manager.get_context_summary())
 
-    while max_steps is None or step < max_steps:
-        if current_scope() is not None and current_scope().parent_task_id:
-            current_scope().check_cancelled()
-        step += 1
+    while max_steps is None or state.step < max_steps:
+        scope = current_scope()
+        if scope is not None and scope.parent_task_id:
+            scope.check_cancelled()
+        state.step += 1
         checkpoint_messages(current_messages)
         # Budget guard: stop before doing more work once the cap is hit.
         _check_budget(cost_tracker, cost_limit_usd)
@@ -701,7 +757,6 @@ def run_agent_turn(
                 hook_engine=hook_engine,
                 agent_scope=agent_scope,
             )
-        next_step: AgentStep
         if context_manager is not None:
             context_manager.messages = cast(list[dict[str, Any]], current_messages)
             if context_manager.should_auto_compact():
@@ -718,33 +773,31 @@ def run_agent_turn(
                     )
         try:
             raise_if_cancelled()
-            with current_scope().observe_activity("model", "model-turn"):
-                next_step = model.next(
-                    _messages_for_model(
-                        current_messages,
-                        hook_engine,
-                        cwd=cwd,
-                        permissions=permissions,
-                        tools=tools,
-                        memory=memory,
-                        runtime=getattr(model, "runtime", None),
-                        worker_rounds_left=_worker_rounds_left(agent_scope, max_steps, step),
-                    )
-                )
+            prepared_messages = _messages_for_model(
+                current_messages,
+                hook_engine,
+                cwd=cwd,
+                permissions=permissions,
+                tools=tools,
+                memory=memory,
+                runtime=getattr(model, "runtime", None),
+                worker_rounds_left=_worker_rounds_left(agent_scope, max_steps, state.step),
+            )
+            active_scope = current_scope()
+            with active_scope.observe_activity("model", "model-turn") if active_scope is not None else nullcontext():
+                fetched = fetch_step(prepared_messages, current_messages)
             raise_if_cancelled()
         except TurnCancelledError:
-            return _finish_cancelled_turn(
-                current_messages, hook_engine, cwd, permissions, agent_scope, on_assistant_message
-            )
+            return _finish_cancelled_turn(current_messages, hook_engine, cwd, permissions, agent_scope, cancel_notify)
         except (KeyboardInterrupt, BudgetExceededError, ModelRequestLimitError):
             raise  # Let Ctrl-C propagate
         except ContextOverflowError as error:
             # API rejected the request as too large.  Compact and retry rather
             # than failing the turn (mirrors Claude Code's 400/413 handling).
-            if context_manager is not None and overflow_retry_count < 3:
-                overflow_retry_count += 1
+            if context_manager is not None and state.overflow_retry_count < 3:
+                state.overflow_retry_count += 1
                 logger.warning(
-                    "Context overflow (%s); compacting and retrying (attempt %d)", error, overflow_retry_count
+                    "Context overflow (%s); compacting and retrying (attempt %d)", error, state.overflow_retry_count
                 )
                 context_manager.messages = cast(list[dict[str, Any]], current_messages)
                 previous_count = len(current_messages)
@@ -758,89 +811,32 @@ def run_agent_turn(
                     data={"reason": "overflow", "before": previous_count, "after": len(current_messages)},
                 )
                 if not context_manager.last_compaction_changed:
-                    if overflow_retry_count == 1:
+                    if state.overflow_retry_count == 1:
                         logger.warning("Compaction made no change; allowing one direct retry before circuit break")
-                        step -= 1
+                        state.step -= 1
                         continue
                     reason = context_manager.last_compaction_error or "no safe reduction was available"
                     fallback = f"Context too large and safe compaction made no progress ({reason}): {error}"
-                    logger.error("Context overflow, compaction circuit stopped retries: %s", reason)
-                    if on_assistant_message:
-                        on_assistant_message(fallback)
-                    current_messages.append({"role": "assistant", "content": fallback})
-                    return _finish_hook_turn(
-                        current_messages,
-                        hook_engine,
-                        cwd=cwd,
-                        permissions=permissions,
-                        agent_scope=agent_scope,
-                        status="error",
-                        error=fallback,
+                    return _finish_model_error(
+                        current_messages, hook_engine, cwd, permissions, agent_scope, fallback, error_notify
                     )
                 if on_progress_message:
                     on_progress_message(context_manager.get_context_summary())
-                step -= 1  # don't consume a step on a pure retry
+                state.step -= 1  # don't consume a step on a pure retry
                 continue
             fallback = f"Context too large and could not be compacted further: {error}"
-            logger.error("Context overflow, no recovery: %s", error)
-            if on_assistant_message:
-                on_assistant_message(fallback)
-            current_messages.append({"role": "assistant", "content": fallback})
-            return _finish_hook_turn(
-                current_messages,
-                hook_engine,
-                cwd=cwd,
-                permissions=permissions,
-                agent_scope=agent_scope,
-                status="error",
-                error=fallback,
-            )
-        except ConnectionError as error:
-            fallback = f"Network error (connection failed or dropped): {error}"
-            logger.error("Model API connection error: %s", error)
-            if on_assistant_message:
-                on_assistant_message(fallback)
-            current_messages.append({"role": "assistant", "content": fallback})
-            return _finish_hook_turn(
-                current_messages,
-                hook_engine,
-                cwd=cwd,
-                permissions=permissions,
-                agent_scope=agent_scope,
-                status="error",
-                error=fallback,
-            )
-        except TimeoutError as error:
-            fallback = f"Model API timeout: {error}"
-            logger.error("Model API timeout: %s", error)
-            if on_assistant_message:
-                on_assistant_message(fallback)
-            current_messages.append({"role": "assistant", "content": fallback})
-            return _finish_hook_turn(
-                current_messages,
-                hook_engine,
-                cwd=cwd,
-                permissions=permissions,
-                agent_scope=agent_scope,
-                status="error",
-                error=fallback,
+            return _finish_model_error(
+                current_messages, hook_engine, cwd, permissions, agent_scope, fallback, error_notify
             )
         except Exception as error:
-            # Catch-all for unexpected errors (rate limit, auth, server 5xx, etc.)
-            error_type = type(error).__name__
-            fallback = f"Model API error ({error_type}): {error}"
-            logger.error("Model API error (%s): %s", error_type, error)
-            if on_assistant_message:
-                on_assistant_message(fallback)
-            current_messages.append({"role": "assistant", "content": fallback})
-            return _finish_hook_turn(
+            return _finish_model_error(
                 current_messages,
                 hook_engine,
-                cwd=cwd,
-                permissions=permissions,
-                agent_scope=agent_scope,
-                status="error",
-                error=fallback,
+                cwd,
+                permissions,
+                agent_scope,
+                _model_error_message(error),
+                error_notify,
             )
 
         # Record real token usage from the provider when available, so context
@@ -855,41 +851,40 @@ def run_agent_turn(
         _record_cost_usage(model, cost_tracker)
         _notify_usage(model, on_usage)
 
+        next_step = fetched.step
         diagnostics = next_step.diagnostics
-        reason = diagnostics.stopReason if diagnostics else None
-        recoverable_empty_thinking = _is_recoverable_thinking_stop(
-            is_empty=not next_step.content.strip() and not next_step.calls,
-            stop_reason=reason,
-            block_types=diagnostics.blockTypes if diagnostics else None,
-            ignored_block_types=diagnostics.ignoredBlockTypes if diagnostics else None,
+        step_stop_reason = diagnostics.stopReason if diagnostics else None
+        recoverable_empty_thinking = (
+            False
+            if fetched.stream_mode
+            else _is_recoverable_thinking_stop(
+                is_empty=not next_step.content.strip() and not next_step.calls,
+                stop_reason=step_stop_reason,
+                block_types=diagnostics.blockTypes if diagnostics else None,
+                ignored_block_types=diagnostics.ignoredBlockTypes if diagnostics else None,
+            )
         )
         unfinished = (
             None
             if recoverable_empty_thinking
             else _unfinished_step(
-                reason,
-                next_step.content,
+                step_stop_reason,
+                fetched.raw_content,
                 current_messages,
                 hook_engine,
                 cwd,
                 permissions,
                 agent_scope,
-                on_assistant_message,
+                error_notify,
             )
         )
         if unfinished is not None:
             return unfinished
+
         if next_step.type == "assistant":
             is_empty = _is_empty_assistant_response(next_step.content)
-            if not is_empty and _should_treat_assistant_as_progress(
-                kind=getattr(next_step, "kind", None),
-                content=next_step.content,
-                saw_tool_result=saw_tool_result,
-            ):
-                # Preserve thinking blocks before progress message
-                thinking_blocks = getattr(next_step, "thinkingBlocks", None)
-                if thinking_blocks:
-                    current_messages.append({"role": "assistant_thinking", "blocks": thinking_blocks})
+            if not is_empty and getattr(next_step, "kind", None) == "progress":
+                _append_thinking_blocks(current_messages, next_step)
                 if on_progress_message:
                     on_progress_message(next_step.content)
                 current_messages.append({"role": "assistant_progress", "content": next_step.content})
@@ -901,32 +896,24 @@ def run_agent_turn(
                     {
                         "role": "user",
                         "internal": True,
-                        "content": (
-                            NUDGE_AFTER_TOOL_RESULT
-                            if saw_tool_result and getattr(next_step, "kind", None) != "progress"
-                            else NUDGE_CONTINUE
-                        ),
+                        "content": NUDGE_CONTINUE,
                     }
                 )
                 continue
 
-            diagnostics = next_step.diagnostics
-
             if (
-                _is_recoverable_thinking_stop(
+                not fetched.stream_mode
+                and _is_recoverable_thinking_stop(
                     is_empty=is_empty,
                     stop_reason=diagnostics.stopReason if diagnostics else None,
                     block_types=diagnostics.blockTypes if diagnostics else None,
                     ignored_block_types=diagnostics.ignoredBlockTypes if diagnostics else None,
                 )
-                and recoverable_thinking_retry_count < 3
+                and state.recoverable_thinking_retry_count < 3
             ):
-                recoverable_thinking_retry_count += 1
+                state.recoverable_thinking_retry_count += 1
                 stop_reason = diagnostics.stopReason if diagnostics else None
-                # Preserve thinking blocks from the interrupted response
-                thinking_blocks = getattr(next_step, "thinkingBlocks", None)
-                if thinking_blocks:
-                    current_messages.append({"role": "assistant_thinking", "blocks": thinking_blocks})
+                _append_thinking_blocks(current_messages, next_step)
                 progress_content = (
                     "Model hit max_tokens during thinking; requesting the next step."
                     if stop_reason == "max_tokens"
@@ -944,13 +931,15 @@ def run_agent_turn(
                 )
                 continue
 
-            if is_empty and empty_response_retry_count < 2:
-                empty_response_retry_count += 1
+            if is_empty and state.empty_response_retry_count < 2:
+                state.empty_response_retry_count += 1
                 current_messages.append(
                     {
                         "role": "user",
                         "internal": True,
-                        "content": (NUDGE_AFTER_EMPTY_RESPONSE if saw_tool_result else NUDGE_AFTER_EMPTY_NO_TOOLS),
+                        "content": (
+                            NUDGE_AFTER_EMPTY_RESPONSE if state.saw_tool_result else NUDGE_AFTER_EMPTY_NO_TOOLS
+                        ),
                     }
                 )
                 continue
@@ -961,20 +950,17 @@ def run_agent_turn(
                     diagnostics.blockTypes if diagnostics else None,
                     diagnostics.ignoredBlockTypes if diagnostics else None,
                 )
-                if saw_tool_result:
+                if state.saw_tool_result:
                     fallback = (
-                        f"Model returned an empty response after tool execution and the turn was stopped. There were {tool_error_count} tool error(s); retry, adjust the command, or choose a different approach.{diagnostics_suffix}"
-                        if tool_error_count > 0
+                        f"Model returned an empty response after tool execution and the turn was stopped. There were {state.tool_error_count} tool error(s); retry, adjust the command, or choose a different approach.{diagnostics_suffix}"
+                        if state.tool_error_count > 0
                         else f"Model returned an empty response after tool execution and the turn was stopped. Retry or ask the model to continue the remaining steps.{diagnostics_suffix}"
                     )
                 else:
                     fallback = f"Model returned an empty response and the turn was stopped.{diagnostics_suffix}"
-                if on_assistant_message:
-                    on_assistant_message(fallback)
-                # Preserve thinking blocks even on empty response
-                thinking_blocks = getattr(next_step, "thinkingBlocks", None)
-                if thinking_blocks:
-                    current_messages.append({"role": "assistant_thinking", "blocks": thinking_blocks})
+                if error_notify:
+                    error_notify(fallback)
+                _append_thinking_blocks(current_messages, next_step)
                 current_messages.append({"role": "assistant", "content": fallback})
                 return _finish_hook_turn(
                     current_messages,
@@ -986,10 +972,7 @@ def run_agent_turn(
                     error=fallback,
                 )
 
-            # Preserve thinking blocks before final assistant response
-            thinking_blocks = getattr(next_step, "thinkingBlocks", None)
-            if thinking_blocks:
-                current_messages.append({"role": "assistant_thinking", "blocks": thinking_blocks})
+            _append_thinking_blocks(current_messages, next_step)
             if on_assistant_message:
                 on_assistant_message(next_step.content)
             current_messages.append({"role": "assistant", "content": next_step.content})
@@ -1012,16 +995,13 @@ def run_agent_turn(
             )
 
         # Preserve thinking blocks before tool call messages (always, even without content)
-        thinking_blocks = getattr(next_step, "thinkingBlocks", None)
-        if thinking_blocks:
-            current_messages.append({"role": "assistant_thinking", "blocks": thinking_blocks})
+        _append_thinking_blocks(current_messages, next_step)
 
         if next_step.content:
-            role = "assistant_progress" if next_step.contentKind == "progress" else "assistant"
-            if role == "assistant_progress":
+            if next_step.contentKind == "progress":
                 if on_progress_message:
                     on_progress_message(next_step.content)
-                current_messages.append({"role": role, "content": next_step.content})
+                current_messages.append({"role": "assistant_progress", "content": next_step.content})
                 if not next_step.calls:
                     current_messages.append(
                         {
@@ -1033,7 +1013,7 @@ def run_agent_turn(
             else:
                 if on_assistant_message:
                     on_assistant_message(next_step.content)
-                current_messages.append({"role": role, "content": next_step.content})
+                current_messages.append({"role": "assistant", "content": next_step.content})
 
         if not next_step.calls and next_step.content and next_step.contentKind != "progress":
             if input_queue is not None and not (cancellation_event is not None and cancellation_event.is_set()):
@@ -1073,8 +1053,9 @@ def run_agent_turn(
             memory=memory,
             cancellation_event=cancellation_event,
         )
+        raw_calls = cast(Sequence[dict[str, Any]], next_step.calls)
         results = _execute_calls_in_order(
-            cast(Sequence[dict[str, Any]], next_step.calls),
+            raw_calls,
             tools,
             context,
             on_tool_start,
@@ -1083,31 +1064,34 @@ def run_agent_turn(
         )
 
         await_user_result = None
-        for call, result in zip(next_step.calls, results, strict=False):
-            saw_tool_result = True
+        for raw_call, result in zip(raw_calls, results, strict=False):
+            state.saw_tool_result = True
             if not result.ok:
-                tool_error_count += 1
-            tool = tools.find(call["toolName"])
+                state.tool_error_count += 1
+            tool = tools.find(raw_call["toolName"])
             bounded_output = prepare_tool_result(
-                tool_name=call["toolName"],
+                tool_name=raw_call["toolName"],
                 output=result.output,
                 budget_chars=tool.max_result_size_chars if tool is not None else 4_000,
                 artifact_store=artifact_store,
             )
             current_messages.append(
-                {
-                    "role": "tool_result",
-                    "toolUseId": call["id"],
-                    "toolName": call["toolName"],
-                    "content": bounded_output,
-                    "isError": not result.ok,
-                    **call.get("_telemetry", {}),
-                }
+                cast(
+                    ChatMessage,
+                    {
+                        "role": "tool_result",
+                        "toolUseId": raw_call["id"],
+                        "toolName": raw_call["toolName"],
+                        "content": bounded_output,
+                        "isError": not result.ok,
+                        **raw_call.get("_telemetry", {}),
+                    },
+                )
             )
             if context_manager is not None:
                 context_manager.observe_tool_result(
-                    call["toolName"],
-                    call.get("input") or {},
+                    raw_call["toolName"],
+                    raw_call.get("input") or {},
                     bounded_output,
                     result.ok,
                 )
@@ -1132,8 +1116,8 @@ def run_agent_turn(
             )
 
     fallback = "Reached the maximum tool step limit for this turn."
-    if on_assistant_message:
-        on_assistant_message(fallback)
+    if error_notify:
+        error_notify(fallback)
     current_messages.append({"role": "assistant", "content": fallback})
     return _finish_hook_turn(
         current_messages,
@@ -1143,6 +1127,64 @@ def run_agent_turn(
         agent_scope=agent_scope,
         status="max_steps",
         error=fallback,
+    )
+
+
+@scoped_turn
+@cancellable_turn
+def run_agent_turn(
+    *,
+    model: ModelAdapter,
+    tools: ToolRegistry,
+    messages: list[ChatMessage],
+    cwd: str,
+    permissions: PermissionManager | None = None,
+    max_steps: int = 50,
+    on_tool_start: Callable[[str, dict], None] | None = None,
+    on_tool_result: Callable[[str, str, bool], None] | None = None,
+    on_tool_event: Callable[[str, dict[str, Any]], None] | None = None,
+    on_assistant_message: Callable[[str], None] | None = None,
+    on_progress_message: Callable[[str], None] | None = None,
+    yield_after_progress: Callable[[], bool] | None = None,
+    context_manager: ContextManager | None = None,
+    cost_tracker: CostTracker | None = None,
+    cost_limit_usd: float | None = None,
+    on_usage: Callable[[dict], None] | None = None,
+    hook_engine: HookEngine | None = None,
+    agent_scope: str = "main",
+    memory: Any | None = None,
+    cancellation_event: Any | None = None,
+    input_queue: TurnInputQueue | None = None,
+) -> list[ChatMessage]:
+    def fetch_sync_step(prepared_messages: list[ChatMessage], _current_messages: list[ChatMessage]) -> _FetchedStep:
+        next_step = model.next(prepared_messages)
+        return _FetchedStep(step=next_step, raw_content=next_step.content, stream_mode=False)
+
+    return _run_turn_core(
+        model=model,
+        tools=tools,
+        messages=messages,
+        cwd=cwd,
+        fetch_step=fetch_sync_step,
+        permissions=permissions,
+        max_steps=max_steps,
+        on_tool_start=on_tool_start,
+        on_tool_result=on_tool_result,
+        on_tool_event=on_tool_event,
+        on_assistant_message=on_assistant_message,
+        on_progress_message=on_progress_message,
+        error_notify=on_assistant_message,
+        cancel_notify=on_assistant_message,
+        yield_after_progress=yield_after_progress,
+        context_manager=context_manager,
+        cost_tracker=cost_tracker,
+        cost_limit_usd=cost_limit_usd,
+        on_usage=on_usage,
+        hook_engine=hook_engine,
+        agent_scope=agent_scope,
+        memory=memory,
+        cancellation_event=cancellation_event,
+        input_queue=input_queue,
     )
 
 
@@ -1280,13 +1322,6 @@ def run_agent_turn_stream(
     All other semantics (tool execution, context compression, retries) are
     identical to the non-streaming variant.
     """
-    current_messages = list(messages)
-    checkpoint_messages(current_messages)
-    saw_tool_result = False
-    empty_response_retry_count = 0
-    overflow_retry_count = 0
-    tool_error_count = 0
-    step = 0
 
     def emit_error(message: str) -> None:
         if on_error_message is not None:
@@ -1294,440 +1329,87 @@ def run_agent_turn_stream(
         elif on_assistant_message is not None:
             on_assistant_message(message)
 
-    artifact_store = ContextArtifactStore.for_workspace(cwd)
-    start_event = HookEvent.SUBAGENT_START if agent_scope.startswith("subagent") else HookEvent.AGENT_START
-    _emit_hook(
-        hook_engine,
-        start_event,
-        cwd=cwd,
-        permissions=permissions,
-        agent_scope=agent_scope,
-        data={"message_count": len(current_messages)},
-    )
-
-    if context_manager:
-        context_manager.update_runtime_state(cwd, permissions)
-        context_manager.messages = cast(list[dict[str, Any]], current_messages)
-        stats = context_manager.get_stats()
-        logger.info(
-            "Context: %d tokens (%.0f%%), %d messages",
-            stats.total_tokens,
-            stats.usage_percentage,
-            stats.messages_count,
-        )
-        if context_manager.should_auto_compact():
-            logger.warning("Context near limit, auto-compacting...")
-            previous_count = len(current_messages)
-            current_messages = cast(list[ChatMessage], context_manager.compact_messages())
-            _emit_hook(
-                hook_engine,
-                HookEvent.CONTEXT_COMPACT,
-                cwd=cwd,
-                permissions=permissions,
-                agent_scope=agent_scope,
-                data={"reason": "automatic", "before": previous_count, "after": len(current_messages)},
-            )
-            if on_assistant_message:
-                on_assistant_message(context_manager.get_context_summary())
-
-    while max_steps is None or step < max_steps:
-        if current_scope() is not None and current_scope().parent_task_id:
-            current_scope().check_cancelled()
-        step += 1
-        checkpoint_messages(current_messages)
-        # Budget guard: stop before doing more work once the cap is hit.
-        _check_budget(cost_tracker, cost_limit_usd)
-        if input_queue is not None and not (cancellation_event is not None and cancellation_event.is_set()):
-            append_queued_inputs(
-                current_messages,
-                input_queue.take_steering(),
-                cwd=cwd,
-                permissions=permissions,
-                hook_engine=hook_engine,
-                agent_scope=agent_scope,
-            )
-
-        # ------ Stream the model response ------
-        if context_manager is not None:
-            context_manager.messages = cast(list[dict[str, Any]], current_messages)
-            if context_manager.should_auto_compact():
-                before = len(current_messages)
-                current_messages = cast(list[ChatMessage], context_manager.compact_messages())
-                if context_manager.last_compaction_changed:
-                    _emit_hook(
-                        hook_engine,
-                        HookEvent.CONTEXT_COMPACT,
-                        cwd=cwd,
-                        permissions=permissions,
-                        agent_scope=agent_scope,
-                        data={"reason": "automatic", "before": before, "after": len(current_messages)},
-                    )
-        text_content: str = ""
-        parsed_calls: list[dict] | None = None
+    def fetch_stream_step(prepared_messages: list[ChatMessage], current_messages: list[ChatMessage]) -> _FetchedStep:
         thinking_blocks: list[dict[str, Any]] = []
-        stream_stop_reason = None
-        try:
+        stream_stop_reason: str | None = None
+
+        def on_stream_token(token: StreamToken) -> None:
+            nonlocal stream_stop_reason
             raise_if_cancelled()
-            # For the first step we use next_stream(); retries of the same step
-            # fall back to the non-streaming path so error handling stays simple.
-            if step == 1 or True:  # always stream for now
-
-                def on_stream_token(token: StreamToken) -> None:
-                    nonlocal stream_stop_reason
-                    raise_if_cancelled()
-                    if token.type == "done":
-                        stream_stop_reason = token.stop_reason
-                    if token.type == "retry":
-                        record = {
-                            "role": "assistant_progress",
-                            "content": token.content,
-                            "activityKind": "retry",
-                            "retry": token.retry,
-                        }
-                        current_messages.append(record)
-                        if on_tool_event:
-                            on_tool_event("request/retry", {"content": token.content, "retry": token.retry})
-                        elif on_progress_message:
-                            on_progress_message(token.content)
-                        return
-                    if token.type == "usage" and token.usage is not None and context_manager is not None:
-                        context_manager.update_usage(prompt_tokens(token.usage), token.usage.get("output_tokens", 0))
-                    if on_token is not None:
-                        on_token(token)
-
-                token_stream = model.next_stream(
-                    _messages_for_model(
-                        current_messages,
-                        hook_engine,
-                        cwd=cwd,
-                        permissions=permissions,
-                        tools=tools,
-                        memory=memory,
-                        runtime=getattr(model, "runtime", None),
-                        worker_rounds_left=_worker_rounds_left(agent_scope, max_steps, step),
-                    )
+            if token.type == "done":
+                stream_stop_reason = token.stop_reason
+            if token.type == "retry":
+                record = cast(
+                    ChatMessage,
+                    {
+                        "role": "assistant_progress",
+                        "content": token.content,
+                        "activityKind": "retry",
+                        "retry": token.retry,
+                    },
                 )
-                with closing(token_stream) if hasattr(token_stream, "close") else nullcontext(token_stream):
-                    text_content, parsed_calls = _accumulate_stream_tokens(
-                        token_stream,
-                        on_token=on_stream_token,
-                        thinking_blocks=thinking_blocks,
-                    )
-            else:
-                # Fallback non-stream (kept as reference; can be removed later)
-                next_step = model.next(
-                    _messages_for_model(
-                        current_messages,
-                        hook_engine,
-                        cwd=cwd,
-                        permissions=permissions,
-                        tools=tools,
-                        memory=memory,
-                        runtime=getattr(model, "runtime", None),
-                        worker_rounds_left=_worker_rounds_left(agent_scope, max_steps, step),
-                    )
-                )
-                text_content = next_step.content
-                parsed_calls = (
-                    [{"id": c["id"], "toolName": c["toolName"], "input": c.get("input")} for c in next_step.calls]
-                    if next_step.calls
-                    else None
-                )
-            raise_if_cancelled()
+                current_messages.append(record)
+                if on_tool_event:
+                    on_tool_event("request/retry", {"content": token.content, "retry": token.retry})
+                elif on_progress_message:
+                    on_progress_message(token.content)
+                return
+            if token.type == "usage" and token.usage is not None and context_manager is not None:
+                context_manager.update_usage(prompt_tokens(token.usage), token.usage.get("output_tokens", 0))
+            if on_token is not None:
+                on_token(token)
 
-        except TurnCancelledError:
-            return _finish_cancelled_turn(
-                current_messages, hook_engine, cwd, permissions, agent_scope, on_progress_message
+        token_stream = model.next_stream(prepared_messages)
+        with closing(token_stream) if hasattr(token_stream, "close") else nullcontext(token_stream):
+            raw_text, parsed_calls = _accumulate_stream_tokens(
+                token_stream,
+                on_token=on_stream_token,
+                thinking_blocks=thinking_blocks,
             )
-        except (KeyboardInterrupt, BudgetExceededError, ModelRequestLimitError):
-            raise
-        except ContextOverflowError as error:
-            if context_manager is not None and overflow_retry_count < 3:
-                overflow_retry_count += 1
-                logger.warning(
-                    "Context overflow (%s); compacting and retrying (attempt %d)",
-                    error,
-                    overflow_retry_count,
-                )
-                context_manager.messages = cast(list[dict[str, Any]], current_messages)
-                previous_count = len(current_messages)
-                current_messages = cast(list[ChatMessage], context_manager.compact_messages(force=True))
-                _emit_hook(
-                    hook_engine,
-                    HookEvent.CONTEXT_COMPACT,
-                    cwd=cwd,
-                    permissions=permissions,
-                    agent_scope=agent_scope,
-                    data={"reason": "overflow", "before": previous_count, "after": len(current_messages)},
-                )
-                if not context_manager.last_compaction_changed:
-                    if overflow_retry_count == 1:
-                        logger.warning("Compaction made no change; allowing one direct retry before circuit break")
-                        step -= 1
-                        continue
-                    reason = context_manager.last_compaction_error or "no safe reduction was available"
-                    fallback = f"Context too large and safe compaction made no progress ({reason}): {error}"
-                    logger.error("Context overflow, compaction circuit stopped retries: %s", reason)
-                    emit_error(fallback)
-                    current_messages.append({"role": "assistant", "content": fallback, "isError": True})
-                    return _finish_hook_turn(
-                        current_messages,
-                        hook_engine,
-                        cwd=cwd,
-                        permissions=permissions,
-                        agent_scope=agent_scope,
-                        status="error",
-                        error=fallback,
-                    )
-                if on_progress_message:
-                    on_progress_message(context_manager.get_context_summary())
-                step -= 1
-                continue
-            fallback = f"Context too large and could not be compacted further: {error}"
-            logger.error("Context overflow, no recovery: %s", error)
-            emit_error(fallback)
-            current_messages.append({"role": "assistant", "content": fallback, "isError": True})
-            return _finish_hook_turn(
-                current_messages,
-                hook_engine,
-                cwd=cwd,
-                permissions=permissions,
-                agent_scope=agent_scope,
-                status="error",
-                error=fallback,
-            )
-
-        except ConnectionError as error:
-            fallback = f"Network error (connection failed or dropped): {error}"
-            logger.error("Model API connection error: %s", error)
-            emit_error(fallback)
-            current_messages.append({"role": "assistant", "content": fallback, "isError": True})
-            return _finish_hook_turn(
-                current_messages,
-                hook_engine,
-                cwd=cwd,
-                permissions=permissions,
-                agent_scope=agent_scope,
-                status="error",
-                error=fallback,
-            )
-
-        except TimeoutError as error:
-            fallback = f"Model API timeout: {error}"
-            logger.error("Model API timeout: %s", error)
-            emit_error(fallback)
-            current_messages.append({"role": "assistant", "content": fallback, "isError": True})
-            return _finish_hook_turn(
-                current_messages,
-                hook_engine,
-                cwd=cwd,
-                permissions=permissions,
-                agent_scope=agent_scope,
-                status="error",
-                error=fallback,
-            )
-
-        except Exception as error:
-            error_type = type(error).__name__
-            fallback = f"Model API error ({error_type}): {error}"
-            logger.error("Model API error (%s): %s", error_type, error)
-            emit_error(fallback)
-            current_messages.append({"role": "assistant", "content": fallback, "isError": True})
-            return _finish_hook_turn(
-                current_messages,
-                hook_engine,
-                cwd=cwd,
-                permissions=permissions,
-                agent_scope=agent_scope,
-                status="error",
-                error=fallback,
-            )
-
-        # ------ Record token usage ------
-        if context_manager is not None:
-            usage = getattr(model, "last_usage", None)
-            if isinstance(usage, dict):
-                context_manager.update_usage(
-                    prompt_tokens(usage),
-                    usage.get("output_tokens", 0),
-                )
-        _record_cost_usage(model, cost_tracker)
-        _notify_usage(model, on_usage)
-
-        unfinished = _unfinished_step(
-            stream_stop_reason, text_content, current_messages, hook_engine, cwd, permissions, agent_scope, emit_error
-        )
-        if unfinished is not None:
-            return unfinished
-        text_content, text_kind = parse_assistant_text(text_content)
-
-        # ------ Handle empty responses ------
-        is_empty = len(text_content.strip()) == 0 and not parsed_calls
-
-        if is_empty and empty_response_retry_count < 2:
-            empty_response_retry_count += 1
-            current_messages.append(
-                {
-                    "role": "user",
-                    "internal": True,
-                    "content": (NUDGE_AFTER_EMPTY_RESPONSE if saw_tool_result else NUDGE_AFTER_EMPTY_NO_TOOLS),
-                }
-            )
-            continue
-
-        if is_empty:
-            fallback = "Model returned an empty response and the turn was stopped."
-            emit_error(fallback)
-            current_messages.append({"role": "assistant", "content": fallback, "isError": True})
-            return _finish_hook_turn(
-                current_messages,
-                hook_engine,
-                cwd=cwd,
-                permissions=permissions,
-                agent_scope=agent_scope,
-                status="error",
-                error=fallback,
-            )
-
-        # ------ Handle tool calls ------
+        parsed_text, text_kind = parse_assistant_text(raw_text)
+        diagnostics = StepDiagnostics(stopReason=stream_stop_reason) if stream_stop_reason is not None else None
         if parsed_calls:
-            # Signed thinking must precede the tool calls it led to, or the API rejects the replay.
-            if thinking_blocks:
-                current_messages.append({"role": "assistant_thinking", "blocks": thinking_blocks})
-            # Emit the assistant text as progress (if any) before tool calls.
-            if text_content.strip():
-                if on_progress_message:
-                    on_progress_message(text_content)
-                current_messages.append({"role": "assistant_progress", "content": text_content})
-
-            # Record the tool-call messages.
-            for call in parsed_calls:
-                current_messages.append(
-                    {
-                        "role": "assistant_tool_call",
-                        "toolUseId": call["id"],
-                        "toolName": call["toolName"],
-                        "input": call.get("input"),
-                    }
-                )
-
-            context = ToolContext(
-                cwd=cwd,
-                execution=current_scope(),
-                permissions=permissions,
-                hooks=hook_engine,
-                agent_scope=agent_scope,
-                memory=memory,
-                cancellation_event=cancellation_event,
+            step = AgentStep(
+                type="tool_calls",
+                calls=cast(list[ToolCall], parsed_calls),
+                content=parsed_text,
+                contentKind="progress" if parsed_text.strip() else None,
+                thinkingBlocks=cast(list[ProviderThinkingBlock], thinking_blocks),
+                diagnostics=diagnostics,
             )
-            results = _execute_calls_in_order(
-                cast(Sequence[dict[str, Any]], parsed_calls),
-                tools,
-                context,
-                on_tool_start,
-                on_tool_result,
-                on_tool_event,
+        else:
+            step = AgentStep(
+                type="assistant",
+                content=parsed_text,
+                kind=text_kind,
+                thinkingBlocks=cast(list[ProviderThinkingBlock], thinking_blocks),
+                diagnostics=diagnostics,
             )
+        return _FetchedStep(step=step, raw_content=raw_text, stream_mode=True)
 
-            await_user_result = None
-            for call, result in zip(parsed_calls, results, strict=False):
-                saw_tool_result = True
-                if not result.ok:
-                    tool_error_count += 1
-                tool = tools.find(call["toolName"])
-                bounded_output = prepare_tool_result(
-                    tool_name=call["toolName"],
-                    output=result.output,
-                    budget_chars=tool.max_result_size_chars if tool is not None else 4_000,
-                    artifact_store=artifact_store,
-                )
-                current_messages.append(
-                    {
-                        "role": "tool_result",
-                        "toolUseId": call["id"],
-                        "toolName": call["toolName"],
-                        "content": bounded_output,
-                        "isError": not result.ok,
-                        **call.get("_telemetry", {}),
-                    }
-                )
-                if context_manager is not None:
-                    context_manager.observe_tool_result(
-                        call["toolName"],
-                        call.get("input") or {},
-                        bounded_output,
-                        result.ok,
-                    )
-                if result.awaitUser and await_user_result is None:
-                    await_user_result = result
-
-            if await_user_result is None:
-                guidance = _tool_recovery_nudge(parsed_calls, results)
-                if guidance:
-                    current_messages.append(guidance)
-            if await_user_result is not None:
-                if on_assistant_message:
-                    on_assistant_message(await_user_result.output)
-                current_messages.append(
-                    {"role": "assistant", "content": await_user_result.output, "awaitingUser": True}
-                )
-                return _finish_hook_turn(
-                    current_messages,
-                    hook_engine,
-                    cwd=cwd,
-                    permissions=permissions,
-                    agent_scope=agent_scope,
-                    status="awaiting_user",
-                )
-
-            # Continue to the next agent step after tool execution.
-            continue
-
-        if thinking_blocks:
-            current_messages.append({"role": "assistant_thinking", "blocks": thinking_blocks})
-
-        if text_kind == "progress":
-            if on_progress_message:
-                on_progress_message(text_content)
-            current_messages.append({"role": "assistant_progress", "content": text_content})
-            if yield_after_progress is not None and yield_after_progress():
-                return _finish_hook_turn(
-                    current_messages, hook_engine, cwd=cwd, permissions=permissions, agent_scope=agent_scope
-                )
-            current_messages.append({"role": "user", "content": NUDGE_CONTINUE, "internal": True})
-            continue
-
-        # ------ Plain text final answer ------
-        if on_assistant_message:
-            on_assistant_message(text_content)
-        current_messages.append({"role": "assistant", "content": text_content})
-        if input_queue is not None and not (cancellation_event is not None and cancellation_event.is_set()):
-            if append_queued_inputs(
-                current_messages,
-                input_queue.take_steering(),
-                cwd=cwd,
-                permissions=permissions,
-                hook_engine=hook_engine,
-                agent_scope=agent_scope,
-            ):
-                continue
-        return _finish_hook_turn(
-            current_messages,
-            hook_engine,
-            cwd=cwd,
-            permissions=permissions,
-            agent_scope=agent_scope,
-        )
-
-    fallback = "Reached the maximum tool step limit for this turn."
-    emit_error(fallback)
-    current_messages.append({"role": "assistant", "content": fallback, "isError": True})
-    return _finish_hook_turn(
-        current_messages,
-        hook_engine,
+    return _run_turn_core(
+        model=model,
+        tools=tools,
+        messages=messages,
         cwd=cwd,
+        fetch_step=fetch_stream_step,
         permissions=permissions,
+        max_steps=max_steps,
+        on_tool_start=on_tool_start,
+        on_tool_result=on_tool_result,
+        on_tool_event=on_tool_event,
+        on_assistant_message=on_assistant_message,
+        on_progress_message=on_progress_message,
+        error_notify=emit_error,
+        cancel_notify=on_progress_message,
+        yield_after_progress=yield_after_progress,
+        context_manager=context_manager,
+        cost_tracker=cost_tracker,
+        cost_limit_usd=cost_limit_usd,
+        on_usage=on_usage,
+        hook_engine=hook_engine,
         agent_scope=agent_scope,
-        status="max_steps",
-        error=fallback,
+        memory=memory,
+        cancellation_event=cancellation_event,
+        input_queue=input_queue,
     )

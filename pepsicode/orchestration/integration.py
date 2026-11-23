@@ -397,7 +397,7 @@ def run_integration_acceptance(session, scope, integration_id, *, runtime=None):
                 context,
                 call_id,
                 "m4_acceptance_command",
-                lambda: process.run(
+                lambda argv=argv, check=check: process.run(
                     argv,
                     context=context,
                     cwd=check.cwd,

@@ -9,13 +9,14 @@ description = "pepsicode, a lightweight terminal coding assistant for local deve
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
-    "psycopg2-binary>=2.9",
     "websockets>=12.0",
 ]
 
 [project.optional-dependencies]
 intelligence = ["python-lsp-server>=1.12"]
+postgres = ["psycopg2-binary>=2.9"]
 dev = [
+    "mypy>=1.10",
     "pytest>=8.0.0",
     "ruff==0.17.3",
     "pre-commit>=3.7.0",
@@ -39,12 +40,8 @@ ignore = [
     "E501",    # line length — formatter handles this
     "E402",    # module import not at top — intentional in some files
     "E712",    # equality comparison to True/False — test patterns
-    "B904",    # raise without from — verbose, not always needed
     "B905",    # zip without strict — too strict for general use
     "B007",    # unused loop variable — common pattern
-    "B023",    # loop variable binding in lambda — common pattern
-    "B028",    # no explicit stacklevel — not critical
-    "B011",    # assert false — test pattern
     "SIM101",  # duplicate isinstance — can merge but not critical
     "SIM102",  # collapsible if — readability preference
     "SIM103",  # needless bool — readability preference
@@ -59,11 +56,11 @@ ignore = [
     "UP007",   # use X | Y — not urgent
     "UP035",   # deprecated import — still works fine
     "UP042",   # replace str enum — not urgent
-    "F841",    # unused variable — sometimes intentional
 ]
 
 [tool.ruff.lint.per-file-ignores]
 "scripts/integration_check.py" = ["F401"]
+"tests/**/*.py" = ["B011", "B023", "B028", "B904", "F841"]
 
 [tool.ruff.format]
 quote-style = "double"

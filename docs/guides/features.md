@@ -34,7 +34,7 @@
 | 跨文件重命名 | `rename_symbol` 逐文件经过路径与编辑审批，不套用 Python 标识符规则，由对应语言服务校验 |
 | 编辑工具族 | 整文件写入、子串替换、多处精确替换、整文件覆盖、批量多文件编辑、Jupyter Notebook 单元格编辑，改动前先给 diff |
 | 搜索与浏览 | 正则内容搜索、目录列举、带图标的文件树、有界读取，超大输出转为 artifact 后按 ID 分块读回 |
-| 按需加载工具 | 首个请求只发送核心工具定义，模型用 `search_tools` 搜索后再注入，减少每次请求的 schema 体积 |
+| 按需加载工具 | 延迟加载时，首个请求只发送核心工具定义，其余用 `search_tools` 查找 |
 
 ### 质量闭环
 
@@ -59,9 +59,9 @@
 
 | 能力 | 说明 |
 | --- | --- |
-| 四档权限模式 | 只读 / 自动 / 命令免确认 / 完全访问；模式随会话保存，工作区可设置新会话默认值 |
+| 权限模式 | 用 `/permissions` 选择每次询问、自动审批或完全信任，可为工作区设置新会话默认值 |
 | Plan 只读边界 | 只允许只读工具与计划文件写入；Hook 的 `command` 动作在 Plan 中无条件禁用，无法借 Hook 绕过 |
-| 命令审批 | 自动模式要求审批本地进程；命令免确认模式信任所有本地命令，当前没有操作系统级进程隔离 |
+| 命令审批 | 自动审批放行项目内常规命令，高风险命令需确认。默认本地后端以当前用户权限运行，详见[权限与安全](permissions.md) |
 | 连接认证 | 建会话前必须令牌认证并校验 Origin；令牌只走受限 IPC，不进 URL 或日志 |
 | 启动变量隔离 | 子进程继承厂商 Key 与模型设置，同时移除 Electron / Chromium 的运行时注入变量 |
 
@@ -79,7 +79,7 @@
 
 ## 内置工具
 
-默认注册 **38 个内置工具**，MCP 服务器可再动态注入。首轮只发送核心工具，其余通过 `search_tools` 按任务、关键词或准确名称（`query` 传 `*` 可浏览全部并按 `offset` 翻页）加载。
+输入 `/tools` 查看当前会话的工具。默认加载策略按工具定义大小与模型上下文窗口选择一次加载或按需加载。按需加载时，用 `search_tools` 按名称或关键词查找，或用 `query: "*"` 和 `offset` 分页浏览。
 
 | 分类 | 工具 |
 | --- | --- |
@@ -87,7 +87,7 @@
 | 搜索与浏览 | `grep_files`、`list_files`、`file_tree` |
 | 代码智能 | `code_intelligence`、`find_symbols`、`find_references`、`get_ast_info`、`rename_symbol`、`code_review` |
 | 执行与验证 | `run_command`、`run_with_debug`、`test_runner`、`governance_audit` |
-| 协作与规划 | `task`、`todo_write`、`ask_user`、`exit_plan_mode`、`search_tools`、`load_skill` |
+| 协作与规划 | `task`、`task_state`、`agent_status`、`execution_status`、`todo_write`、`ask_user`、`exit_plan_mode`、`search_tools`、`load_skill` |
 | 外部信息 | `web_search`、`web_fetch`、`api_tester` |
 | 数据与服务 | `db_explorer`、`docker_helper` |
 | 版本控制 | `git`、`worktree`、`diff_viewer` |
@@ -95,7 +95,7 @@
 
 `web_search` 使用 Tavily，需在启动环境中设置 `TAVILY_API_KEY`；固定的基础搜索可在 Plan 和只读模式使用，并可能消耗 Tavily 额度。详细设置见[网页搜索](configuration.md#网页搜索)。
 
-写入类工具（`write_file`、`edit_file`、`modify_file`、`patch_file`、`multi_edit`）都会先给出 diff 再落盘，审批规则由当前权限模式决定。可用 `/tools` 查看完整清单，或 `toolCoreTools` 覆盖初始工具名单。
+写入类工具（`write_file`、`edit_file`、`modify_file`、`patch_file`、`multi_edit`）都会先给出 diff 再落盘，审批规则由当前权限模式决定。可用 `toolCoreTools` 配置按需加载时的初始工具。
 
 ## 子代理与后台任务
 

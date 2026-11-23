@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import os
-from typing import Any
+from typing import Any, cast
 
 # DeepSeek is listed first and is the default when no provider is chosen explicitly.
 PROVIDERS = {
@@ -154,7 +154,7 @@ def provider_runtime(runtime: dict, provider: str | None = None) -> dict:
         raise ValueError(f"服务商 {provider!r} 尚未配置")
     if profile is None or (not profile.get("apiKey") and not profile.get("authToken")):
         raise ValueError(f"请先配置 {PROVIDERS[provider]['name']} 的独立 API Key")
-    return profile
+    return cast(dict[Any, Any], profile)
 
 
 def commit_provider(runtime: dict, candidate: dict) -> None:
@@ -178,13 +178,13 @@ def model_settings_snapshot(runtime: dict) -> dict[str, str]:
 
 
 def messages_url(runtime: dict) -> str:
-    base = runtime["baseUrl"].rstrip("/")
+    base = str(runtime["baseUrl"]).rstrip("/")
     return base + ("/messages" if base.endswith("/v1") else "/v1/messages")
 
 
 def auth_headers(runtime: dict) -> dict[str, str]:
     if runtime.get("authType") == "api_key":
-        return {"x-api-key": runtime.get("apiKey") or runtime.get("authToken")}
+        return {"x-api-key": str(runtime.get("apiKey") or runtime.get("authToken") or "")}
     if runtime.get("provider") or not runtime.get("apiKey"):
         return {"Authorization": f"Bearer {runtime.get('authToken') or runtime.get('apiKey')}"}
     return {"x-api-key": runtime["apiKey"]}

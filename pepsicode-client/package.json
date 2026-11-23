@@ -73,7 +73,7 @@
     "extraFiles": [
       {
         "from": "../docs/portable-readme.txt",
-        "to": "浣跨敤璇存槑.txt"
+        "to": "使用说明.txt"
       },
       {
         "from": "../LICENSE",

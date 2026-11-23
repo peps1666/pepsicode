@@ -134,7 +134,7 @@ def _extract_error_message(data: Any, status: int) -> str:
                 return f"Model provider request failed (HTTP {status}): {detail}"
             if len(message) > 1000:
                 message = message[:997].rstrip() + "..."
-            return message
+            return str(message)
     return f"Model request failed: {status}"
 
 
@@ -255,7 +255,7 @@ def _process_sse_event(
                 state.clear()
             state.update(_normalize_usage(usage))
             if usage_state is None:
-                _process_sse_event._pending_usage = state
+                cast(Any, _process_sse_event)._pending_usage = state
             else:
                 yield StreamToken(type="usage", usage=dict(state))
 
@@ -320,7 +320,7 @@ def _consume_pending_usage() -> dict[str, int] | None:
             delattr(_process_sse_event, "_pending_usage")
         except AttributeError:
             pass
-    return usage
+    return cast(dict[str, int] | None, usage)
 
 
 def _parse_assistant_text(content: str) -> tuple[str, Literal["final", "progress"] | None]:
@@ -334,7 +334,7 @@ def _to_text_block(text: str) -> dict[str, str]:
 def _to_assistant_text(message: dict[str, Any]) -> str:
     if message["role"] == "assistant_progress":
         return f"<progress>\n{message['content']}\n</progress>"
-    return message["content"]
+    return str(message["content"])
 
 
 def _push_anthropic_message(messages: list[dict[str, Any]], role: str, block: dict[str, Any]) -> None:
@@ -461,7 +461,7 @@ class AnthropicModelAdapter:
             problem = image_input_error(self.runtime, model)
             if problem:
                 raise ValueError(problem)
-        request_body = {
+        request_body: dict[str, Any] = {
             "model": model,
             "system": system_message,
             "messages": converted_messages,
@@ -509,7 +509,7 @@ class AnthropicModelAdapter:
             problem = image_input_error(self.runtime, model)
             if problem:
                 raise ValueError(problem)
-        request_body = {
+        request_body: dict[str, Any] = {
             "model": model,
             "system": system_message,
             "messages": converted_messages,
@@ -649,11 +649,11 @@ class AnthropicModelAdapter:
                 finally:
                     error.close()
                 if _is_context_overflow(data, status):
-                    raise ContextOverflowError(_extract_error_message(data, status))
+                    raise ContextOverflowError(_extract_error_message(data, status)) from error
                 if not _should_retry_status(status) or attempt >= max_retries:
                     if status == OVERLOAD_STATUS:
-                        raise ServiceOverloadError(_extract_error_message(data, status))
-                    raise RuntimeError(_extract_error_message(data, status))
+                        raise ServiceOverloadError(_extract_error_message(data, status)) from error
+                    raise RuntimeError(_extract_error_message(data, status)) from error
                 reason = f"HTTP {status}"
             except (urllib.error.URLError, TimeoutError, ConnectionError) as error:
                 if self._stream_started:

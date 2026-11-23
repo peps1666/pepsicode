@@ -35,6 +35,9 @@ jobs:
           ruff check pepsicode/ tests/
           ruff format --check pepsicode/ tests/
 
+      - name: Typecheck core packages with mypy
+        run: mypy pepsicode/server pepsicode/execution pepsicode/core pepsicode/llm pepsicode/service pepsicode/orchestration pepsicode/cli/install.py
+
       - name: Run tests
         run: pytest tests/ -v --tb=short
 

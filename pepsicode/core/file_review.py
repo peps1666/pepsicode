@@ -3,7 +3,7 @@ from __future__ import annotations
 import difflib
 from pathlib import Path
 
-from pepsicode.tooling import ToolContext, ToolResult
+from pepsicode.tooling import ToolContext, ToolResult, ToolStatus
 
 
 def build_unified_diff(file_path: str, before: str, after: str) -> str:
@@ -42,5 +42,5 @@ def apply_reviewed_file_change(
     try:
         FILES.write_text(context, target_path, next_content, expected=expected_version)
     except PermissionError as error:
-        return ToolResult(False, str(error), status="blocked")
+        return ToolResult(False, str(error), status=ToolStatus.BLOCKED)
     return ToolResult(ok=True, output=f"Applied reviewed changes to {file_path}")

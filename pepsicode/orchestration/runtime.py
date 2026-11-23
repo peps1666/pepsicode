@@ -460,7 +460,7 @@ def _schedule(
                                     claimed = claim_launch(
                                         session,
                                         generation=generation,
-                                        eligible=lambda row: row["attempt_id"] == attempt_id,
+                                        eligible=lambda row, aid=attempt_id: row["attempt_id"] == aid,
                                     )
                             if claimed is None:
                                 failure = error
@@ -499,8 +499,8 @@ def _schedule(
                             item = claim_launch(
                                 session,
                                 generation=generation,
-                                eligible=lambda row: eligible(row)
-                                and (candidate is None or candidate["attempt_id"] == row["attempt_id"]),
+                                eligible=lambda row, cand=candidate: eligible(row)
+                                and (cand is None or cand["attempt_id"] == row["attempt_id"]),
                             )
                             if item is not None and scope is not None:
                                 stop = stops[item["attempt_id"]] = Event()

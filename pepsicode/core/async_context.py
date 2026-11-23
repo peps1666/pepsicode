@@ -12,7 +12,7 @@ import asyncio
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from pepsicode.context.instructions import load_agent_instructions
 
@@ -77,7 +77,7 @@ class AsyncContextCollector:
 
         # Check cache
         if cache_key in self._cache and not self._cache[cache_key].is_expired():
-            return self._cache[cache_key].value
+            return cast(dict[str, str], self._cache[cache_key].value)
 
         # Collect (parallelized)
         git_status = await self._get_git_status()
@@ -172,7 +172,7 @@ class AsyncContextCollector:
                 timeout=5,
             )
             if result.returncode == 0:
-                return result.stdout.strip()
+                return str(result.stdout).strip()
         except Exception:
             pass
         return "unknown"
@@ -190,7 +190,7 @@ class AsyncContextCollector:
                 timeout=5,
             )
             if result.returncode == 0:
-                return result.stdout.strip() or "clean"
+                return str(result.stdout).strip() or "clean"
         except Exception:
             pass
         return "unknown"
@@ -208,7 +208,7 @@ class AsyncContextCollector:
                 timeout=5,
             )
             if result.returncode == 0:
-                return result.stdout.strip()
+                return str(result.stdout).strip()
         except Exception:
             pass
         return "unknown"

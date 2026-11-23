@@ -7,16 +7,13 @@
 
 # pepsicode
 
-**把「想清楚 → 改完 → 验证通过」走完一遍的本地编程代理**
-
-终端全屏 TUI 与 Electron 桌面客户端共用同一套代理内核：权限感知的工具、只读 Plan、可审计的 Hooks v2、MCP / Skills / 子代理，以及修改后的自动验证与修复。
+**PepsiCode 是本地编程代理。** 在终端、桌面或 QQ 私聊中描述任务，它可以在项目里读代码、改文件、运行检查，并根据失败输出继续修复。
 
 [![Version](https://img.shields.io/badge/version-2.0.7-orange.svg)](docs/development/release-candidate.md)
 ![Python](https://img.shields.io/badge/python-3.11%2B-blue.svg)
 ![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey.svg)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![Providers](https://img.shields.io/badge/providers-DeepSeek%20%C2%B7%20Kimi%20%C2%B7%20GLM%20%C2%B7%20Qwen-8b5cf6.svg)](docs/guides/configuration.md#模型配置)
-[![Tools](https://img.shields.io/badge/built--in%20tools-38-0ea5e9.svg)](docs/guides/features.md#内置工具)
 [![CI](https://github.com/peps1666/pepsicode/actions/workflows/ci.yml/badge.svg)](https://github.com/peps1666/pepsicode/actions/workflows/ci.yml)
 
 [快速开始](#快速开始) · [功能速览](#功能速览) · [文档](#文档) · [权限与安全](docs/guides/permissions.md) · [开发与验证](docs/development/development.md)
@@ -40,45 +37,31 @@
   </tr>
 </table>
 
-<sub>两种前端共享同一套代理内核 · 点击图片查看大图</sub>
-
 </div>
 
-> **English summary** — pepsicode is a Python coding agent for local development workflows, usable from a full-screen terminal UI or an Electron desktop client. It ships 38 built-in tools, LSP-backed code intelligence, an automatic verify-and-fix loop, permission modes with a read-only Plan mode, project-trusted Hooks v2, MCP / Skills / sub-agents, context compaction, multi-provider model switching, and a token-authenticated WebSocket server.
-
-## 这是什么
-
-> **版本：** 当前源码版本为 **2.0.7**。用 `pepsicode --version` 核对提交与 dirty 状态；发行包及其验收结果以 [GitHub Releases](https://github.com/peps1666/pepsicode/releases) 为准。历史候选记录见 [2.0.7 候选](docs/development/release-candidate.md)，已知限制见 [已知问题](docs/development/project-issues.md)。
-
-pepsicode 是一个面向本地开发工作流的 Python 编程代理。它有两种前端、一个内核：既能作为终端里的全屏交互程序使用，也能作为白色主题的桌面应用启动，两者共享同一套工具、权限、Hook 与上下文机制。
-
-它和「只会补全代码」的助手不同的地方在于**闭环**：修改文件后按项目约定跑检查，把失败输出送回模型继续修，修不动就停并交还用户；每个动作都在权限模式、Hooks v2 和可选的语言服务约束下执行；一次会话可以直接切分支重试另一套方案，而原始路线仍然留在历史里。
-
-`规划（可选） → 执行 → 验证 → 交付 / 继续修`
+PepsiCode is a local coding agent for the terminal, desktop, and QQ. It can edit a project and run its checks under the permissions you select.
 
 ## 快速开始
 
-需要 **Python 3.11+**。在仓库根目录执行：
+安装 **Python 3.11+** 后，获取源码并启动终端界面。
 
 ```powershell
 git clone https://github.com/peps1666/pepsicode.git
 cd pepsicode
-python -m pip install -e ".[dev]"
+python -m pip install -e .
 python -m pepsicode --install   # 首次配置服务商/模型
 pepsicode
 ```
 
 首次启动也可以直接输入 `/provider` 选择服务商、填写 API Key 和模型；配置会写入 `~/.pepsi-code/settings.json`。
 
-需要虚拟环境、mock 模式、配置诊断、桌面端构建或便携包说明，见 [安装与启动](docs/guides/getting-started.md) 和 [快速上手指南](ONBOARDING.md)。
+用 `pepsicode --version` 查看本地版本和提交。Windows 便携包的解压、启动与故障排查见[快速上手指南](ONBOARDING.md)，发行包和验收记录见 [GitHub Releases](https://github.com/peps1666/pepsicode/releases)。
 
-> 默认使用 `auto`。`命令免确认` 会以当前用户权限放行任意本地程序，只在信任当前任务时启用；详见 [权限与安全](docs/guides/permissions.md)。
+> 新会话默认使用自动审批。项目内编辑和常规开发命令可自动执行，高风险命令仍需确认。用 `/permissions` 查看或切换模式。见[权限与安全](docs/guides/permissions.md)。
 
 ### 接入 QQ 私聊
 
-通过独立的 OneBot v11 消息通道，可以在 QQ 好友私聊中与 Pepsi 连续对话、处理配置好的本地项目，并在 QQ 中确认需要审批的操作。通道只接收配置的用户发来的好友私聊，目前支持文字，不支持群聊、图片或语音。
-
-需要 Node.js 22+、Python 3.11+、已配置的模型，以及单独安装并登录的 OneBot v11 网关。配置 QQ 账号、项目路径和网关令牌后，在 `integrations/qq` 目录运行 `npm ci`、`npm run check` 和 `npm start`；具体步骤见 [QQ 接入指南](integrations/qq/README.md)。非官方 QQ 网关可能导致账号受限，请先查看指南中的说明。
+QQ 通道接受指定好友的文字私聊，可处理本地项目并在聊天中请求审批。接入需要 Node.js 22+、已配置的模型和已登录的 OneBot v11 网关。配置步骤及非官方网关的账号风险见 [QQ 接入指南](integrations/qq/README.md)。
 
 ## 功能速览
 
@@ -87,33 +70,14 @@ pepsicode
 | 双前端 | 终端全屏 TUI + Electron 桌面客户端，共享代理内核与权限 | [桌面客户端](docs/guides/desktop.md) |
 | 代码理解与修改 | LSP 导航、跨文件重命名、diff 先行的编辑工具族、搜索与文件树 | [功能与工作流](docs/guides/features.md#代码理解与修改) |
 | 自动验证闭环 | 发现 tests / lint / build，失败回送模型修复，报告可追溯 | [质量闭环](docs/guides/features.md#质量闭环) |
-| 权限与 Plan | 四档权限（含命令免确认）、只读 Plan、工作区默认、外部路径/MCP 审批 | [权限与安全](docs/guides/permissions.md) |
-| 扩展与自动化 | Hooks v2、MCP、Skills、四类子代理、Markdown 自定义命令 | [Hooks v2](docs/guides/hooks.md) · [扩展](docs/guides/extensions.md) |
+| 权限与 Plan | 按会话选择审批模式。需要先审方案时进入 Plan，只读调查并写入计划文件 | [权限与安全](docs/guides/permissions.md) |
+| 扩展与自动化 | Hooks v2、MCP、Skills、子代理、Markdown 自定义命令 | [Hooks v2](docs/guides/hooks.md) · [扩展](docs/guides/extensions.md) |
 | QQ 私聊 | OneBot v11 通道，支持文字对话、任务排队、QQ 内审批及断线恢复 | [QQ 接入指南](integrations/qq/README.md) |
 | 上下文与会话 | artifact、压缩、分支/恢复、持久记忆、成本与用量 | [模型、上下文与配置](docs/guides/configuration.md) |
 
 ## 文档
 
-| 文档 | 内容 |
-| --- | --- |
-| [快速上手指南](ONBOARDING.md) | 源码安装、Windows ZIP、常见启动故障 |
-| [安装与启动](docs/guides/getting-started.md) | Python / venv、命令入口、mock 模式、配置诊断 |
-| [功能与工作流](docs/guides/features.md) | 完整能力清单、38 个内置工具、子代理、记忆、队列、分支、Plan |
-| [权限与安全](docs/guides/permissions.md) | 四档权限、工作区默认、审批边界与高风险说明 |
-| [模型、上下文与配置](docs/guides/configuration.md) | 服务商、模型、思考档位、环境变量、上下文管理 |
-| [Hooks v2](docs/guides/hooks.md) | 配置层级、事件、动作、条件模板、管理命令、Python API |
-| [扩展与自动化](docs/guides/extensions.md) | Markdown 自定义命令、Skills 与 MCP |
-| [QQ 接入指南](integrations/qq/README.md) | OneBot 网关配置、私聊命令、审批与断线恢复 |
-| [桌面客户端](docs/guides/desktop.md) | 架构、开发模式、模型配置、Windows ZIP 构建 |
-| [命令速查](docs/guides/commands.md) | 终端与桌面共用的常用斜杠命令 |
-| [设计与开发](docs/development/development.md) | 设计取舍、测试、构建、真实任务评测 |
-| [提交规范](docs/development/CONTRIBUTING.md) | 提交信息、分支命名与提交前检查 |
-| [执行边界](docs/architecture/harness-boundaries.md) | 审批、执行所有权、恢复与并发边界 |
-| [已知问题](docs/development/project-issues.md) | 当前限制、修复记录与验收清单 |
-
-## 设计取舍
-
-优先保证**副作用前审批、失败可见、上下文有界、配置显式**。关键 Hook 在权限检查前确定性阻断；无测试、被拒绝或未执行的检查都不会被算作通过；模型、思考档位和上下文容量都以接口或显式配置为准。完整说明见 [设计与开发](docs/development/development.md)。
+按用途查阅[文档导航](docs/README.md)。开发与测试从[设计与开发](docs/development/development.md)开始，当前限制和待验收项见[项目问题清单](docs/development/project-issues.md)。
 
 ## License
 

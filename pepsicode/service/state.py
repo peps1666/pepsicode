@@ -41,7 +41,7 @@ def service_dir(workspace: str | Path) -> Path:
     return Path(workspace) / ".pepsi-code" / "service"
 
 
-def _atomic_write_json(path: Path, payload: dict) -> None:
+def atomic_write_json(path: Path, payload: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = None
     try:
@@ -139,7 +139,7 @@ def write_running_state(workspace: str | Path, *, port: int, token: str, executi
         "execution_mode": execution_mode,
         "started_at": _now(),
     }
-    _atomic_write_json(service_dir(workspace) / _STATE_FILE, state)
+    atomic_write_json(service_dir(workspace) / _STATE_FILE, state)
     return state
 
 
@@ -150,7 +150,7 @@ def replace_state_on_exit(workspace: str | Path) -> None:
         return
     state["pid"] = 0
     state["stopped_at"] = _now()
-    _atomic_write_json(service_dir(workspace) / _STATE_FILE, state)
+    atomic_write_json(service_dir(workspace) / _STATE_FILE, state)
 
 
 def read_manual_stop(workspace: str | Path) -> dict | None:
@@ -166,7 +166,7 @@ def mark_manual_stop(workspace: str | Path, *, reason: str = "shutdown") -> dict
         "generation": state.get("generation"),
         "reason": str(reason)[:200],
     }
-    _atomic_write_json(service_dir(workspace) / _STOP_FILE, marker)
+    atomic_write_json(service_dir(workspace) / _STOP_FILE, marker)
     return marker
 
 
@@ -199,4 +199,4 @@ def read_health(workspace: str | Path) -> dict | None:
 
 
 def write_health(workspace: str | Path, health: dict) -> None:
-    _atomic_write_json(service_dir(workspace) / _HEALTH_FILE, health)
+    atomic_write_json(service_dir(workspace) / _HEALTH_FILE, health)

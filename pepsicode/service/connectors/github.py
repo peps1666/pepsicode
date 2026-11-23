@@ -20,7 +20,7 @@ import urllib.error
 import urllib.request
 from typing import Any
 
-from pepsicode.service.connectors.base import ConnectorError, ExternalEvent
+from pepsicode.service.connectors.base import Connector, ConnectorError, ExternalEvent
 
 API_BASE = "https://api.github.com"
 REQUEST_TIMEOUT = 20
@@ -49,7 +49,7 @@ def http_get_json(url: str, *, token: str | None) -> tuple[int, Any]:
         raise ConnectorError(f"github request failed: {error}") from error
 
 
-class GitHubConnector:
+class GitHubConnector(Connector):
     name = "github"
 
     def __init__(

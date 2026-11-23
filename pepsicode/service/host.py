@@ -21,7 +21,7 @@ from typing import Any
 
 from pepsicode.core.session import list_sessions, load_session
 from pepsicode.service import state as service_state
-from pepsicode.service.connectors.base import SEEN_IDS_LIMIT, ConnectorManager, ExternalEvent, filter_allowed
+from pepsicode.service.connectors.base import SEEN_IDS_LIMIT, Connector, ConnectorManager, ExternalEvent, filter_allowed
 from pepsicode.service.connectors.github import build_github_connector
 from pepsicode.service.events import EventJournal, EventLogError
 from pepsicode.service.outbox import NotificationOutbox
@@ -55,7 +55,8 @@ class ServiceHost:
 
         connector_settings = (self.runtime.get("service") or {}).get("connectors", {})
         github = build_github_connector(connector_settings.get("github", {}))
-        self.connectors = ConnectorManager(base, [github] if github is not None else [])
+        connectors: list[Connector] = [github] if github is not None else []
+        self.connectors = ConnectorManager(base, connectors)
 
     # -- resident sessions ---------------------------------------------------
 
@@ -173,7 +174,7 @@ class ServiceHost:
                 for session_id in targets:
                     pending.setdefault(session_id, {})[event.external_id] = asdict(event)
                 stored["seen"] = [*stored["seen"], event.external_id][-SEEN_IDS_LIMIT:]
-                service_state._atomic_write_json(self._external_path, stored)
+                service_state.atomic_write_json(self._external_path, stored)
                 for session_id in targets:
                     count = self.flush_pending_external(session_id)
                     delivered += count
@@ -181,7 +182,7 @@ class ServiceHost:
                         held += 1
                         self.notify(dedup_key=f"external:{event.external_id}", title=event.title, body=event.body[:500])
                 if targets:
-                    stored = service_state._read_json(self._external_path)
+                    stored = service_state._read_json(self._external_path) or {"seen": [], "heads": {}, "pending": {}}
                     pending = stored["pending"]
         if dropped:
             self.notify(
@@ -235,7 +236,7 @@ class ServiceHost:
             if session_id in stored["pending"]:
                 if not pending:
                     stored["pending"].pop(session_id)
-                service_state._atomic_write_json(self._external_path, stored)
+                service_state.atomic_write_json(self._external_path, stored)
             return delivered
 
     # -- health --------------------------------------------------------------
