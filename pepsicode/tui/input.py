@@ -46,5 +46,5 @@ def render_input_prompt(
         hint = truncate_plain(hint, max(0, available - 1))
     placeholder = f"{DIM}{hint}{RESET}" if not current_input else ""
 
-    prompt_icon = f"{ACCENT}{ICON_PROMPT}{RESET}"
+    prompt_icon = f"{ACCENT}{BOLD}{ICON_PROMPT}{RESET}"
     return f" {prompt_icon} {before}{REVERSE}{BOLD}{current}{RESET}{after}{placeholder}"

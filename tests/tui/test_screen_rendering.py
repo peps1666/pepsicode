@@ -429,14 +429,21 @@ def test_home_composer_fills_width_and_stays_at_bottom(monkeypatch, capsys, cols
         terminal.apply(capsys.readouterr().out)
         lines = terminal.lines()
         assert len(lines) == rows
-        assert lines[rows - 4].strip() == "─" * (cols - 4)
-        assert lines[rows - 3].startswith("   > ")
+        if cols >= 36 and rows >= 11:
+            assert lines[rows - 5].strip() == f"╭{'─' * (cols - 6)}╮"
+            assert lines[rows - 4].strip().startswith("│  >") and lines[rows - 4].strip().endswith("│")
+            assert lines[rows - 3].strip() == f"╰{'─' * (cols - 6)}╯"
+            menu_end = rows - 5
+        else:
+            assert lines[rows - 4].strip() == "─" * (cols - 4)
+            assert lines[rows - 3].startswith("   > ")
+            menu_end = rows - 4
         assert "BUILD auto" in lines[-2]
         assert "demo" in lines[-1]
         assert all(string_display_width(line) <= cols for line in lines)
         if user_input == "/permissions":
             # The selected command remains visible directly above the input.
-            assert "/permissions" in "\n".join(lines[: rows - 4])
+            assert "/permissions" in "\n".join(lines[:menu_end])
 
 
 def test_home_resize_reflows_input_and_clears_old_positions(monkeypatch, capsys):
@@ -451,7 +458,12 @@ def test_home_resize_reflows_input_and_clears_old_positions(monkeypatch, capsys)
         terminal = TerminalGrid(cols, rows)
         terminal.apply(capsys.readouterr().out)
         lines = terminal.lines()
-        assert lines[rows - 4].strip() == "─" * (cols - 4)
-        assert "> /permissions" in lines[rows - 3]
+        if cols >= 36 and rows >= 11:
+            assert lines[rows - 5].strip() == f"╭{'─' * (cols - 6)}╮"
+            assert "> /permissions" in lines[rows - 4]
+            assert lines[rows - 3].strip() == f"╰{'─' * (cols - 6)}╯"
+        else:
+            assert lines[rows - 4].strip() == "─" * (cols - 4)
+            assert "> /permissions" in lines[rows - 3]
         assert "BUILD auto" in lines[-2]
         assert "demo" in lines[-1]

@@ -86,27 +86,40 @@ from pepsicode.tui.agent_panel import panel_width, render_agent_panel, render_ag
 from pepsicode.tui.chrome import (
     ACCENT,
     BOLD,
+    BORDER,
+    BRAND_LIME,
+    BRAND_LIME_DIM,
     BRIGHT_CYAN,
     BRIGHT_RED,
     BRIGHT_WHITE,
+    CYAN,
     DIM,
     HIGHLIGHT_BG,
     ICON_DOT,
     ITALIC,
+    PLAN_ACCENT,
     RESET,
     SUBTLE,
+    SURFACE_BG,
+    TEXT,
+    TEXT_FAINT,
     USER_BG,
     YELLOW,
     _cached_terminal_size,
+    center_box_frame,
     get_permission_prompt_max_scroll_offset,
     paint_row,
     render_banner,
+    render_box,
+    render_divider,
     render_footer_bar,
     render_panel,
     render_permission_prompt,
+    render_progress_bar,
     render_slash_menu,
     render_status_line,
     render_tool_panel,
+    spinner_char,
     truncate_plain,
     wrap_text,
 )
@@ -1257,14 +1270,33 @@ def _render_home_input_card(state: ScreenState, model: str, provider: str, cols:
     ]
 
 
-def _render_home_brand(cols: int, rows: int) -> list[str]:
-    """Render the supplied pixel-terminal identity without image protocols."""
-    lines = [
-        f"{BRIGHT_WHITE}{BOLD}pepsicode{RESET}  {SUBTLE}{DISPLAY_VERSION}{RESET}",
-        f"{SUBTLE}terminal coding agent{RESET}",
-    ]
-    if rows >= 22 and cols >= 58:
-        lines += ["", *(f"{BRIGHT_WHITE}{row}{RESET}" for row in terminal_mark())]
+def _render_home_brand(cols: int, rows: int, model: str = "", effort: str = "", folder: str = "") -> list[str]:
+    """Render a side-by-side PepsiCode hero aligned with the pixel terminal identity."""
+    if rows >= 16 and cols >= 54:
+        mark = terminal_mark()
+        right: list[str] = [
+            f"{BRIGHT_WHITE}{BOLD}pepsi{BRAND_LIME}code{RESET}  {SUBTLE}{DISPLAY_VERSION}{RESET}",
+            f"{SUBTLE}本地终端编程代理{RESET}",
+            "",
+            (f"{TEXT_FAINT}模型{RESET}  {TEXT}{model}{RESET}" + (f"  {SUBTLE}· {effort}{RESET}" if effort else ""))
+            if model
+            else f"{TEXT_FAINT}终端编程搭档{RESET}",
+            f"{TEXT_FAINT}目录{RESET}  {CYAN}{folder}{RESET}" if folder else "",
+        ]
+        hero: list[str] = []
+        for idx, mark_row in enumerate(mark):
+            mark_color = BRAND_LIME_DIM if idx == 0 else BRAND_LIME
+            styled_mark = f"{mark_color}{mark_row}{RESET}"
+            right_line = right[idx] if idx < len(right) else ""
+            if right_line:
+                hero.append(f"{styled_mark}   {right_line}")
+            else:
+                hero.append(styled_mark)
+        return hero
+
+    lines = [f"{BRIGHT_WHITE}{BOLD}pepsi{BRAND_LIME}code{RESET}  {SUBTLE}{DISPLAY_VERSION}{RESET}"]
+    if rows >= 10:
+        lines.append(f"{SUBTLE}本地终端编程代理{RESET}")
     return lines
 
 
@@ -1275,7 +1307,66 @@ def _permission_mode_label(args: TtyAppArgs) -> str:
     plan = getattr(permissions, "is_plan_mode", False)
     color = YELLOW if mode in {"trust_commands", "full_access"} else SUBTLE
     label_color = BRIGHT_CYAN if plan else ACCENT
-    return f"{label_color}{'PLAN ' if plan else 'BUILD'}{RESET} {color}{mode}{risk}{RESET}"
+    return f"{label_color}{BOLD}{'PLAN ' if plan else 'BUILD'}{RESET} {color}{mode}{risk}{RESET}"
+
+
+def _composer_border_color(args: TtyAppArgs, state: ScreenState) -> str:
+    permissions = getattr(args, "permissions", None)
+    if getattr(state, "is_busy", False):
+        return BRAND_LIME_DIM
+    if getattr(permissions, "is_plan_mode", False):
+        return PLAN_ACCENT
+    mode = getattr(getattr(permissions, "access_mode", None), "value", "auto")
+    if mode in {"full_access", "trust_commands"}:
+        return YELLOW
+    return BORDER
+
+
+def _render_composer_block(
+    args: TtyAppArgs,
+    state: ScreenState,
+    cols: int,
+    rows: int,
+    block_width: int,
+    *,
+    busy_hints: bool = False,
+) -> list[str]:
+    """Render the shared composer box (with compact hairline fallback on tiny terminals)."""
+    use_box = rows >= 11 and cols >= 36 and block_width >= 20
+    prompt_width = max(4, block_width - 4) if use_box else block_width
+    prompt_line = render_input_prompt(state.input, state.cursor_offset, width=prompt_width)
+    pending_image_count = len(getattr(state, "pending_images", []))
+    is_busy = getattr(state, "is_busy", False)
+    spin = spinner_char(getattr(state, "_animation_frame", 0))
+
+    if use_box:
+        body = [prompt_line]
+        if pending_image_count:
+            body.append(f" {CYAN}[图片 ×{pending_image_count}]{RESET} {SUBTLE}· Ctrl+G 删除最近一张{RESET}")
+        top_title = f"{BRAND_LIME}{spin}{RESET} {YELLOW}{BOLD}Thinking…{RESET}" if is_busy else ""
+        top_right = f"{SUBTLE}Ctrl+C stop{RESET}" if is_busy else ""
+        lines = render_box(
+            body,
+            block_width,
+            title=top_title,
+            right_title=top_right,
+            border_color=_composer_border_color(args, state),
+        )
+        if busy_hints and is_busy:
+            queued = len(getattr(state, "pending_inputs", []))
+            lines.append(
+                f"{SUBTLE}Enter: steer · Alt+Enter or /queue: follow-up · {queued} queued · Ctrl+C: stop{RESET}"
+            )
+        return lines
+
+    lines = [f"{BORDER}{'─' * block_width}{RESET}", prompt_line]
+    if pending_image_count:
+        lines.append(f"  {CYAN}[图片 ×{pending_image_count}]{RESET} {SUBTLE}· Ctrl+G 删除最近一张{RESET}")
+    if busy_hints and is_busy:
+        lines.append(f"  {BRAND_LIME}{spin}{RESET} {YELLOW}Thinking…{RESET}")
+        queued = len(getattr(state, "pending_inputs", []))
+        lines.append(f"  {SUBTLE}Enter: steer · Alt+Enter or /queue: follow-up · {queued} queued · Ctrl+C: stop{RESET}")
+    return lines
 
 
 def _composer_status_lines(args: TtyAppArgs, state: ScreenState, model: str, cols: int) -> list[str]:
@@ -1298,15 +1389,22 @@ def _composer_status_lines(args: TtyAppArgs, state: ScreenState, model: str, col
     if state.exit_requested_at is not None:
         second = f"{YELLOW}Press Ctrl+C again to exit{RESET}"
     else:
-        path = str(args.cwd)
-        if _visible_width(path) > width // 2:
-            path = Path(args.cwd).name or path
-        path = truncate_plain(path, width)
-        free = width - _visible_width(path) - 2
-        second = f"{SUBTLE}{path}{RESET}"
+        raw_path = str(args.cwd)
+        if _visible_width(raw_path) > width // 2:
+            raw_path = Path(args.cwd).name or raw_path
+        raw_path = truncate_plain(raw_path, width)
+        sep_idx = max(raw_path.rfind("/"), raw_path.rfind("\\"))
+        if sep_idx >= 0 and sep_idx + 1 < len(raw_path):
+            parent = raw_path[: sep_idx + 1]
+            leaf = raw_path[sep_idx + 1 :]
+            path_styled = f"{SUBTLE}{parent}{RESET}{TEXT}{leaf}{RESET}"
+        else:
+            path_styled = f"{TEXT}{raw_path}{RESET}"
+        free = width - _visible_width(raw_path) - 2
+        second = path_styled
         if free >= 18:
             usage = _render_usage_status(args, state, free)
-            second += " " * max(2, width - _visible_width(path) - _visible_width(usage)) + usage
+            second += " " * max(2, width - _visible_width(raw_path) - _visible_width(usage)) + usage
     return ["  " + truncate_plain(first, width), "  " + truncate_plain(second, width)]
 
 
@@ -1339,26 +1437,23 @@ def _home_sharks_tick_due(args: TtyAppArgs, state: ScreenState, now: float) -> b
 def _render_home_screen(args: TtyAppArgs, state: ScreenState, cols: int, rows: int) -> None:
     """Fill the viewport with welcome content above a bottom-anchored composer."""
     runtime = args.runtime or {}
-    model = f"{model_display_name(runtime) if runtime else 'unknown'} · {runtime.get('reasoningEffort', 'default')}"
+    model_name = model_display_name(runtime) if runtime else "unknown"
+    effort = runtime.get("reasoningEffort", "default")
+    model = f"{model_name} · {effort}"
+    folder_name = Path(args.cwd).name or str(args.cwd)
     visible_commands = _get_visible_commands(state.input, args.cwd)
     block_width = max(4, cols - 4)
     margin = "  "
-    content = _render_home_brand(cols, rows)
+    content = _render_home_brand(cols, rows, model=model_name, effort=effort, folder=folder_name)
     if rows < 10:
         content = content[:1]
-    if rows >= 18 and not state.input.startswith("/"):
+    if rows >= 20 and not state.input.startswith("/"):
         content += [
             "",
-            f"{BOLD}Start with an idea{RESET}",
-            f"{SUBTLE}{ICON_DOT} Explore the codebase   {ICON_DOT} Fix a bug   {ICON_DOT} Add tests{RESET}",
+            f"{BRIGHT_WHITE}{BOLD}快速开始{RESET}  {SUBTLE}输入需求，或使用常用命令{RESET}",
+            f"{BRAND_LIME}·{RESET} {TEXT}/provider{RESET} {SUBTLE}配置模型{RESET}  {BRAND_LIME}·{RESET} {TEXT}/resume{RESET} {SUBTLE}继续对话{RESET}  {BRAND_LIME}·{RESET} {TEXT}Tab{RESET} {SUBTLE}切换 Plan/Build{RESET}",
         ]
-    composer = [
-        f"{SUBTLE}{'─' * block_width}{RESET}",
-        render_input_prompt(state.input, state.cursor_offset, width=block_width),
-    ]
-    pending_image_count = len(getattr(state, "pending_images", []))
-    if pending_image_count:
-        composer.append(f"  {SUBTLE}[图片 ×{pending_image_count}] · Ctrl+G 删除最近一张{RESET}")
+    composer = _render_composer_block(args, state, cols, rows, block_width)
     status_lines = _composer_status_lines(args, state, model, cols)
     menu: list[str] = []
     if visible_commands and state.input:
@@ -1410,14 +1505,19 @@ def _render_usage_status(args: TtyAppArgs, state: ScreenState, width: int) -> st
         state.usage_stats_key = key
     snapshot = state.usage_stats
     label = format_usage_status(snapshot)
+    context = snapshot["context"]
     if _visible_width(label) > width:
         rate = snapshot["cache_hit_percentage"]
-        context = snapshot["context"]
         cache = f"{rate:.0f}%" if rate is not None else "--"
         percent = f"{context['usage_percentage']:.0f}%" if context else "--"
         estimated = "~" if context and (context["is_estimate"] or context["window_is_estimate"]) else ""
         label = f"Cache {cache} · Ctx {estimated}{percent}"
-    return f"{SUBTLE}{truncate_plain(label, width)}{RESET}"
+        return f"{SUBTLE}{truncate_plain(label, width)}{RESET}"
+    styled = f"{SUBTLE}{label}{RESET}"
+    if context and context.get("max_tokens") and _visible_width(label) + 8 <= width:
+        bar = render_progress_bar(context["usage_percentage"], width=6)
+        styled = f"{styled}  {bar}"
+    return truncate_plain(styled, width)
 
 
 def _render_resume_picker_lines(
@@ -1426,39 +1526,58 @@ def _render_resume_picker_lines(
     cols: int,
     rows: int,
 ) -> list[str]:
-    lines = [
-        f"  {ACCENT}{BOLD}选择要继续的对话{RESET}",
-        f"  {SUBTLE}↑/↓ 选择 · Enter 继续 · d 删除 · Esc 取消{RESET}",
-        "",
-    ]
-    # Each session occupies two physical rows; keep the selection inside the
-    # viewport even on short terminals and when scrolling through many items.
-    visible_rows = max(1, (rows - len(lines)) // 2)
+    width = min(max(8, cols - 2), 84)
+    compact = rows < 12 or width < 32
+    content_w = max(4, width - 4) if width >= 10 else width
+    header_rows: list[str] = []
+    if not compact:
+        header_rows = [
+            f"{SUBTLE}选择一个本地保存的会话继续，或按 d 删除旧会话{RESET}",
+            render_divider(content_w),
+        ]
+    overhead = (2 if width >= 10 else 0) + len(header_rows)
+    visible_rows = max(1, (rows - overhead) // 2)
     selected_index = max(0, min(selected_index, len(sessions) - 1))
     start = max(0, min(selected_index - visible_rows // 2, max(0, len(sessions) - visible_rows)))
     end = min(len(sessions), start + visible_rows)
 
+    body = list(header_rows)
     for index in range(start, end):
         session = sessions[index]
         selected = index == selected_index
-        marker = ">" if selected else " "
-        color = ACCENT if selected else SUBTLE
         updated = time.strftime("%Y-%m-%d %H:%M", time.localtime(session.updated_at))
         first = " ".join("".join(c if c.isprintable() else " " for c in session.first_message).split())
-        title = truncate_plain(first or "（待恢复的会话状态）", max(1, cols - 6))
-        lines.append(f"  {color}{marker} {title}{RESET}")
-        lines.append(f"    {DIM}{updated} · {session.message_count} 条消息{RESET}")
-    return _truncate_frame_lines(lines, cols, rows)
+        title_budget = max(4, content_w - 2)
+        title = truncate_plain(first or "（待恢复的会话状态）", title_budget)
+        if selected:
+            row_txt = f"{ACCENT}{BOLD}>{RESET} {BRIGHT_WHITE}{BOLD}{title}{RESET}"
+            body.append(paint_row(truncate_plain(row_txt, content_w), content_w, HIGHLIGHT_BG))
+        else:
+            body.append(f"  {TEXT}{title}{RESET}")
+        body.append(f"  {SUBTLE}{updated} · {session.message_count} 条消息{RESET}")
+
+    counter = f"{selected_index + 1}/{len(sessions)}" if sessions else "0/0"
+    boxed = render_box(
+        body,
+        width,
+        title=f"{BRAND_LIME}◆ {BOLD}选择要继续的对话{RESET}",
+        right_title=f"{SUBTLE}{counter}{RESET}",
+        footer=f"{SUBTLE}↑/↓ 选择 · Enter 继续 · d 删除 · Esc 取消{RESET}",
+        border_color=BORDER,
+    )
+    if len(boxed) > rows:
+        return [truncate_plain(line, max(1, cols - 1)) for line in boxed[:rows]]
+    return center_box_frame(boxed, cols, rows)
 
 
 def _render_stream_input(state: ScreenState, cols: int, visible_commands: list | None = None) -> list[str]:
-    """Claude-style: clean amber > prompt line with slash hints."""
+    """Render the stream input prompt line with optional image, slash, and busy hints."""
     prompt = " " + render_input_prompt(state.input, state.cursor_offset, width=max(5, cols - 2))
 
     lines = [prompt]
     pending_image_count = len(getattr(state, "pending_images", []))
     if pending_image_count:
-        lines.append(f"  {SUBTLE}[图片 ×{pending_image_count}] · Ctrl+G 删除最近一张{RESET}")
+        lines.append(f"  {CYAN}[图片 ×{pending_image_count}]{RESET} {SUBTLE}· Ctrl+G 删除最近一张{RESET}")
 
     # Slash command hints
     if visible_commands:
@@ -1470,9 +1589,8 @@ def _render_stream_input(state: ScreenState, cols: int, visible_commands: list |
 
     # Status / thinking indicator
     if getattr(state, "is_busy", False):
-        frame = getattr(state, "_animation_frame", 0)
-        dots = "." * ((frame % 3) + 1)
-        lines.append(f"  {ACCENT}{ICON_DOT}{RESET} {YELLOW}Thinking{dots}{RESET}")
+        spin = spinner_char(getattr(state, "_animation_frame", 0))
+        lines.append(f"  {BRAND_LIME}{spin}{RESET} {YELLOW}Thinking…{RESET}")
         queued = len(getattr(state, "pending_inputs", []))
         lines.append(f"  {SUBTLE}Enter: steer · Alt+Enter or /queue: follow-up · {queued} queued · Ctrl+C: stop{RESET}")
     return lines
@@ -1513,20 +1631,16 @@ def _finished_activity_groups(
 
 
 def _render_user_turn(entry: TranscriptEntry, cols: int) -> list[str]:
-    """Draw a user turn as a raised card, without any label or marker.
-
-    The tinted surface alone separates the prompt from model output, so a long
-    session stays calm while the question still reads as one block.
-    """
+    """Draw a user turn as a raised card with a continuous lime left accent stripe."""
     width = max(8, cols - 1)
-    # Two columns of inner padding, plus a gap before the card's right edge.
-    body_width = max(2, width - 4)
-    rows = [""]
+    body_width = max(2, width - 5)
+    rows = [paint_row(f"{BRAND_LIME}▎{RESET}", width, USER_BG)]
     for raw in (entry.body or "").splitlines() or [""]:
         for part in wrap_text(raw, body_width).split("\n") or [""]:
-            rows.append(f"  {part}" if part else "")
-    rows.append("")
-    return [paint_row(row, width, USER_BG) for row in rows]
+            line = f"{BRAND_LIME}▎{RESET}  {part}" if part else f"{BRAND_LIME}▎{RESET}"
+            rows.append(paint_row(line, width, USER_BG))
+    rows.append(paint_row(f"{BRAND_LIME}▎{RESET}", width, USER_BG))
+    return rows
 
 
 def _render_activity_header(group: list[TranscriptEntry], expanded: bool, cols: int) -> str:
@@ -1538,12 +1652,12 @@ def _render_activity_header(group: list[TranscriptEntry], expanded: bool, cols: 
         parts.append(f"{tools} tool{'s' if tools != 1 else ''}")
     if thoughts:
         parts.append(f"{thoughts} thought{'s' if thoughts != 1 else ''}")
-    summary = f" {SUBTLE}·{RESET} ".join(f"{SUBTLE}{part}{RESET}" for part in parts)
+    summary = f" {TEXT_FAINT}·{RESET} ".join(f"{SUBTLE}{part}{RESET}" for part in parts)
     if failed:
-        summary += f" {SUBTLE}·{RESET} {BRIGHT_RED}{failed} failed{RESET}"
+        summary += f" {TEXT_FAINT}·{RESET} {BRIGHT_RED}{failed} failed{RESET}"
     arrow = "▾" if expanded else "▸"
     hint = f"click/ctrl+o to {'collapse' if expanded else 'expand'}"
-    line = f"  {ACCENT}{arrow}{RESET} {BOLD}Activity{RESET}  {summary}  {DIM}{hint}{RESET}"
+    line = f"  {BRAND_LIME}{arrow}{RESET} {BRIGHT_WHITE}{BOLD}Activity{RESET}  {summary}  {TEXT_FAINT}{hint}{RESET}"
     return truncate_plain(line, cols)
 
 
@@ -1579,8 +1693,10 @@ def _build_stream_transcript_lines(
             continue
 
         if entry.kind == "assistant":
-            label = f"{BRIGHT_RED}{BOLD}Error{RESET}" if entry.status == "error" else f"{SUBTLE}{BOLD}pepsicode{RESET}"
-            rendered.append(f"  {ACCENT}{ICON_DOT}{RESET} {label}")
+            if entry.status == "error":
+                rendered.append(f"  {BRIGHT_RED}✖{RESET} {BRIGHT_RED}{BOLD}Error{RESET}")
+            else:
+                rendered.append(f"  {BRAND_LIME}◆{RESET} {BRIGHT_WHITE}{BOLD}pepsi{BRAND_LIME}code{RESET}")
             content, _ = parse_assistant_text(entry.body)
             for line in render_markdownish(content, width=max(2, cols - 4)).splitlines() or [""]:
                 rendered.extend(f"  {part}" for part in wrap_text(line, max(2, cols - 4)).split("\n"))
@@ -1633,7 +1749,7 @@ def _window_stream_transcript(rendered: list[str], scroll_offset: int, height: i
     max_offset = max(0, total - height)
     offset = max(0, min(scroll_offset, max_offset))
     pct = int(offset / max_offset * 100) if max_offset > 0 else 0
-    marker = f"{SUBTLE}-- {offset}/{max_offset} ({pct}%) --{RESET}"
+    marker = f"  {BORDER}──{RESET} {SUBTLE}↑ {offset}/{max_offset} ({pct}%){RESET} {BORDER}──{RESET}"
     return [marker if index is None else rendered[index] for index in _stream_window_rows(total, offset, height)]
 
 
@@ -1662,8 +1778,25 @@ def _toggle_latest_activity_group(state: ScreenState) -> bool:
     return True
 
 
+def _render_stream_header(args: TtyAppArgs, state: ScreenState, cols: int) -> str:
+    """Render a calm single-line top context bar for the conversation stream."""
+    width = max(8, cols - 1)
+    folder = Path(args.cwd).name or str(args.cwd)
+    runtime = args.runtime or {}
+    model = model_display_name(runtime) if runtime else "unknown"
+    effort = runtime.get("reasoningEffort", "default")
+    left = f"  {BRIGHT_WHITE}{BOLD}pepsi{BRAND_LIME}code{RESET} {TEXT_FAINT}·{RESET} {CYAN}{folder}{RESET}"
+    right = f"{SUBTLE}{model} · {effort}{RESET} "
+    right_budget = max(0, width - _visible_width(left) - 2)
+    if _visible_width(right) > right_budget:
+        right = truncate_plain(right, right_budget) if right_budget >= 8 else ""
+    gap = max(1, width - _visible_width(left) - _visible_width(right))
+    row = f"{left}{' ' * gap}{right}"
+    return paint_row(truncate_plain(row, width), width, SURFACE_BG)
+
+
 def _render_stream_screen(args: TtyAppArgs, state: ScreenState) -> None:
-    """Claude-style: clean stream layout with proper scroll tracking."""
+    """Render the active conversation stream with rounded composer and optional sidebar."""
     cols, rows = _get_terminal_size()
     cols = max(8, cols)
     rows = max(8, rows)
@@ -1701,8 +1834,11 @@ def _render_stream_screen(args: TtyAppArgs, state: ScreenState) -> None:
         if args.runtime
         else "unknown"
     )
+    block_width = max(4, cols - 4)
+    margin = "  "
 
     pending = state.pending_approval
+    menu_lines: list[str] = []
     if pending is not None:
         # Swap only the composer for the approval prompt; switching to a
         # different full-screen layout for every tool approval flashed.
@@ -1716,25 +1852,24 @@ def _render_stream_screen(args: TtyAppArgs, state: ScreenState) -> None:
         ).splitlines()
     else:
         visible_commands = _get_visible_commands(state.input, args.cwd)
-        input_lines = _render_stream_input(state, cols, visible_commands)
-
-        # Render slash menu if visible
+        composer = _render_composer_block(args, state, cols, rows, block_width, busy_hints=True)
         if visible_commands and state.input:
             menu = render_slash_menu(
                 visible_commands,
                 min(state.selected_slash_index, len(visible_commands) - 1),
-                max_rows=max(1, min(10, rows - len(input_lines) - 6)),
-                width=max(2, cols - 1),
+                max_rows=max(1, min(10, rows - len(composer) - 6)),
+                width=block_width,
             )
-            input_lines.append("")
-            input_lines.extend(menu.splitlines())
+            menu_lines = [margin + line for line in menu.splitlines()]
+        input_lines = menu_lines + [margin + line for line in composer]
 
-    sep = f"  {SUBTLE}{'─' * max(1, cols - 4)}{RESET}"
     status_lines = _composer_status_lines(args, state, model_name, cols)
     if state.selection_notice and state.exit_requested_at is None:
         status_lines[-1] = f"  {ACCENT}{truncate_plain(state.selection_notice, max(1, cols - 4))}{RESET}"
 
-    reserved = len(input_lines) + 1 + len(status_lines)
+    top_header = [_render_stream_header(args, state, cols)] if rows >= 14 else []
+    header_height = len(top_header)
+    reserved = header_height + len(input_lines) + len(status_lines)
     transcript_height = rows - reserved
     if transcript_height < 1:
         # A prompt taller than the screen keeps its bottom (the choices) visible.
@@ -1778,7 +1913,8 @@ def _render_stream_screen(args: TtyAppArgs, state: ScreenState) -> None:
     anchor_line = next((line for line, group in header_lines.items() if group == anchor[0]), None) if anchor else None
     if anchor and anchor_line is not None:
         # A toggled header stays under the pointer; its details open below it.
-        state.transcript_scroll_offset = _anchored_scroll_offset(total, transcript_height, anchor_line, anchor[1])
+        transcript_row = max(0, anchor[1] - header_height)
+        state.transcript_scroll_offset = _anchored_scroll_offset(total, transcript_height, anchor_line, transcript_row)
     elif state.transcript_scroll_offset > 0 and content_cols == state.transcript_layout_cols:
         # Offsets count from the bottom, so keep a scrolled-back view on the
         # same text while new output is appended below it.
@@ -1790,7 +1926,7 @@ def _render_stream_screen(args: TtyAppArgs, state: ScreenState) -> None:
     state.transcript_layout_cols = content_cols
     window_rows = _stream_window_rows(total, state.transcript_scroll_offset, transcript_height)
     state.activity_header_rows = {
-        row: header_lines[index] for row, index in enumerate(window_rows) if index in header_lines
+        row + header_height: header_lines[index] for row, index in enumerate(window_rows) if index in header_lines
     }
     transcript_lines = _window_stream_transcript(rendered, state.transcript_scroll_offset, transcript_height)
     # Anchor the composer while new output streams in.
@@ -1798,15 +1934,16 @@ def _render_stream_screen(args: TtyAppArgs, state: ScreenState) -> None:
 
     transcript_lines = _truncate_frame_lines(transcript_lines, content_cols, transcript_height)
     if sidebar_width:
-        sidebar, state.agent_panel_actions = render_agent_panel(
+        sidebar, raw_actions = render_agent_panel(
             agent_view, sidebar_width, transcript_height, state.agent_panel_offset
         )
         state.agent_panel_start_col = content_cols + 3
+        state.agent_panel_actions = {row + header_height: action for row, action in raw_actions.items()}
         transcript_lines = [
-            _pad_visible(left, content_cols) + f" {SUBTLE}│{RESET} " + right
+            _pad_visible(left, content_cols) + f" {BORDER}│{RESET} " + right
             for left, right in zip(transcript_lines, sidebar, strict=True)
         ]
-    frame = transcript_lines + strip + [sep] + input_lines + status_lines
+    frame = top_header + transcript_lines + strip + input_lines + status_lines
     frame = _truncate_frame_lines(frame, cols, rows)
 
     state.frame_renderer.draw(frame, cols, rows)

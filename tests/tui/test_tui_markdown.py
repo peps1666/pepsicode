@@ -1,4 +1,5 @@
 import os
+import re
 import subprocess
 import sys
 
@@ -11,13 +12,18 @@ from pepsicode.tui.markdown import render_markdownish
 def test_table_renders_inline_content_without_literal_delimiter_row():
     source = "| 文件 | 状态 |\n| :--- | ---: |\n| `src/app.py` | **完成** |\n| 空 | |"
     result = strip_ansi(render_markdownish(source)).splitlines()
-    assert result == ["文件 │ 状态", "src/app.py │ 完成", "空 │ "]
+    assert result == ["文件       │ 状态", "───────────┼─────", "src/app.py │ 完成", "空         │ "]
     assert all("`" not in line and "---" not in line for line in result)
 
 
 def test_table_supports_unbordered_rows_and_literal_pipes():
     source = "名字 | 内容\n--- | ---\n`a|b` | x\\|y\n空 | "
-    assert strip_ansi(render_markdownish(source)).splitlines() == ["名字 │ 内容", "a|b │ x|y", "空 │ "]
+    assert strip_ansi(render_markdownish(source)).splitlines() == [
+        "名字 │ 内容",
+        "─────┼─────",
+        "a|b  │ x|y",
+        "空   │ ",
+    ]
 
 
 def test_non_table_pipe_text_and_code_fence_are_preserved():
@@ -41,7 +47,7 @@ def test_inline_code_in_headings_quotes_and_long_wrapped_table():
 def test_table_aligns_in_wide_view_and_stacks_in_narrow_view():
     source = "| 文件 | 状态 |\n| --- | --- |\n| `src/app.py` | 完成 |\n| 目录/a.py | |"
     wide = strip_ansi(render_markdownish(source, width=80)).splitlines()
-    assert len({string_display_width(line.split("│", 1)[0]) for line in wide}) == 1
+    assert len({string_display_width(re.split(r"[│┼]", line, maxsplit=1)[0]) for line in wide}) == 1
     narrow = strip_ansi(render_markdownish(source, width=14)).splitlines()
     assert narrow == ["文件: src/app.py", "状态: 完成", "", "文件: 目录/a.py", "状态: "]
     wrapped = wrap_text(render_markdownish(source, width=14), 14).splitlines()
@@ -80,7 +86,7 @@ def test_headings_keep_accent_color_without_underlining():
         [sys.executable, "-c", code], capture_output=True, text=True, encoding="utf-8", env=environment, check=True
     )
     assert "\x1b[4m" not in result.stdout
-    assert "\x1b[1m" in result.stdout and "\x1b[38;5;215m" in result.stdout
+    assert "\x1b[1m" in result.stdout and "\x1b[38;5;155m" in result.stdout
     assert all(title in result.stdout for title in ("总结", "现状", "细节"))
 
 
@@ -100,5 +106,5 @@ def test_inline_code_colors_and_no_color(no_color):
     )
     assert "src/main.py" in result.stdout and "run()" in result.stdout
     assert ("\x1b[32m" in result.stdout) is not no_color
-    assert ("\x1b[38;5;215m" in result.stdout) is not no_color
+    assert ("\x1b[38;5;117m" in result.stdout) is not no_color
     assert "\x1b[48;5;236m" not in result.stdout

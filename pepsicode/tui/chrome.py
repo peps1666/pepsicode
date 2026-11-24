@@ -16,7 +16,10 @@ from .theme import (  # noqa: F401
     BLUE,
     BOLD,
     BORDER,
+    BORDER_ACTIVE,
     BORDER_DIM,
+    BRAND_LIME,
+    BRAND_LIME_DIM,
     BRIGHT_BLUE,
     BRIGHT_CYAN,
     BRIGHT_GREEN,
@@ -24,18 +27,30 @@ from .theme import (  # noqa: F401
     BRIGHT_RED,
     BRIGHT_WHITE,
     BRIGHT_YELLOW,
+    BUILD_BADGE_BG,
+    CODE_BG,
+    CODE_FG,
     CYAN,
+    DIFF_ADD_BG,
+    DIFF_DEL_BG,
     DIM,
     GREEN,
     HIGHLIGHT_BG,
     ITALIC,
     MAGENTA,
+    PLAN_ACCENT,
+    PLAN_BADGE_BG,
+    PROGRESS_TRACK_BG,
     RED,
     RESET,
     REVERSE,
     SUBTLE,
+    SURFACE_BG,
+    TEXT,
+    TEXT_FAINT,
     UNDERLINE,
     USER_BG,
+    WARN_BADGE_BG,
     YELLOW,
 )
 
@@ -425,32 +440,183 @@ def wrap_panel_body_line(line: str, width: int) -> list[str]:
     return lines
 
 
+SPINNER_FRAMES = ("⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏")
+
+
+def spinner_char(frame: int) -> str:
+    """Return the braille spinner glyph for ``frame``."""
+    return SPINNER_FRAMES[frame % len(SPINNER_FRAMES)]
+
+
+def render_pill(label: str, fg: str, bg: str = "") -> str:
+    """Render a compact colored pill badge (padded when background is enabled)."""
+    if bg:
+        return f"{bg}{fg}{BOLD} {label} {RESET}"
+    return f"{fg}{BOLD}{label}{RESET}"
+
+
+_BAR_BLOCKS = ("", "▏", "▎", "▍", "▌", "▋", "▊", "▉", "█")
+
+
+def render_progress_bar(percent: float, width: int = 8) -> str:
+    """Render a compact horizontal meter colored by utilization level."""
+    width = max(2, width)
+    clamped = max(0.0, min(100.0, percent))
+    total_eighths = width * 8
+    units = 0 if clamped <= 0.0 else min(total_eighths, max(1, round(clamped / 100.0 * total_eighths)))
+    full, rem = divmod(units, 8)
+    partial = _BAR_BLOCKS[rem]
+    if clamped >= 85.0:
+        color = BRIGHT_RED
+    elif clamped >= 65.0:
+        color = YELLOW
+    else:
+        color = BRAND_LIME
+    empty = width - full - (1 if rem else 0)
+    if PROGRESS_TRACK_BG:
+        return f"{PROGRESS_TRACK_BG}{color}{'█' * full}{partial}{' ' * empty}{RESET}"
+    return f"{color}{'█' * full}{partial}{BORDER_DIM}{'░' * empty}{RESET}"
+
+
+def render_divider(width: int, label: str = "", color: str = BORDER_DIM) -> str:
+    """Render a clean horizontal divider, optionally with an inline label."""
+    width = max(1, width)
+    if not label or width < 8:
+        return f"{color}{'─' * width}{RESET}"
+    tag = truncate_plain(f" {label} ", max(1, width - 4))
+    remaining = max(0, width - string_display_width(tag))
+    left = min(2, remaining)
+    right = max(0, remaining - left)
+    return f"{color}{'─' * left}{RESET}{SUBTLE}{tag}{RESET}{color}{'─' * right}{RESET}"
+
+
+def _box_edge(
+    left_ch: str,
+    right_ch: str,
+    inner_w: int,
+    left_label: str = "",
+    right_label: str = "",
+    border_color: str = BORDER,
+) -> str:
+    """Build a rounded top or bottom box border with optional embedded labels."""
+    if not left_label and not right_label:
+        return f"{border_color}{left_ch}{'─' * inner_w}{right_ch}{RESET}"
+
+    if left_label and right_label and inner_w >= 11:
+        max_right = min(string_display_width(f" {right_label} "), max(4, (inner_w - 3) // 2))
+        right_txt = truncate_plain(f" {right_label} ", max_right)
+        right_w = string_display_width(right_txt)
+        max_left = inner_w - 3 - right_w
+        if max_left >= 4:
+            left_txt = truncate_plain(f" {left_label} ", max_left)
+            left_w = string_display_width(left_txt)
+            mid_dashes = max(1, inner_w - 2 - left_w - right_w)
+            return (
+                f"{border_color}{left_ch}─{RESET}{left_txt}{RESET}"
+                f"{border_color}{'─' * mid_dashes}{RESET}{right_txt}{RESET}"
+                f"{border_color}─{right_ch}{RESET}"
+            )
+
+    if left_label:
+        max_left = inner_w - 2
+        if max_left >= 4:
+            left_txt = truncate_plain(f" {left_label} ", max_left)
+            left_w = string_display_width(left_txt)
+            right_dashes = max(1, inner_w - 1 - left_w)
+            return (
+                f"{border_color}{left_ch}─{RESET}{left_txt}{RESET}{border_color}{'─' * right_dashes}{right_ch}{RESET}"
+            )
+
+    if right_label:
+        max_right = inner_w - 2
+        if max_right >= 4:
+            right_txt = truncate_plain(f" {right_label} ", max_right)
+            right_w = string_display_width(right_txt)
+            left_dashes = max(1, inner_w - 1 - right_w)
+            return (
+                f"{border_color}{left_ch}{'─' * left_dashes}{RESET}{right_txt}{RESET}{border_color}─{right_ch}{RESET}"
+            )
+
+    return f"{border_color}{left_ch}{'─' * inner_w}{right_ch}{RESET}"
+
+
+def render_box(
+    lines: list[str],
+    width: int,
+    *,
+    title: str = "",
+    right_title: str = "",
+    footer: str = "",
+    border_color: str = BORDER,
+    fill_bg: str = "",
+    pad_x: int = 1,
+) -> list[str]:
+    """Render lines inside a CJK-safe rounded card box, degrading cleanly on tiny widths."""
+    width = max(0, width)
+    if width == 0:
+        return []
+    if width < 10:
+        out: list[str] = []
+        if title:
+            out.append(truncate_plain(title, width))
+        for line in lines:
+            row = (" " * pad_x + line) if width >= pad_x + 4 else line
+            out.append(truncate_plain(row, width))
+        if footer:
+            out.append(truncate_plain(footer, width))
+        return out
+
+    inner_w = width - 2
+    pad_x = max(0, pad_x)
+    if inner_w < 2 * pad_x + 1:
+        pad_x = 0
+    content_w = max(1, inner_w - 2 * pad_x)
+
+    res = [_box_edge("╭", "╮", inner_w, title, right_title, border_color)]
+    for line in lines:
+        clipped = truncate_plain(line, content_w)
+        cell = (" " * pad_x) + pad_plain(clipped, content_w) + (" " * pad_x)
+        inner = paint_row(cell, inner_w, fill_bg) if fill_bg else f"{cell}{RESET}"
+        res.append(f"{border_color}│{RESET}{inner}{border_color}│{RESET}")
+    res.append(_box_edge("╰", "╯", inner_w, footer, "", border_color))
+    return res
+
+
+def center_box_frame(box_lines: list[str], cols: int, rows: int) -> list[str]:
+    """Center a modal box horizontally and gently vertically within ``(cols, rows)``."""
+    usable_cols = max(1, cols - 1)
+    rows = max(1, rows)
+    box_w = max((string_display_width(line) for line in box_lines), default=0)
+    left_pad = max(0, (usable_cols - box_w) // 2)
+    padded_box = [(" " * left_pad + line) if left_pad else line for line in box_lines]
+    if len(padded_box) >= rows:
+        return [truncate_plain(line, usable_cols) for line in padded_box[:rows]]
+    top_pad = min(3, (rows - len(padded_box)) // 3) if rows >= len(padded_box) + 4 else 0
+    frame = [""] * top_pad + padded_box
+    frame += [""] * max(0, rows - len(frame))
+    return [truncate_plain(line, usable_cols) for line in frame[:rows]]
+
+
 # Panel-title icon mapping (minimal)
 _PANEL_ICONS: dict[str, str] = {
-    "pepsicode": ICON_DOT,
-    "session feed": ICON_DOT,
+    "pepsicode": "◆",
+    "session feed": "◆",
     "prompt": ICON_PROMPT,
     "activity": ICON_DIVIDER,
-    "action required": ICON_DOT,
+    "action required": "◆",
 }
 
 
 def render_panel(title: str, body: str, right_title: str | None = None, min_body_lines: int = 0) -> str:
-    """Claude-style: simple title + thin line + body, no box-drawing."""
+    """Render a rounded card panel with title, wrapped body, and optional right badge."""
     width, _ = _cached_terminal_size()
-    width = max(8, width)
+    width = max(8, width - 1)
 
     icon = _PANEL_ICONS.get(title.lower(), "")
     icon_str = f"{ACCENT}{icon} {RESET}" if icon else ""
 
     title_display = f"{icon_str}{ACCENT}{BOLD}{title}{RESET}"
-    right_display = f"{SUBTLE}{right_title}{RESET}" if right_title else None
-
-    # Top: title with thin line
-    title_row = panel_row(title_display, width, right_display)
-    separator = f"{SUBTLE}{'─' * width}{RESET}"
-
-    res = [title_row, separator]
+    right_display = f"{SUBTLE}{right_title}{RESET}" if right_title else ""
 
     body_lines = body.splitlines() if body else []
     wrapped_lines: list[str] = []
@@ -460,14 +626,18 @@ def render_panel(title: str, body: str, right_title: str | None = None, min_body
     while len(wrapped_lines) < min_body_lines:
         wrapped_lines.append("")
 
-    for wl in wrapped_lines:
-        res.append(panel_row(wl, width))
-    res.append(f"{SUBTLE}{'─' * width}{RESET}")
-    return "\n".join(res)
+    boxed = render_box(
+        wrapped_lines,
+        width,
+        title=title_display,
+        right_title=right_display,
+        border_color=BORDER,
+    )
+    return "\n".join(boxed)
 
 
 def render_banner(runtime: dict | None, cwd: str, permission_summary: list[str], session: dict[str, int]) -> str:
-    """Claude-style: minimal banner, plain text lines."""
+    """Dual-tone PepsiCode banner with model, workspace, and session stats."""
     model = runtime.get("model", "not-configured") if runtime else "not-configured"
     provider = "offline"
     if runtime and runtime.get("baseUrl"):
@@ -476,21 +646,19 @@ def render_banner(runtime: dict | None, cwd: str, permission_summary: list[str],
     cwd_path = Path(cwd)
     folder_name = cwd_path.name or str(cwd_path)
 
-    width, _ = _cached_terminal_size()
-
     msg_count = session.get("messageCount", 0)
     evt_count = session.get("transcriptCount", 0)
 
     lines = [
-        f"{ACCENT}{BOLD}{APP_NAME}{RESET} {SUBTLE}{APP_VERSION}{RESET}",
-        f"{SUBTLE}{folder_name}{RESET}  {DIM}{model}{RESET}  {SUBTLE}{provider}{RESET}",
-        f"{SUBTLE}{msg_count} msgs{RESET}  {SUBTLE}{evt_count} events{RESET}",
+        f"{BRIGHT_WHITE}{BOLD}pepsi{BRAND_LIME}code{RESET}  {SUBTLE}{APP_VERSION}{RESET}",
+        f"{CYAN}{folder_name}{RESET}  {TEXT}{model}{RESET}  {SUBTLE}{provider}{RESET}",
+        f"{SUBTLE}{msg_count} msgs  ·  {evt_count} events{RESET}",
     ]
     return "\n".join(lines)
 
 
 def render_status_line(status: str | None) -> str:
-    """Claude-style: amber dot status indicator."""
+    """Brand-accented status indicator."""
     if status:
         return f"{ACCENT}{ICON_DOT}{RESET} {YELLOW}{BOLD}{status}{RESET}"
     return f"{ACCENT}{ICON_DOT}{RESET} {DIM}Ready{RESET}"
@@ -499,7 +667,7 @@ def render_status_line(status: str | None) -> str:
 def render_tool_panel(
     active_tool: str | None, recent_tools: list[dict[str, str]], background_tasks: list[dict[str, Any]] | None = None
 ) -> str:
-    """Claude-style: minimal tool status panel."""
+    """Minimal tool status panel."""
     if background_tasks is None:
         background_tasks = []
     parts: list[str] = []
@@ -527,13 +695,13 @@ def render_footer_bar(
     mode: str = "auto",
     plan: bool = False,
 ) -> str:
-    """Claude-style: minimal single-line footer."""
+    """Minimal single-line footer with aligned PLAN/BUILD badge."""
     if background_tasks is None:
         background_tasks = []
     width, _ = _cached_terminal_size()
     risk = " 高风险" if mode in {"full_access", "trust_commands"} else ""
     color = YELLOW if mode in {"trust_commands", "full_access"} else SUBTLE
-    left = f"{BRIGHT_CYAN if plan else ACCENT}{'PLAN ' if plan else 'BUILD'}{RESET} {color}mode: {mode}{risk}{RESET}  {render_status_line(status)}"
+    left = f"{BRIGHT_CYAN if plan else ACCENT}{BOLD}{'PLAN ' if plan else 'BUILD'}{RESET} {color}mode: {mode}{risk}{RESET}  {render_status_line(status)}"
 
     parts = []
     if tools_enabled:
@@ -549,90 +717,126 @@ def render_footer_bar(
 def render_slash_menu(
     commands: list[Any], selected_index: int, max_rows: int | None = None, width: int | None = None
 ) -> str:
-    """Claude-style: amber-accented command menu with categories."""
+    """Render slash commands inside a clean aligned card menu."""
     if not commands:
         return f"{SUBTLE}no commands{RESET}"
     if width is None:
         width, _ = _cached_terminal_size()
-    inner_width = max(1, width - 4)
+    width = max(8, width)
 
     if max_rows is not None:
         max_rows = max(1, max_rows)
-        # Reserve input space and keep the selected command in view.
         selected_index = max(0, min(selected_index, len(commands) - 1))
-        limit = max(1, max_rows - 2)
+        if max_rows >= 4 and width >= 24:
+            limit = max(1, max_rows - 2)
+            start = max(0, min(selected_index - limit // 2, len(commands) - limit))
+            visible = commands[start : min(len(commands), start + limit)]
+            content_w = max(4, width - 4)
+            usage_col = min(20, max((string_display_width(getattr(c, "usage", str(c))) for c in visible), default=8))
+            usage_col = min(usage_col, max(6, content_w // 2))
+            body_rows: list[str] = []
+            for offset, cmd in enumerate(visible):
+                index = start + offset
+                usage = getattr(cmd, "usage", str(cmd))
+                desc = getattr(cmd, "description", "")
+                marker = ICON_ARROW if index == selected_index else " "
+                usage_padded = pad_plain(truncate_plain(usage, usage_col), usage_col)
+                desc_budget = max(0, content_w - usage_col - 4)
+                desc_str = truncate_plain(desc, desc_budget) if desc_budget >= 4 else ""
+                if index == selected_index:
+                    row_txt = f"{ACCENT}{BOLD}{marker}{RESET} {BRIGHT_WHITE}{BOLD}{usage_padded}{RESET}"
+                    if desc_str:
+                        row_txt += f"  {TEXT}{desc_str}{RESET}"
+                    body_rows.append(paint_row(truncate_plain(row_txt, content_w), content_w, HIGHLIGHT_BG))
+                else:
+                    row_txt = f"  {TEXT}{usage_padded}{RESET}" + (f"  {SUBTLE}{desc_str}{RESET}" if desc_str else "")
+                    body_rows.append(row_txt)
+            boxed = render_box(
+                body_rows,
+                width,
+                title=f"{ACCENT}{BOLD}/ commands{RESET}",
+                right_title=f"{SUBTLE}{selected_index + 1}/{len(commands)}{RESET}",
+                footer=f"{SUBTLE}↑/↓ 选择 · Tab/Enter 确认 · Esc 关闭{RESET}",
+                border_color=BORDER,
+            )
+            return "\n".join(truncate_plain(row, width) for row in boxed[:max_rows])
+
+        limit = max(1, max_rows - 1) if max_rows >= 2 else 1
         start = max(0, min(selected_index - limit // 2, len(commands) - limit))
-        rows = [f"  {SUBTLE}commands · Tab/Enter select · Esc close{RESET}"]
+        rows: list[str] = []
         for index in range(start, min(len(commands), start + limit)):
             cmd = commands[index]
             usage = getattr(cmd, "usage", str(cmd))
             desc = getattr(cmd, "description", "")
             marker = ICON_ARROW if index == selected_index else " "
-            label = f"  {marker} {usage}  {desc}"
-            label = pad_plain(truncate_plain(label, width - 2), width - 2)
+            label = f" {marker} {usage}  {desc}"
+            label = truncate_plain(label, width)
             if index == selected_index:
-                label = f"{HIGHLIGHT_BG}{ACCENT}{BOLD}{label}{RESET}"
+                rows.append(paint_row(f"{ACCENT}{BOLD}{label}{RESET}", width, HIGHLIGHT_BG))
             else:
-                label = f"{SUBTLE}{label}{RESET}"
-            rows.append(label)
-        rows.append(f"  {SUBTLE}{selected_index + 1}/{len(commands)} · ↑/↓ navigate{RESET}")
-        if max_rows <= 2:
-            rows = rows[1:]
+                rows.append(f"{SUBTLE}{label}{RESET}")
+        if max_rows >= 2:
+            rows.append(f" {SUBTLE}{selected_index + 1}/{len(commands)} · ↑/↓{RESET}")
         return "\n".join(truncate_plain(row, width) for row in rows[:max_rows])
 
-    # Category colors
     cat_colors: dict[str, str] = {
         "Session": CYAN,
-        "Tools": GREEN,
+        "Tools": BRAND_LIME,
         "Status": YELLOW,
         "Files": MAGENTA,
         "General": SUBTLE,
     }
 
-    # Group by category preserving order
     from itertools import groupby
 
     grouped: list[tuple[str, list[Any]]] = []
     for cat, cmds in groupby(commands, key=lambda c: getattr(c, "category", "General")):
         grouped.append((cat, list(cmds)))
 
-    rows: list[str] = []
-    # Header
-    rows.append(
-        f"  {ACCENT}{ICON_ARROW}{RESET} {BOLD}commands{RESET}  {SUBTLE}Tab/Enter to select, Esc to close{RESET}"
-    )
-    rows.append(f"  {SUBTLE}{ICON_DIVIDER * min(50, inner_width)}{RESET}")
+    content_w = max(8, width - 4) if width >= 24 else max(4, width)
+    usage_col = min(22, max((string_display_width(getattr(c, "usage", str(c))) for c in commands), default=8))
+    usage_col = min(usage_col, max(6, content_w // 2))
 
+    rows = []
     flat_index = 0
     for cat_idx, (category, cmds) in enumerate(grouped):
         if cat_idx > 0:
-            rows.append("")  # gap between categories
-
-        # Category header
+            rows.append("")
         color = cat_colors.get(category, SUBTLE)
-        rows.append(f"  {color}{BOLD}{category}{RESET}")
+        rows.append(f"{color}{BOLD}{category}{RESET}")
 
         for cmd in cmds:
             usage = getattr(cmd, "usage", str(cmd))
             desc = getattr(cmd, "description", "")
             shortcut = str(flat_index + 1) if flat_index < 9 else " "
+            usage_padded = pad_plain(truncate_plain(usage, usage_col), usage_col)
+            desc_budget = max(0, content_w - usage_col - 6)
+            desc_str = truncate_plain(desc, desc_budget) if desc_budget >= 4 else ""
 
             if flat_index == selected_index:
-                line = (
-                    f"  {HIGHLIGHT_BG}{ACCENT}{ICON_ARROW}{RESET}"
-                    f"{HIGHLIGHT_BG} {shortcut} {BRIGHT_WHITE}{BOLD}{usage}{RESET}"
-                    f"{HIGHLIGHT_BG}  {SUBTLE}{desc}{RESET}"
-                )
+                line = f"{ACCENT}{BOLD}{ICON_ARROW}{RESET} {SUBTLE}{shortcut}{RESET} {BRIGHT_WHITE}{BOLD}{usage_padded}{RESET}"
+                if desc_str:
+                    line += f"  {TEXT}{desc_str}{RESET}"
+                rows.append(paint_row(truncate_plain(line, content_w), content_w, HIGHLIGHT_BG))
             else:
-                line = f"   {SUBTLE}{shortcut}{RESET}  {usage}  {SUBTLE}{desc}{RESET}"
-            rows.append(truncate_plain(line, width))
+                line = f"  {SUBTLE}{shortcut}{RESET} {TEXT}{usage_padded}{RESET}"
+                if desc_str:
+                    line += f"  {SUBTLE}{desc_str}{RESET}"
+                rows.append(line)
             flat_index += 1
 
-    # Footer
-    rows.append(f"  {SUBTLE}{ICON_DIVIDER * min(50, inner_width)}{RESET}")
-    rows.append(f"  {SUBTLE}Esc to close{RESET}  {SUBTLE}{ICON_DOT}{RESET}  {SUBTLE}Arrows or 1-9 to select{RESET}")
-
-    return "\n".join(rows)
+    if width >= 24:
+        return "\n".join(
+            render_box(
+                rows,
+                width,
+                title=f"{ACCENT}{BOLD}/ commands{RESET}",
+                right_title=f"{SUBTLE}Tab/Enter select{RESET}",
+                footer=f"{SUBTLE}↑/↓ or 1-9 select · Esc close{RESET}",
+                border_color=BORDER,
+            )
+        )
+    return "\n".join(truncate_plain(row, width) for row in rows)
 
 
 def classify_diff_line(line: str) -> str:
@@ -659,16 +863,16 @@ def compute_changed_range(removed: str, added: str) -> tuple[int, int] | None:
     return (p, len(added) - s) if p < (len(added) - s) else None
 
 
-def apply_word_emphasis(content: str, color: str, emphasis_range: tuple[int, int] | None = None) -> str:
+def apply_word_emphasis(content: str, color: str, emphasis_range: tuple[int, int] | None = None, bg: str = "") -> str:
     """Apply color and word-level emphasis."""
     if not emphasis_range:
-        return f"{color}{content}{RESET}"
+        return f"{bg}{color}{content}{RESET}"
     s, e = emphasis_range
-    return f"{color}{content[:s]}{BOLD}{REVERSE}{content[s:e]}{RESET}{color}{content[e:]}{RESET}"
+    return f"{bg}{color}{content[:s]}{BOLD}{REVERSE}{content[s:e]}{RESET}{bg}{color}{content[e:]}{RESET}"
 
 
 def colorize_unified_diff_block(block: str) -> str:
-    """Full diff with word-level highlighting and look-ahead pairing."""
+    """Full diff with subtle +/- background tints, word-level highlighting, and look-ahead pairing."""
     lines = block.splitlines()
     res: list[str] = []
     i = 0
@@ -690,15 +894,17 @@ def colorize_unified_diff_block(block: str) -> str:
             paired = min(len(removals), len(additions))
             for j in range(paired):
                 emphasis = compute_changed_range(removals[j], additions[j])
-                res.append("-" + apply_word_emphasis(removals[j], RED, emphasis))
-                res.append("+" + apply_word_emphasis(additions[j], GREEN, emphasis))
+                res.append(f"{DIFF_DEL_BG}{RED}-{RESET}" + apply_word_emphasis(removals[j], RED, emphasis, DIFF_DEL_BG))
+                res.append(
+                    f"{DIFF_ADD_BG}{GREEN}+{RESET}" + apply_word_emphasis(additions[j], GREEN, emphasis, DIFF_ADD_BG)
+                )
             for j in range(paired, len(removals)):
-                res.append(f"{RED}-{removals[j]}{RESET}")
+                res.append(f"{DIFF_DEL_BG}{RED}-{removals[j]}{RESET}")
             for j in range(paired, len(additions)):
-                res.append(f"{GREEN}+{additions[j]}{RESET}")
+                res.append(f"{DIFF_ADD_BG}{GREEN}+{additions[j]}{RESET}")
             continue
         if line.startswith("+"):
-            res.append(f"{GREEN}{line}{RESET}")
+            res.append(f"{DIFF_ADD_BG}{GREEN}{line}{RESET}")
             i += 1
         else:
             res.append(f"{DIM}{line}{RESET}")
@@ -727,7 +933,7 @@ def get_permission_prompt_max_scroll_offset(request: dict[str, Any], expanded: b
 
 
 def _permission_max_visible(request: dict[str, Any], rows: int) -> int:
-    return max(2, rows - len(request.get("choices", [])) - 9)
+    return max(2, rows - len(request.get("choices", [])) - 10)
 
 
 def _permission_detail_lines(request: dict[str, Any]) -> list[str]:
@@ -738,7 +944,8 @@ def _permission_detail_lines(request: dict[str, Any]) -> list[str]:
     if request.get("kind") != "command":
         return flat
     width, _ = _cached_terminal_size()
-    return [wrapped for line in flat for wrapped in wrap_panel_body_line(line, max(8, width))]
+    box_width = max(8, width - 1)
+    return [wrapped for line in flat for wrapped in wrap_panel_body_line(line, box_width)]
 
 
 def flatten_detail_lines(details: list[str]) -> list[str]:
@@ -769,43 +976,66 @@ def render_permission_prompt(
     feedback_mode: bool = False,
     feedback_input: str = "",
 ) -> str:
-    """Claude-style: permission prompt with amber accents."""
+    """Render permission prompt inside a crisp rounded card with keycap choices."""
+    cols, rows = _cached_terminal_size()
+    width = max(8, cols - 1)
+    content_w = max(4, width - 4) if width >= 10 else width
+    is_command = request.get("kind") == "command"
+    border_color = YELLOW if is_command else BORDER_ACTIVE
+    title_color = YELLOW if is_command else ACCENT
+
     lines: list[str] = []
     if feedback_mode:
         lines.extend(
             [
-                f"{BRIGHT_YELLOW}{ICON_PROMPT} Provide reason for rejection:{RESET}",
-                f"  {GREEN}{ICON_PROMPT}{RESET} {feedback_input}_",
+                f"{BRIGHT_YELLOW}{BOLD}{ICON_PROMPT} Provide reason for rejection:{RESET}",
+                f"  {BRAND_LIME}{ICON_PROMPT}{RESET} {feedback_input}_",
                 "",
-                f"{SUBTLE}  Press Enter to send, Esc to cancel.{RESET}",
+                f"{SUBTLE}  Enter send · Esc cancel{RESET}",
             ]
         )
+        footer_hint = f"{SUBTLE}Enter 发送 · Esc 取消{RESET}"
     else:
-        lines.extend([request.get("summary", "Permission Request"), ""])
+        summary = request.get("summary", "Permission Request")
+        lines.extend([f"{BRIGHT_WHITE}{BOLD}{summary}{RESET}", render_divider(content_w)])
         details = request.get("details", [])
         if details:
             flat = _permission_detail_lines(request)
-            if not expanded and request.get("kind") != "command":
+            if not expanded and not is_command:
                 lines.append(
-                    f"{SUBTLE}  {ICON_ARROW} {len(flat)} lines hidden {SUBTLE}|{RESET} {DIM}press 'v' to expand | Ctrl+O toggle{RESET}"
+                    f"{SUBTLE}  {ICON_ARROW} {len(flat)} lines hidden · {RESET}{DIM}press 'v' or Ctrl+O to expand{RESET}"
                 )
             else:
                 colorized = colorize_edit_permission_details(flat)
-                _, rows = _cached_terminal_size()
                 visible, total = slice_visible_details(colorized, scroll_offset, _permission_max_visible(request, rows))
                 lines.extend(visible)
                 if total > len(visible):
-                    lines.append(
-                        f"{SUBTLE}  {ICON_DIVIDER * 3} scroll {scroll_offset + 1}/{total} (Wheel/PgUp/PgDn) {ICON_DIVIDER * 3}{RESET}"
-                    )
+                    lines.append(f"{SUBTLE}  ─── scroll {scroll_offset + 1}/{total} (Wheel / PgUp / PgDn) ───{RESET}")
             lines.append("")
         for i, choice in enumerate(request.get("choices", [])):
             label = choice.get("label", "")
             key = choice.get("key", "")
             if i == selected_choice_index:
-                lines.append(
-                    f"  {HIGHLIGHT_BG}{ACCENT}{ICON_ARROW}{RESET}{HIGHLIGHT_BG} {BRIGHT_WHITE}{BOLD}{label}{RESET}{HIGHLIGHT_BG} {SUBTLE}({key}){RESET}"
-                )
+                row_txt = f"{ACCENT}{BOLD}{ICON_ARROW}{RESET} {ACCENT}[{key}]{RESET} {BRIGHT_WHITE}{BOLD}{label}{RESET}"
+                lines.append(paint_row(truncate_plain(row_txt, content_w), content_w, HIGHLIGHT_BG))
             else:
-                lines.append(f"    {SUBTLE}{ICON_DOT}{RESET} {label} {SUBTLE}({key}){RESET}")
-    return render_panel("Action Required", "\n".join(lines), right_title="Permission")
+                lines.append(f"  {SUBTLE}[{key}]{RESET} {TEXT}{label}{RESET}")
+        footer_hint = f"{SUBTLE}↑/↓ 选择 · Enter 确认 · v 详情{RESET}"
+
+    wrapped_lines: list[str] = []
+    for line in lines:
+        if HIGHLIGHT_BG and HIGHLIGHT_BG in line:
+            wrapped_lines.append(line)
+        else:
+            wrapped_lines.extend(wrap_panel_body_line(line, max(8, width)))
+
+    right_tag = f"{YELLOW}Command{RESET}" if is_command else f"{SUBTLE}Permission{RESET}"
+    boxed = render_box(
+        wrapped_lines,
+        width,
+        title=f"{title_color}◆ {BOLD}Action Required{RESET}",
+        right_title=right_tag,
+        footer=footer_hint,
+        border_color=border_color,
+    )
+    return "\n".join(boxed)

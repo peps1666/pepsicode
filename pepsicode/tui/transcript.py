@@ -6,8 +6,11 @@ from .chrome import (
     ACCENT,
     BOLD,
     BORDER,
+    BRAND_LIME,
     BRIGHT_RED,
     CYAN,
+    DIFF_ADD_BG,
+    DIFF_DEL_BG,
     DIM,
     GREEN,
     ICON_DIVIDER,
@@ -79,11 +82,11 @@ _PATH_TOOLS = frozenset({"read_file", "write_file", "edit_file", "patch_file", "
 def _tool_status(entry: TranscriptEntry) -> tuple[str, str, str]:
     """Return the ``(color, icon, label)`` used by the header."""
     if entry.status == "running":
-        return YELLOW, "·", "running"
+        return YELLOW, "◌", "running"
     if entry.status == "error":
-        return BRIGHT_RED, "!", "failed"
+        return BRIGHT_RED, "✖", "failed"
     if entry.status == "success":
-        return GREEN, "✓", "done"
+        return BRAND_LIME, "✓", "done"
     return SUBTLE, "·", ""
 
 
@@ -184,19 +187,19 @@ def _render_tool_header(
     return f"{left}{' ' * gap}{right}"
 
 
-def _output_style(name: str, line: str) -> str:
-    """Add a little semantic color without guessing at arbitrary output."""
+def _output_style(name: str, line: str) -> tuple[str, str]:
+    """Return ``(fg_style, bg_style)`` semantic colors without guessing at arbitrary output."""
     stripped = line.lstrip()
     if stripped.startswith(("ERROR:", "Error:", "error:")):
-        return BRIGHT_RED
+        return BRIGHT_RED, ""
     if name in _DIFF_TOOLS:
         if stripped.startswith(("+++", "---", "@@")):
-            return CYAN
+            return CYAN, ""
         if stripped.startswith("+"):
-            return GREEN
+            return GREEN, DIFF_ADD_BG
         if stripped.startswith("-"):
-            return RED
-    return ""
+            return RED, DIFF_DEL_BG
+    return "", ""
 
 
 def render_tool_activity(entry: TranscriptEntry, cols: int) -> list[str]:
@@ -214,14 +217,17 @@ def render_tool_activity(entry: TranscriptEntry, cols: int) -> list[str]:
     content_width = max(1, cols - 5)
     rail = BRIGHT_RED if failed else BORDER
 
-    def row(prefix: str, text: str, style: str = "") -> str:
+    def row(prefix: str, text: str, style: str = "", bg: str = "") -> str:
         text = truncate_plain(strip_ansi(text).expandtabs(4), content_width)
         if not text:
             return f"  {rail}{prefix}{RESET}"
-        return f"  {rail}{prefix}{RESET} {style}{text}{RESET}"
+        styled = f"{style}{text}{RESET}" if style else text
+        if bg:
+            styled = paint_row(styled, content_width, bg)
+        return f"  {rail}{prefix}{RESET} {styled}"
 
-    def body_row(text: str, style: str = "") -> str:
-        return row("│", text, style)
+    def body_row(text: str, style: str = "", bg: str = "") -> str:
+        return row("│", text, style, bg)
 
     def close_row(text: str, style: str = SUBTLE) -> str:
         return row("╰", text, style)
@@ -249,21 +255,21 @@ def render_tool_activity(entry: TranscriptEntry, cols: int) -> list[str]:
 
     # Bound physical rows, including a single very long line on a narrow screen.
     max_rows = 8 if failed else 6
-    output: list[tuple[str, str]] = []
+    output: list[tuple[str, str, str]] = []
     truncated = False
     for raw in raw_lines:
-        style = _output_style(name, raw)
+        style, bg = _output_style(name, raw)
         parts = wrap_text(strip_ansi(raw).expandtabs(4), content_width).split("\n")
         for part in parts:
             if len(output) >= max_rows:
                 truncated = True
                 break
-            output.append((part, style))
+            output.append((part, style, bg))
         if truncated:
             break
 
     lines = [header]
-    lines.extend(body_row(part, style or SUBTLE) for part, style in output)
+    lines.extend(body_row(part, style or SUBTLE, bg) for part, style, bg in output)
     if truncated:
         hint = "… output continues · /transcript-save <path>" if content_width > 3 else "…"
         lines.append(close_row(hint))
@@ -271,18 +277,19 @@ def render_tool_activity(entry: TranscriptEntry, cols: int) -> list[str]:
 
 
 def _render_user_entry(entry: TranscriptEntry) -> str:
-    """A user turn reads as a raised card so it stands apart from model output."""
+    """A user turn reads as a raised card with a lime accent stripe."""
     cols, _ = _cached_terminal_size()
     # The panel indents two more columns and pads to its inner width, so stop
     # the card short of the edge.
     width = max(8, cols - 6)
-    body_width = max(2, width - 4)
-    rows = [""]
+    body_width = max(2, width - 6)
+    rows = [paint_row(f"  {BRAND_LIME}▎{RESET}", width, USER_BG)]
     for raw in (entry.body or "").splitlines() or [""]:
         for part in wrap_text(raw, body_width).split("\n") or [""]:
-            rows.append(f"  {part}" if part else "")
-    rows.append("")
-    return "\n".join(paint_row(row, width, USER_BG) for row in rows)
+            line = f"  {BRAND_LIME}▎{RESET}  {part}" if part else f"  {BRAND_LIME}▎{RESET}"
+            rows.append(paint_row(line, width, USER_BG))
+    rows.append(paint_row(f"  {BRAND_LIME}▎{RESET}", width, USER_BG))
+    return "\n".join(rows)
 
 
 def _render_transcript_entry(entry: TranscriptEntry) -> str:

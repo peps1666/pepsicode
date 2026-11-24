@@ -35,15 +35,28 @@ BRIGHT_YELLOW = _sgr("93", color=True)
 BRIGHT_BLUE = _sgr("94", color=True)
 BRIGHT_MAGENTA = _sgr("95", color=True)
 BRIGHT_WHITE = _sgr("97", color=True)
-ACCENT = _sgr("38;5;215", color=True)
-BORDER = _sgr("38;5;240", color=True)
-BORDER_DIM = _sgr("38;5;237", color=True)
+BRAND_LIME = _sgr("38;5;155", color=True)
+BRAND_LIME_DIM = _sgr("38;5;113", color=True)
+ACCENT = BRAND_LIME
+PLAN_ACCENT = _sgr("38;5;81", color=True)
+PLAN_BADGE_BG = _sgr("48;5;23", color=True)
+BUILD_BADGE_BG = _sgr("48;5;22", color=True)
+WARN_BADGE_BG = _sgr("48;5;58", color=True)
+TEXT = _sgr("38;5;252", color=True)
+TEXT_FAINT = _sgr("38;5;240", color=True)
+BORDER = _sgr("38;5;239", color=True)
+BORDER_ACTIVE = BRAND_LIME
+BORDER_DIM = _sgr("38;5;236", color=True)
 SUBTLE = _sgr("38;5;245", color=True)
-HIGHLIGHT_BG = _sgr("48;5;237", color=True)
-CODE_BG = _sgr("48;5;236", color=True)
+SURFACE_BG = _sgr("48;5;235", color=True)
+HIGHLIGHT_BG = _sgr("48;5;238", color=True)
+PROGRESS_TRACK_BG = _sgr("48;5;237", color=True)
+CODE_BG = _sgr("48;5;235", color=True)
 # Raised surface behind a user turn: one step above the terminal background, so
 # the block reads as a card without competing with code blocks or selections.
 USER_BG = _sgr("48;5;236", color=True)
-CODE_FG = ACCENT
-QUOTE_BAR = SUBTLE
-HEADING_ACCENT = ACCENT
+DIFF_ADD_BG = _sgr("48;5;22", color=True)
+DIFF_DEL_BG = _sgr("48;5;52", color=True)
+CODE_FG = _sgr("38;5;117", color=True)
+QUOTE_BAR = BRAND_LIME_DIM
+HEADING_ACCENT = BRAND_LIME

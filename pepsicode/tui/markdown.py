@@ -2,12 +2,16 @@ from __future__ import annotations
 
 import re
 
-from .chrome import string_display_width, strip_ansi
+from .chrome import pad_plain, paint_row, string_display_width, strip_ansi, truncate_plain, wrap_text
 from .theme import (
     BOLD,
+    BORDER,
+    BORDER_DIM,
+    BRAND_LIME_DIM,
+    BRIGHT_WHITE,
     CODE_BG,
     CODE_FG,
-    DIM,
+    CYAN,
     GREEN,
     HEADING_ACCENT,
     ITALIC,
@@ -90,14 +94,22 @@ def _is_table_separator(cells: list[str] | None, count: int) -> bool:
 
 
 def _table_row(cells: list[str], *, header: bool = False, widths: list[int] | None = None) -> str:
-    style = BOLD if header else ""
+    style = f"{BRIGHT_WHITE}{BOLD}" if header else ""
     rendered = []
     for index, cell in enumerate(cells):
         content = f"{style}{_inline(cell, style)}{RESET}" if header else _inline(cell)
         if widths and index < len(cells) - 1:
             content += " " * max(0, widths[index] - string_display_width(content))
         rendered.append(content)
-    return f" {SUBTLE}│{RESET} ".join(rendered)
+    return f" {BORDER}│{RESET} ".join(rendered)
+
+
+def _table_separator(widths: list[int]) -> str:
+    segments = []
+    for index, col_w in enumerate(widths):
+        extra = 1 if index in (0, len(widths) - 1) else 2
+        segments.append("─" * (max(1, col_w) + extra))
+    return f"{BORDER}{'┼'.join(segments)}{RESET}"
 
 
 def _render_table(header: list[str], rows: list[list[str]], width: int | None) -> list[str]:
@@ -110,8 +122,11 @@ def _render_table(header: list[str], rows: list[list[str]], width: int | None) -
     ]
     total_width = sum(widths) + 3 * (columns - 1)
     if width is None or total_width <= width:
-        aligned = widths if width is not None else None
-        return [_table_row(header, header=True, widths=aligned), *(_table_row(row, widths=aligned) for row in rows)]
+        return [
+            _table_row(header, header=True, widths=widths),
+            _table_separator(widths),
+            *(_table_row(row, widths=widths) for row in rows),
+        ]
 
     # Narrow screens use labeled fields, so wrapping cannot obscure which
     # value belongs to which column. An explicit empty value remains visible.
@@ -128,9 +143,39 @@ def _render_table(header: list[str], rows: list[list[str]], width: int | None) -
     return result
 
 
+def _render_code_block(code_lines: list[str], lang: str, width: int | None, *, closed: bool) -> list[str]:
+    """Render a fenced code block with a uniform background width and rounded borders."""
+    expanded = [line.expandtabs(4) for line in code_lines]
+    max_line_w = max((string_display_width(line) for line in expanded), default=0)
+    lang_label = truncate_plain(lang, max(1, (width - 6) if width is not None else 32)) if lang else ""
+    lang_need = (string_display_width(lang_label) + 4) if lang_label else 4
+    desired = max(16, max_line_w + 2, lang_need)
+    block_w = min(desired, max(8, width - 2)) if width is not None else desired
+
+    if lang_label and block_w >= string_display_width(lang_label) + 4:
+        dash_count = max(1, block_w - string_display_width(lang_label) - 3)
+        top = f"{BORDER}╭─{RESET}{CYAN} {lang_label} {RESET}{BORDER}{'─' * dash_count}{RESET}"
+    else:
+        top = f"{BORDER}╭{'─' * block_w}{RESET}"
+
+    rendered = [top]
+    inner_text_w = max(1, block_w - 2)
+    for raw in expanded:
+        wrapped = wrap_text(raw, inner_text_w).split("\n") if raw else [""]
+        for part in wrapped:
+            text_cell = f" {pad_plain(part, inner_text_w)} "
+            if CODE_BG:
+                body = paint_row(text_cell, block_w, CODE_BG)
+            else:
+                body = f" {part}"
+            rendered.append(f"{BORDER}│{RESET}{body}")
+    if closed:
+        rendered.append(f"{BORDER}╰{'─' * block_w}{RESET}")
+    return rendered
+
+
 def render_markdownish(input_text: str, width: int | None = None) -> str:
     lines = input_text.split("\n")
-    in_code_block = False
     result_lines: list[str] = []
 
     def separate_section() -> None:
@@ -145,23 +190,27 @@ def render_markdownish(input_text: str, width: int | None = None) -> str:
         formatted = line
 
         if line.startswith("```"):
-            in_code_block = not in_code_block
             lang = line[3:].strip()
-            if in_code_block and lang:
-                result_lines.append(f"{CODE_BG}{SUBTLE} {lang} {RESET}")
-            else:
-                result_lines.append(f"{SUBTLE}{'─' * 4}{RESET}")
-            continue
-
-        if in_code_block:
-            result_lines.append(f"{CODE_BG} {line} {RESET}")
+            code_lines: list[str] = []
+            cursor = index + 1
+            closed = False
+            while cursor < len(lines):
+                if lines[cursor].startswith("```"):
+                    closed = True
+                    cursor += 1
+                    break
+                code_lines.append(lines[cursor])
+                cursor += 1
+            result_lines.extend(_render_code_block(code_lines, lang, width, closed=closed))
+            skip_until = cursor
             continue
 
         trimmed_line = line.strip()
 
         # Horizontal rule
         if trimmed_line in ("---", "***", "___"):
-            result_lines.append(f"{SUBTLE}{'─' * 20}{RESET}")
+            rule_w = min(36, max(12, width - 4)) if width is not None else 24
+            result_lines.append(f"{BORDER_DIM}{'─' * rule_w}{RESET}")
             continue
 
         # Recognize tables only when a header is followed by a delimiter row.
@@ -184,7 +233,7 @@ def render_markdownish(input_text: str, width: int | None = None) -> str:
         # Headings rely on color and weight for hierarchy: underlining the accent
         # color doubles the emphasis and reads like a link, so no decoration here.
         if line.startswith("### "):
-            style = f"{HEADING_ACCENT}{BOLD}"
+            style = f"{BRIGHT_WHITE}{BOLD}"
             separate_section()
             result_lines.append(f"  {style}{_inline(line[4:], style)}{RESET}")
             continue
@@ -196,12 +245,12 @@ def render_markdownish(input_text: str, width: int | None = None) -> str:
         if line.startswith("# "):
             style = f"{HEADING_ACCENT}{BOLD}"
             separate_section()
-            result_lines.append(f"{style}{_inline(line[2:], style)}{RESET}")
+            result_lines.append(f"{style}▍ {_inline(line[2:], style)}{RESET}")
             continue
 
         # Blockquote with visual bar
         if line.startswith("> "):
-            style = f"{ITALIC}{DIM}"
+            style = f"{ITALIC}{SUBTLE}"
             result_lines.append(f"{QUOTE_BAR}▎{RESET} {style}{_inline(line[2:], style)}{RESET}")
             continue
 
@@ -218,7 +267,7 @@ def render_markdownish(input_text: str, width: int | None = None) -> str:
                 indent = m2.group(1)
                 rest = line[m2.end() :]
                 num = line[len(indent) : m2.end()].strip()
-                formatted = f"{indent}{HEADING_ACCENT}{num}{RESET} {rest}"
+                formatted = f"{indent}{BRAND_LIME_DIM}{num}{RESET} {rest}"
 
         # Inline formatting — single-pass for code + bold + italic
         formatted = _inline(formatted)

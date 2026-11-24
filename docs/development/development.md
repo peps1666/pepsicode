@@ -91,6 +91,6 @@ TUI 新对话首页使用整个终端视口作为低亮度鲨鱼动画背景，�
 
 ## 品牌标识
 
-PepsiCode 使用用户提供的荧光绿像素终端标识，原稿保存在 `assets/brand-reference.png`。`pepsicode/branding.py` 保存共同的像素轮廓和配色：TUI 首页使用白色半块字符还原，采用 10 列 × 5 行的细边框小号版本（含一行气泡），适配终端字形比例；白色客户端使用原稿中的深色轮廓、绿色屏幕版本，窗口和 Windows 应用图标使用深底荧光绿版本。README 展示完整的双色字标，GIF 只增加气泡浮动与光标闪烁，并为减少动态效果的偏好提供静态 PNG；SVG 版本也支持 `prefers-reduced-motion`。
+PepsiCode 使用用户提供的荧光绿像素终端标识，原稿保存在 `assets/brand-reference.png`。`pepsicode/branding.py` 保存共同的像素轮廓和配色：TUI 首页使用荧光绿半块字符还原（禁用颜色时自动退化为无色半块字符），采用 10 列 × 5 行的细边框小号版本（含一行气泡），适配终端字形比例；白色客户端使用原稿中的深色轮廓、绿色屏幕版本，窗口和 Windows 应用图标使用深底荧光绿版本。README 展示完整的双色字标，GIF 只增加气泡浮动与光标闪烁，并为减少动态效果的偏好提供静态 PNG；SVG 版本也支持 `prefers-reduced-motion`。
 
 安装 Pillow 后，在仓库根目录运行 `python scripts/generate_app_icon.py`，统一生成 `assets/logo.{svg,png,gif}`、`pepsicode-client/public/app-icon.{svg,png}`、`pepsicode-client/public/brand-mark.svg` 和 `pepsicode-client/assets/app-icon.ico`。字标导出需要本机安装 Consolas、DejaVu Sans Mono Bold 或 Menlo 字体。生成结果随源码提交，正常运行与打包不需要 Pillow 或导出字体。

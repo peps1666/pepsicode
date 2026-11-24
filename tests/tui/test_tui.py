@@ -45,11 +45,12 @@ def test_stream_transcript_wraps_a_user_turn_inside_the_card() -> None:
     lines = _build_stream_transcript_lines([TranscriptEntry(id=1, kind="user", body=body)], 40)
     plain = [strip_ansi(line) for line in lines]
 
-    # The card opens and closes with a blank padded row, so nothing collides.
-    assert plain[0] == ""
-    question = [line for line in plain[1:-1] if line.strip()]
+    # The card opens and closes with a left accent stripe row, so nothing collides.
+    assert plain[0] == "▎"
+    assert plain[-2] == "▎"
+    question = [line for line in plain[1:-2] if line.strip()]
     assert len(question) >= 2
-    assert all(line.startswith("  ") for line in question)
+    assert all(line.startswith("▎  ") for line in question)
     assert "ruff" in "".join(question)
     assert all("─" not in line for line in plain)
     assert all(string_display_width(line) <= 39 for line in lines)
@@ -89,9 +90,9 @@ def test_user_turn_is_painted_and_model_output_is_not() -> None:
     assert "改成 ruff" in "".join(rows[index][1] for index in runs[1])
     for run in runs:
         assert len(run) == 3, "padding row, text row, padding row"
-        assert not rows[run[0]][1].strip() and not rows[run[-1]][1].strip()
+        assert rows[run[0]][1].strip() == "▎" and rows[run[-1]][1].strip() == "▎"
     assert all(width <= 59 for _, _, width in rows)
-    label = next(index for index, (_, text, _) in enumerate(rows) if text.startswith("  · "))
+    label = next(index for index, (_, text, _) in enumerate(rows) if text.startswith("  ◆ "))
     assert not rows[label][0], "model output keeps the plain background"
 
 

@@ -242,7 +242,8 @@ def test_composer_status_is_compact_and_keeps_trust_warning(monkeypatch, capsys,
     lines = _initial_frame_text(capsys.readouterr().out).splitlines()
     assert "BUILD trust_commands 高风险" in lines[-2]
     assert "1014" in lines[-1]
-    assert "Ask anything..." in lines[-3]
+    prompt_row = lines[-3] if cols < 36 else lines[-4]
+    assert "Ask anything..." in prompt_row
     assert all(chrome.string_display_width(line) <= cols for line in lines)
     if cols >= 80:
         assert "test-model" in lines[-2]
