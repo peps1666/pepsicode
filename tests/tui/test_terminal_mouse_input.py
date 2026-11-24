@@ -25,3 +25,12 @@ def test_arrow_keys_and_plain_text_keep_their_meaning():
         KeyEvent(name="down", ctrl=False, meta=False),
         TextEvent(text="b", ctrl=False, meta=False),
     ]
+
+
+def test_copy_shortcut_sequences_decode_cleanly():
+    decoder = TerminalInputDecoder()
+    assert decoder.feed("\x1b[67;6u") == [KeyEvent(name="c", ctrl=True, meta=False, shift=True)]
+    assert decoder.feed("\x1b[99;6u") == [KeyEvent(name="c", ctrl=True, meta=False, shift=True)]
+    assert decoder.feed("\x1b[27;6;67~") == [KeyEvent(name="c", ctrl=True, meta=False, shift=True)]
+    assert decoder.feed("\x1b[2;5~") == [KeyEvent(name="insert", ctrl=True, meta=False)]
+    assert decoder.feed("\x1bc") == [TextEvent(text="c", ctrl=False, meta=True)]

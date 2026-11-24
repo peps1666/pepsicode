@@ -22,11 +22,20 @@ def test_copy_is_prioritized_over_exit_for_repeated_ctrl_c(monkeypatch, capsys, 
     capsys.readouterr()
     for action, x in [("press", 0), ("drag", 4), ("release", 4)]:
         dispatch(state, MouseEvent(action, x, 0))
+    assert copied == []
     for _ in range(3):
         dispatch(state, event)
         assert state.exit_requested_at is None
         assert state.frame_renderer.selection is not None
-    assert copied == ["hello"] * 4
+    assert copied == ["hello"] * 3
+
+
+def test_ctrl_shift_c_without_selection_does_not_exit(monkeypatch):
+    state = app.ScreenState()
+    dispatch(state, parse_input_chunk("\x1b[67;6u").events[0])
+    assert state.exit_requested_at is None
+    dispatch(state, parse_input_chunk("\x1b[27;6;67~").events[0])
+    assert state.exit_requested_at is None
 
 
 def test_single_ctrl_c_without_observable_selection_does_not_exit(monkeypatch):

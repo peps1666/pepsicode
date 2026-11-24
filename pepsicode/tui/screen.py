@@ -92,6 +92,7 @@ class FrameRenderer:
         self._content: list[str] = []
         self._size: tuple[int, int] | None = None
         self.selection: Selection | None = None
+        self.row_highlights: dict[int, tuple[int, int]] | None = None
 
     def draw(self, lines: list[str], cols: int, rows: int) -> None:
         cols, rows = max(2, cols), max(1, rows)
@@ -99,7 +100,11 @@ class FrameRenderer:
         content = [truncate_plain(line, cols - 1) for line in lines[:rows]]
         content += [""] * (rows - len(content))
         frame = list(content)
-        if self.selection is not None and not self.selection.is_empty:
+        if self.row_highlights is not None:
+            for index, span in self.row_highlights.items():
+                if 0 <= index < len(frame):
+                    frame[index] = highlight_columns(frame[index], *span)
+        elif self.selection is not None and not self.selection.is_empty:
             for index, line in enumerate(frame):
                 span = self.selection.columns_for_row(index)
                 if span is not None:

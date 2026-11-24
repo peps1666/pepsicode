@@ -8,13 +8,28 @@ from typing import Literal, Union
 # Pre-compiled regexes for escape sequence parsing
 _SGR_MOUSE_RE = re.compile(r"^\x1b\[<(\d+);(\d+);(\d+)([Mm])")
 _CSI_CURSOR_RE = re.compile(r"^\x1b\[(?:1;(\d+))?([A-DF-H])")
-_CSI_TILDE_RE = re.compile(r"^\x1b\[(\d+)~")
+_MODIFY_OTHER_KEYS_RE = re.compile(r"^\x1b\[27;(\d+);(\d+)~")
+_CSI_U_RE = re.compile(r"^\x1b\[(\d+);(\d+)u")
+_CSI_TILDE_RE = re.compile(r"^\x1b\[(\d+)(?:;(\d+))?~")
 _CSI_OTHER_RE = re.compile(r"^\x1b\[[\x30-\x3f]*[\x20-\x2f]*[\x40-\x7e]")
 _SS3_RE = re.compile(r"^\x1bO([A-DF-H])")
 _ESC_CHAR_RE = re.compile(r"^\x1b([^\x1b\[O])")
 
 ParsedKeyName = Literal[
-    "return", "tab", "backspace", "delete", "up", "down", "left", "right", "pageup", "pagedown", "home", "end", "escape"
+    "return",
+    "tab",
+    "backspace",
+    "delete",
+    "insert",
+    "up",
+    "down",
+    "left",
+    "right",
+    "pageup",
+    "pagedown",
+    "home",
+    "end",
+    "escape",
 ]
 
 
@@ -24,6 +39,7 @@ class KeyEvent:
     ctrl: bool
     meta: bool
     kind: str = "key"
+    shift: bool = False
 
 
 @dataclass(frozen=True)
@@ -143,6 +159,13 @@ def maybe_need_more_for_escape_sequence(chunk: str) -> bool:
     return False
 
 
+def _decode_csi_modifiers(mod_str: str | None) -> tuple[bool, bool, bool]:
+    """Decode xterm CSI modifier parameter into ``(ctrl, meta, shift)``."""
+    mod = int(mod_str) if mod_str else 1
+    # Modifier logic: 2=Shift, 3=Alt, 4=Shift+Alt, 5=Ctrl, 6=Shift+Ctrl, 7=Alt+Ctrl, 8=Shift+Alt+Ctrl
+    return bool((mod - 1) & 4), bool((mod - 1) & 2), bool((mod - 1) & 1)
+
+
 def parse_escape_sequence(chunk: str) -> tuple[ParsedInputEvent | None, int]:
     if not chunk or chunk[0] != "\x1b":
         return None, 0
@@ -167,28 +190,47 @@ def parse_escape_sequence(chunk: str) -> tuple[ParsedInputEvent | None, int]:
     # CSI cursor: ESC[{1;modifier}A/B/C/D/H/F
     csi_cursor_match = _CSI_CURSOR_RE.match(chunk)
     if csi_cursor_match:
-        mod_str = csi_cursor_match.group(1)
+        ctrl, meta, _ = _decode_csi_modifiers(csi_cursor_match.group(1))
         key_char = csi_cursor_match.group(2)
-        mod = int(mod_str) if mod_str else 1
-
-        # Modifier logic: 2=Shift, 3=Alt, 4=Shift+Alt, 5=Ctrl, 6=Shift+Ctrl, 7=Alt+Ctrl, 8=Shift+Alt+Ctrl
-        # 1=None.
-        # (mod - 1) & 4 -> Ctrl
-        # (mod - 1) & 2 -> Alt/Meta
-        ctrl = bool((mod - 1) & 4)
-        meta = bool((mod - 1) & 2)
-
         name_map: dict[str, str] = {"A": "up", "B": "down", "C": "right", "D": "left", "H": "home", "F": "end"}
         return KeyEvent(name=name_map[key_char], ctrl=ctrl, meta=meta), csi_cursor_match.end()
 
-    # CSI tilde: ESC[N~
+    # xterm modifyOtherKeys: ESC[27;modifier;codepoint~ (e.g. Ctrl+Shift+C)
+    mod_other_match = _MODIFY_OTHER_KEYS_RE.match(chunk)
+    if mod_other_match:
+        ctrl, meta, shift = _decode_csi_modifiers(mod_other_match.group(1))
+        codepoint = int(mod_other_match.group(2))
+        if codepoint in (67, 99) and ctrl:
+            return KeyEvent(name="c", ctrl=True, meta=meta, shift=shift), mod_other_match.end()
+        return None, mod_other_match.end()
+
+    # CSI u (kitty/VT keyboard protocol): ESC[codepoint;modifieru
+    csi_u_match = _CSI_U_RE.match(chunk)
+    if csi_u_match:
+        codepoint = int(csi_u_match.group(1))
+        ctrl, meta, shift = _decode_csi_modifiers(csi_u_match.group(2))
+        if codepoint in (67, 99) and ctrl:
+            return KeyEvent(name="c", ctrl=True, meta=meta, shift=shift), csi_u_match.end()
+        return None, csi_u_match.end()
+
+    # CSI tilde: ESC[N(;modifier)~
     csi_tilde_match = _CSI_TILDE_RE.match(chunk)
     if csi_tilde_match:
         n = int(csi_tilde_match.group(1))
-        # 1=home,3=delete,4=end,5=pageup,6=pagedown,7=home,8=end
-        tilde_map: dict[int, str] = {1: "home", 3: "delete", 4: "end", 5: "pageup", 6: "pagedown", 7: "home", 8: "end"}
+        ctrl, meta, _ = _decode_csi_modifiers(csi_tilde_match.group(2))
+        # 1=home,2=insert,3=delete,4=end,5=pageup,6=pagedown,7=home,8=end
+        tilde_map: dict[int, str] = {
+            1: "home",
+            2: "insert",
+            3: "delete",
+            4: "end",
+            5: "pageup",
+            6: "pagedown",
+            7: "home",
+            8: "end",
+        }
         if n in tilde_map:
-            return KeyEvent(name=tilde_map[n], ctrl=False, meta=False), csi_tilde_match.end()
+            return KeyEvent(name=tilde_map[n], ctrl=ctrl, meta=meta), csi_tilde_match.end()
         return None, csi_tilde_match.end()
 
     # Unknown complete CSI is a terminal control sequence, not user text.

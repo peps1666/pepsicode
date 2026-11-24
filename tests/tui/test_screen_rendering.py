@@ -306,19 +306,23 @@ def test_drag_copies_selection_and_ctrl_c_copies_instead_of_quitting(monkeypatch
 
     for action, x, y in [("press", 6, 0), ("drag", 2, 1), ("release", 5, 1)]:
         assert app._handle_selection_event(state, MouseEvent(action=action, x=x, y=y), lambda: None)
-    assert copied == ["line\nsecond"]
-    assert state.selection_notice
+    # Releasing keeps the selection highlighted without auto-copying.
+    assert copied == []
+    assert state.frame_renderer.selection is not None and not state.frame_renderer.selection.is_empty
+    assert state.selection_notice is None
 
     assert app._handle_selection_event(state, KeyEvent(name="c", ctrl=True, meta=False), lambda: None)
-    assert copied == ["line\nsecond", "line\nsecond"]
+    assert copied == ["line\nsecond"]
+    assert state.selection_notice
     assert state.frame_renderer.selection is not None
     # Repeated copying must never fall through to the exit shortcut.
     assert app._handle_selection_event(state, KeyEvent(name="c", ctrl=True, meta=False), lambda: None)
-    assert copied == ["line\nsecond"] * 3
+    assert copied == ["line\nsecond", "line\nsecond"]
 
-    # The next ordinary key clears the notice and is still processed normally.
+    # The next ordinary key clears the selection and notice and is still processed normally.
     assert not app._handle_selection_event(state, TextEvent(text="x", ctrl=False, meta=False), lambda: None)
     assert state.selection_notice is None
+    assert state.frame_renderer.selection is None
     assert not app._handle_selection_event(state, KeyEvent(name="c", ctrl=True, meta=False), lambda: None)
 
 
@@ -353,7 +357,7 @@ def test_scrolled_back_view_stays_put_while_output_streams(monkeypatch, capsys):
     entry.body += "\n" + "\n".join(f"new {n}" for n in range(10))
     app._render_stream_screen(args, state)
     terminal.apply(capsys.readouterr().out)
-    assert terminal.lines()[1:6] == before[1:6]
+    assert [line[:-1] for line in terminal.lines()[1:6]] == [line[:-1] for line in before[1:6]]
     assert state.user_scrolled_away
 
 
@@ -467,3 +471,272 @@ def test_home_resize_reflows_input_and_clears_old_positions(monkeypatch, capsys)
             assert "> /permissions" in lines[rows - 3]
         assert "BUILD auto" in lines[-2]
         assert "demo" in lines[-1]
+
+
+def test_scrollbar_renders_only_when_scrollable_and_respects_final_column(monkeypatch, capsys):
+    from pepsicode.tui import app, chrome
+    from pepsicode.tui.types import TranscriptEntry
+
+    monkeypatch.setattr(app, "_get_terminal_size", lambda: (40, 14))
+    monkeypatch.setattr(chrome, "_cached_terminal_size", lambda: (40, 14))
+    args = _stream_args()
+
+    # Short transcript fits within the viewport: no scrollbar.
+    short_state = app.ScreenState(transcript=[TranscriptEntry(id=1, kind="assistant", body="short")])
+    app._render_stream_screen(args, short_state)
+    capsys.readouterr()
+    assert short_state.scrollbar_rect is None
+
+    # Long transcript overflows viewport: scrollbar appears on cols - 2 (leaving cols - 1 unused).
+    long_state = app.ScreenState(
+        transcript=[TranscriptEntry(id=1, kind="assistant", body="\n".join(f"line {n}" for n in range(60)))]
+    )
+    app._render_stream_screen(args, long_state)
+    terminal = TerminalGrid(40, 14)
+    terminal.apply(capsys.readouterr().out)
+    assert long_state.scrollbar_rect is not None
+    sb_col, sb_top, sb_height, thumb_top, thumb_height = long_state.scrollbar_rect
+    assert sb_col == 38
+    assert sb_height == long_state.transcript_view_height
+    assert thumb_top + thumb_height == sb_height
+    sb_glyphs = [terminal.cells[sb_top + i][sb_col] for i in range(sb_height)]
+    assert "┃" in sb_glyphs and "│" in sb_glyphs
+    assert all(terminal.cells[sb_top + i][39] == " " for i in range(sb_height))
+
+
+def test_scrollbar_track_click_and_thumb_drag_scroll_transcript(monkeypatch, capsys):
+    from pepsicode.tui import app, chrome
+    from pepsicode.tui.input_parser import MouseEvent
+    from pepsicode.tui.types import TranscriptEntry
+
+    monkeypatch.setattr(app, "_get_terminal_size", lambda: (40, 16))
+    monkeypatch.setattr(chrome, "_cached_terminal_size", lambda: (40, 16))
+    args = _stream_args()
+    state = app.ScreenState(
+        transcript=[TranscriptEntry(id=1, kind="assistant", body="\n".join(f"line {n}" for n in range(80)))]
+    )
+    app._render_stream_screen(args, state)
+    capsys.readouterr()
+    assert state.scrollbar_rect is not None
+    sb_col, sb_top, sb_height, thumb_top, thumb_height = state.scrollbar_rect
+    assert state.transcript_scroll_offset == 0
+
+    def rerender():
+        app._render_stream_screen(args, state)
+        capsys.readouterr()
+
+    # Clicking near the top of the track jumps scroll offset toward the top without starting a text selection.
+    app._handle_selection_event(state, MouseEvent(action="press", x=sb_col, y=sb_top), rerender, args=args)
+    assert state.scrollbar_dragging
+    assert state.transcript_selection is None and state.frame_renderer.selection is None
+    assert state.transcript_scroll_offset > 0
+    max_offset = app._get_stream_max_scroll_offset(args, state)
+    assert state.transcript_scroll_offset == max_offset
+
+    # Dragging down to the bottom returns to scroll offset 0; releasing stops dragging.
+    app._handle_selection_event(
+        state, MouseEvent(action="drag", x=sb_col, y=sb_top + sb_height - 1), rerender, args=args
+    )
+    assert state.transcript_scroll_offset == 0
+    app._handle_selection_event(
+        state, MouseEvent(action="release", x=sb_col, y=sb_top + sb_height - 1), rerender, args=args
+    )
+    assert not state.scrollbar_dragging
+
+    # Grabbing the thumb itself and dragging upward scrolls smoothly without jumping first.
+    _, _, _, thumb_top, _ = state.scrollbar_rect
+    app._handle_selection_event(state, MouseEvent(action="press", x=sb_col, y=sb_top + thumb_top), rerender, args=args)
+    assert state.transcript_scroll_offset == 0
+    app._handle_selection_event(state, MouseEvent(action="drag", x=sb_col, y=sb_top + 1), rerender, args=args)
+    assert 0 < state.transcript_scroll_offset <= max_offset
+    app._handle_selection_event(state, MouseEvent(action="release", x=sb_col, y=sb_top + 1), rerender, args=args)
+    assert not state.scrollbar_dragging
+
+
+@pytest.mark.parametrize(
+    "shortcut",
+    [
+        "\x03",  # Ctrl+C
+        "\x1b[67;6u",  # Ctrl+Shift+C (CSI u)
+        "\x1b[27;6;67~",  # Ctrl+Shift+C (modifyOtherKeys)
+        "\x1b[2;5~",  # Ctrl+Insert
+        "\x1bc",  # Alt+C
+    ],
+)
+def test_transcript_selection_copies_only_on_shortcuts_and_clears_on_escape(monkeypatch, capsys, shortcut):
+    from pepsicode.tui import app, chrome
+    from pepsicode.tui.input_parser import KeyEvent, MouseEvent, parse_input_chunk
+    from pepsicode.tui.types import TranscriptEntry
+
+    copied = []
+    monkeypatch.setattr(app, "copy_to_clipboard", copied.append)
+    monkeypatch.setattr(app, "_get_terminal_size", lambda: (40, 14))
+    monkeypatch.setattr(chrome, "_cached_terminal_size", lambda: (40, 14))
+    args = _stream_args()
+    state = app.ScreenState(transcript=[TranscriptEntry(id=1, kind="assistant", body="alpha beta\ngamma delta")])
+    app._render_stream_screen(args, state)
+    capsys.readouterr()
+
+    # Locate the screen rows containing "alpha beta" and "gamma delta".
+    lines = [strip_ansi(line) for line in state.frame_renderer._content]
+    row_alpha = next(i for i, line in enumerate(lines) if "alpha beta" in line)
+    col_start = lines[row_alpha].index("alpha")
+
+    def rerender():
+        app._render_stream_screen(args, state)
+        capsys.readouterr()
+
+    app._handle_selection_event(state, MouseEvent(action="press", x=col_start, y=row_alpha), rerender, args=args)
+    app._handle_selection_event(state, MouseEvent(action="drag", x=col_start + 9, y=row_alpha + 1), rerender, args=args)
+    app._handle_selection_event(
+        state, MouseEvent(action="release", x=col_start + 9, y=row_alpha + 1), rerender, args=args
+    )
+
+    assert copied == []
+    assert state.transcript_selection is not None and not state.transcript_selection.is_empty
+    assert state.frame_renderer.row_highlights
+
+    shortcut_event = parse_input_chunk(shortcut).events[0]
+    assert app._handle_selection_event(state, shortcut_event, rerender, args=args)
+    assert copied == ["alpha beta\n  gamma delt"]
+    assert state.selection_notice == f"Copied {len(copied[0])} chars"
+    assert state.transcript_selection is not None
+
+    # Escape clears the active selection without leaking to normal mode.
+    assert app._handle_selection_event(state, KeyEvent(name="escape", ctrl=False, meta=False), rerender, args=args)
+    assert state.transcript_selection is None
+    assert state.frame_renderer.row_highlights is None
+    assert state.selection_notice is None
+
+
+def test_cross_viewport_drag_autoscrolls_and_copies_offscreen_lines(monkeypatch, capsys):
+    from pepsicode.tui import app, chrome
+    from pepsicode.tui.input_parser import KeyEvent, MouseEvent, WheelEvent
+    from pepsicode.tui.types import TranscriptEntry
+
+    copied = []
+    monkeypatch.setattr(app, "copy_to_clipboard", copied.append)
+    monkeypatch.setattr(app, "_get_terminal_size", lambda: (40, 14))
+    monkeypatch.setattr(chrome, "_cached_terminal_size", lambda: (40, 14))
+    args = _stream_args()
+    state = app.ScreenState(
+        transcript=[TranscriptEntry(id=1, kind="assistant", body="\n".join(f"item {n:02d}" for n in range(40)))]
+    )
+    app._render_stream_screen(args, state)
+    capsys.readouterr()
+
+    def rerender():
+        app._render_stream_screen(args, state)
+        capsys.readouterr()
+
+    lines = [strip_ansi(line) for line in state.frame_renderer._content]
+    row_38 = next(i for i, line in enumerate(lines) if "item 38" in line)
+    col_end = lines[row_38].index("item 38") + len("item 38") - 1
+
+    # Start dragging near the bottom of the transcript, then drag up past the top edge.
+    app._handle_selection_event(state, MouseEvent(action="press", x=col_end, y=row_38), rerender, args=args)
+    assert state.transcript_scroll_offset == 0
+    app._handle_selection_event(state, MouseEvent(action="drag", x=2, y=state.transcript_top_row), rerender, args=args)
+    assert state.transcript_scroll_offset > 0
+    scroll_after_first_drag = state.transcript_scroll_offset
+
+    # Holding the pointer above/on the top edge auto-scrolls continuously on idle ticks.
+    app._handle_selection_event(state, MouseEvent(action="drag", x=2, y=0), rerender, args=args)
+    now = state.selection_autoscroll_at
+    for _ in range(5):
+        now += 0.1
+        if app._tick_selection_autoscroll(args, state, now):
+            rerender()
+    assert state.transcript_scroll_offset > scroll_after_first_drag
+
+    # Mouse wheel while dragging keeps the selection alive and extends it further up.
+    scroll_before_wheel = state.transcript_scroll_offset
+    assert not app._handle_selection_event(state, WheelEvent(direction="up"), rerender, args=args)
+    assert app._handle_normal_mode_wheel(args, state, WheelEvent(direction="up"), rerender)
+    assert state.transcript_scroll_offset > scroll_before_wheel
+    assert state.transcript_selection is not None
+
+    # Release does not auto-copy; row_highlights skips the scroll banner row and scrollbar column.
+    app._handle_selection_event(
+        state, MouseEvent(action="release", x=2, y=state.transcript_top_row + 1), rerender, args=args
+    )
+    assert copied == []
+    assert state.frame_renderer.row_highlights
+    assert state.transcript_top_row not in state.frame_renderer.row_highlights
+    sb_col = state.scrollbar_rect[0]
+    assert all(span[1] <= sb_col for span in state.frame_renderer.row_highlights.values())
+
+    # Copy shortcut copies all selected lines across the scrolled range without banner/scrollbar glyphs.
+    assert app._handle_selection_event(state, KeyEvent(name="c", ctrl=True, meta=False), rerender, args=args)
+    assert len(copied) == 1
+    text = copied[0]
+    assert "item 38" in text
+    assert text.splitlines()[0].strip().startswith("item ")
+    assert len(text.splitlines()) > state.transcript_view_height
+    assert "│" not in text and "┃" not in text and "↑" not in text
+
+
+def test_busy_spinner_ticks_on_timer_without_token_output():
+    from pepsicode.tui import app
+
+    state = app.ScreenState()
+    assert not app._tick_busy_spinner(state, 10.0)
+    assert state._animation_frame == 0
+
+    state.is_busy = True
+    assert app._tick_busy_spinner(state, 10.0)
+    assert state._animation_frame == 1
+    assert not app._tick_busy_spinner(state, 10.05)
+    assert state._animation_frame == 1
+    assert app._tick_busy_spinner(state, 10.11)
+    assert state._animation_frame == 2
+
+    state.pending_approval = app.PendingApproval(request={"summary": "ok", "choices": []}, resolve=lambda _: None)
+    assert not app._tick_busy_spinner(state, 10.50)
+    assert state._animation_frame == 2
+
+
+@pytest.mark.parametrize("size", [(80, 24), (30, 10)])
+def test_busy_indicator_distinguishes_thinking_and_working_phases(monkeypatch, capsys, size):
+    from pepsicode.tui import app, chrome
+    from pepsicode.tui.types import TranscriptEntry
+
+    monkeypatch.setattr(app, "_get_terminal_size", lambda: size)
+    monkeypatch.setattr(chrome, "_cached_terminal_size", lambda: size)
+    args = _stream_args()
+    state = app.ScreenState(transcript=[TranscriptEntry(id=1, kind="user", body="hello")], is_busy=True)
+
+    def render_plain() -> str:
+        app._render_stream_screen(args, state)
+        capsys.readouterr()
+        return strip_ansi("\n".join(state.frame_renderer._content))
+
+    # Waiting for first token -> Thinking…
+    assert "Thinking…" in render_plain()
+
+    # Active thinking stream -> Thinking…
+    state.thinking_entry_id = 2
+    assert "Thinking…" in render_plain()
+
+    # Streaming answer text -> Working…
+    state.thinking_entry_id = None
+    state.streaming_entry_id = 3
+    plain = render_plain()
+    assert "Working…" in plain and "Thinking…" not in plain
+
+    # Running a tool -> Working…
+    state.streaming_entry_id = None
+    state.active_tool = "run_command"
+    state.active_tool_count = 1
+    plain = render_plain()
+    assert "Working…" in plain and "Thinking…" not in plain
+
+    # Concurrent tools where one finished (active_tool cleared, one still running) -> Working…
+    state.active_tool = None
+    state.active_tool_count = 1
+    plain = render_plain()
+    assert "Working…" in plain and "Thinking…" not in plain
+
+    # All tools finished, awaiting next model turn -> back to Thinking…
+    state.active_tool_count = 0
+    assert "Thinking…" in render_plain()

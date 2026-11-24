@@ -120,6 +120,7 @@ from pepsicode.tui.chrome import (
     render_status_line,
     render_tool_panel,
     spinner_char,
+    strip_ansi,
     truncate_plain,
     wrap_text,
 )
@@ -147,6 +148,7 @@ from pepsicode.tui.screen import (
     exit_alternate_screen,
     hide_cursor,
     show_cursor,
+    slice_columns,
 )
 from pepsicode.tui.settings_picker import (
     PERMISSION_OPTIONS,
@@ -333,9 +335,11 @@ class ScreenState:
     transcript_layout_cols: int = 0
     user_scrolled_away: bool = False
     _animation_frame: int = 0
+    _spinner_last_tick_at: float = 0.0
     selected_slash_index: int = 0
     status: str | None = None
     active_tool: str | None = None
+    active_tool_count: int = 0
     recent_tools: list[dict[str, str]] = field(default_factory=list)
     history: list[str] = field(default_factory=list)
     history_index: int = 0
@@ -373,9 +377,19 @@ class ScreenState:
     frame_renderer: FrameRenderer = field(default_factory=FrameRenderer, repr=False)
     home_sharks: IdleSharks = field(default_factory=IdleSharks, repr=False)
     home_sharks_visible: bool = False
-    # Mouse text selection (drawn by frame_renderer.selection).
+    # Mouse text selection (drawn by frame_renderer.selection or row_highlights).
     selection_dragging: bool = False
     selection_notice: str | None = None
+    transcript_top_row: int = 0
+    transcript_content_cols: int = 0
+    transcript_rendered_lines: list[str] = field(default_factory=list, repr=False)
+    transcript_window_rows: list[int | None] = field(default_factory=list, repr=False)
+    transcript_selection: Selection | None = None
+    selection_drag_pos: tuple[int, int] | None = None
+    selection_autoscroll_at: float = 0.0
+    scrollbar_rect: tuple[int, int, int, int, int] | None = None
+    scrollbar_dragging: bool = False
+    scrollbar_drag_offset: int = 0
     exit_requested_at: float | None = None
     # Finished turns fold their tool/progress activity behind one header row.
     # Keys are the first entry id of each activity run.
@@ -1322,6 +1336,33 @@ def _composer_border_color(args: TtyAppArgs, state: ScreenState) -> str:
     return BORDER
 
 
+_BUSY_SPINNER_INTERVAL = 0.1
+
+
+def _busy_phase_label(state: ScreenState) -> str:
+    """Return ``Thinking…`` while reasoning/awaiting model output, or ``Working…`` while streaming text or running tools."""
+    if getattr(state, "thinking_entry_id", None) is not None:
+        return "Thinking…"
+    if (
+        getattr(state, "active_tool", None) is not None
+        or getattr(state, "active_tool_count", 0) > 0
+        or getattr(state, "streaming_entry_id", None) is not None
+    ):
+        return "Working…"
+    return "Thinking…"
+
+
+def _tick_busy_spinner(state: ScreenState, now: float) -> bool:
+    """Advance the busy spinner frame on a fixed timer independent of token output."""
+    if not state.is_busy or state.pending_approval is not None:
+        return False
+    if state._spinner_last_tick_at > 0.0 and now - state._spinner_last_tick_at < _BUSY_SPINNER_INTERVAL:
+        return False
+    state._spinner_last_tick_at = now
+    state._animation_frame += 1
+    return True
+
+
 def _render_composer_block(
     args: TtyAppArgs,
     state: ScreenState,
@@ -1338,12 +1379,13 @@ def _render_composer_block(
     pending_image_count = len(getattr(state, "pending_images", []))
     is_busy = getattr(state, "is_busy", False)
     spin = spinner_char(getattr(state, "_animation_frame", 0))
+    phase_label = _busy_phase_label(state) if is_busy else ""
 
     if use_box:
         body = [prompt_line]
         if pending_image_count:
             body.append(f" {CYAN}[图片 ×{pending_image_count}]{RESET} {SUBTLE}· Ctrl+G 删除最近一张{RESET}")
-        top_title = f"{BRAND_LIME}{spin}{RESET} {YELLOW}{BOLD}Thinking…{RESET}" if is_busy else ""
+        top_title = f"{BRAND_LIME}{spin}{RESET} {YELLOW}{BOLD}{phase_label}{RESET}" if is_busy else ""
         top_right = f"{SUBTLE}Ctrl+C stop{RESET}" if is_busy else ""
         lines = render_box(
             body,
@@ -1363,7 +1405,7 @@ def _render_composer_block(
     if pending_image_count:
         lines.append(f"  {CYAN}[图片 ×{pending_image_count}]{RESET} {SUBTLE}· Ctrl+G 删除最近一张{RESET}")
     if busy_hints and is_busy:
-        lines.append(f"  {BRAND_LIME}{spin}{RESET} {YELLOW}Thinking…{RESET}")
+        lines.append(f"  {BRAND_LIME}{spin}{RESET} {YELLOW}{phase_label}{RESET}")
         queued = len(getattr(state, "pending_inputs", []))
         lines.append(f"  {SUBTLE}Enter: steer · Alt+Enter or /queue: follow-up · {queued} queued · Ctrl+C: stop{RESET}")
     return lines
@@ -1470,6 +1512,11 @@ def _render_home_screen(args: TtyAppArgs, state: ScreenState, cols: int, rows: i
     frame += [margin + line for line in menu + composer]
     frame += status_lines
     frame = _truncate_frame_lines(frame, cols, rows)
+    state.scrollbar_rect = None
+    state.transcript_window_rows = []
+    state.transcript_rendered_lines = []
+    state.transcript_selection = None
+    state.frame_renderer.row_highlights = None
     state.home_sharks_visible = False
     # FrameRenderer reserves the final column to prevent terminal autowrap.
     ocean_width = max(1, cols - 1)
@@ -1590,7 +1637,7 @@ def _render_stream_input(state: ScreenState, cols: int, visible_commands: list |
     # Status / thinking indicator
     if getattr(state, "is_busy", False):
         spin = spinner_char(getattr(state, "_animation_frame", 0))
-        lines.append(f"  {BRAND_LIME}{spin}{RESET} {YELLOW}Thinking…{RESET}")
+        lines.append(f"  {BRAND_LIME}{spin}{RESET} {YELLOW}{_busy_phase_label(state)}{RESET}")
         queued = len(getattr(state, "pending_inputs", []))
         lines.append(f"  {SUBTLE}Enter: steer · Alt+Enter or /queue: follow-up · {queued} queued · Ctrl+C: stop{RESET}")
     return lines
@@ -1795,6 +1842,64 @@ def _render_stream_header(args: TtyAppArgs, state: ScreenState, cols: int) -> st
     return paint_row(truncate_plain(row, width), width, SURFACE_BG)
 
 
+def _compute_scrollbar(total: int, height: int, scroll_offset: int) -> tuple[int, int]:
+    """Return ``(thumb_top, thumb_height)`` for a vertical scrollbar track."""
+    max_offset = max(1, total - height)
+    thumb_height = max(1, min(height - 1, round(height * height / total))) if height > 1 else 1
+    track_span = max(0, height - thumb_height)
+    clamped = max(0, min(scroll_offset, max_offset))
+    top_ratio = (max_offset - clamped) / max_offset
+    thumb_top = round(top_ratio * track_span)
+    return thumb_top, thumb_height
+
+
+def _scrollbar_offset_from_y(
+    sb_top: int,
+    sb_height: int,
+    thumb_height: int,
+    drag_offset: int,
+    max_offset: int,
+    y: int,
+) -> int:
+    """Convert a screen Y coordinate into a transcript scroll offset."""
+    if max_offset <= 0:
+        return 0
+    track_span = max(0, sb_height - thumb_height)
+    if track_span <= 0:
+        return 0
+    new_thumb_top = max(0, min(track_span, (y - sb_top) - drag_offset))
+    return round((1.0 - new_thumb_top / track_span) * max_offset)
+
+
+def _project_transcript_highlights(
+    state: ScreenState,
+    window_rows: list[int | None],
+    total: int,
+    header_height: int,
+) -> None:
+    """Project document-space transcript selection onto visible screen row spans."""
+    sel = state.transcript_selection
+    if sel is None or sel.is_empty or total <= 0:
+        state.frame_renderer.row_highlights = None
+        return
+    max_line = total - 1
+    max_col = max(0, state.transcript_content_cols - 1)
+    anchor = (max(0, min(sel.anchor[0], max_line)), max(0, min(sel.anchor[1], max_col)))
+    focus = (max(0, min(sel.focus[0], max_line)), max(0, min(sel.focus[1], max_col)))
+    state.transcript_selection = Selection(anchor=anchor, focus=focus)
+    highlights: dict[int, tuple[int, int]] = {}
+    for row_idx, line_idx in enumerate(window_rows):
+        if line_idx is None:
+            continue
+        span = state.transcript_selection.columns_for_row(line_idx)
+        if span is not None:
+            end_col = min(span[1], state.transcript_content_cols)
+            if span[0] < end_col:
+                highlights[header_height + row_idx] = (span[0], end_col)
+    state.frame_renderer.row_highlights = highlights
+    state.frame_renderer.selection = None
+
+
 def _render_stream_screen(args: TtyAppArgs, state: ScreenState) -> None:
     """Render the active conversation stream with rounded composer and optional sidebar."""
     cols, rows = _get_terminal_size()
@@ -1805,6 +1910,9 @@ def _render_stream_screen(args: TtyAppArgs, state: ScreenState) -> None:
     state.agent_panel_start_col = None
     state.agent_panel_actions = {}
     state.home_sharks_visible = False
+    state.scrollbar_rect = None
+    state.transcript_window_rows = []
+    state.frame_renderer.row_highlights = None
     if state.provider_wizard is not None:
         state.frame_renderer.draw(render_provider_wizard(state.provider_wizard, cols, rows), cols, rows)
         return
@@ -1898,24 +2006,43 @@ def _render_stream_screen(args: TtyAppArgs, state: ScreenState) -> None:
     if agent_view and not sidebar_width and transcript_height >= 5:
         strip = render_agent_strip(agent_view, cols)
         transcript_height -= len(strip)
-    content_cols = cols - sidebar_width - 4 if sidebar_width else cols
+    base_content_cols = cols - sidebar_width - 4 if sidebar_width else cols
 
     header_lines: dict[int, int] = {}
     rendered = _build_stream_transcript_lines(
         list(state.transcript),
-        content_cols,
+        base_content_cols,
         expanded_groups=state.expanded_activity_groups,
         streaming_entry_id=state.streaming_entry_id,
         header_lines=header_lines,
     )
+    scrollbar_col: int | None = None
+    text_cols = base_content_cols
+    if len(rendered) > transcript_height and base_content_cols >= 12 and transcript_height >= 2:
+        scrollbar_col = (base_content_cols - 1) if sidebar_width else (cols - 2)
+        text_cols = scrollbar_col
+        if text_cols != base_content_cols:
+            header_lines = {}
+            rendered = _build_stream_transcript_lines(
+                list(state.transcript),
+                text_cols,
+                expanded_groups=state.expanded_activity_groups,
+                streaming_entry_id=state.streaming_entry_id,
+                header_lines=header_lines,
+            )
     total = len(rendered)
+    if state.transcript_layout_cols and text_cols != state.transcript_layout_cols:
+        if state.transcript_selection is not None:
+            state.transcript_selection = None
+            state.selection_dragging = False
+            state.selection_drag_pos = None
     anchor, state.activity_anchor = state.activity_anchor, None
     anchor_line = next((line for line, group in header_lines.items() if group == anchor[0]), None) if anchor else None
     if anchor and anchor_line is not None:
         # A toggled header stays under the pointer; its details open below it.
         transcript_row = max(0, anchor[1] - header_height)
         state.transcript_scroll_offset = _anchored_scroll_offset(total, transcript_height, anchor_line, transcript_row)
-    elif state.transcript_scroll_offset > 0 and content_cols == state.transcript_layout_cols:
+    elif state.transcript_scroll_offset > 0 and text_cols == state.transcript_layout_cols:
         # Offsets count from the bottom, so keep a scrolled-back view on the
         # same text while new output is appended below it.
         state.transcript_scroll_offset += total - state.transcript_total_lines
@@ -1923,8 +2050,14 @@ def _render_stream_screen(args: TtyAppArgs, state: ScreenState) -> None:
     state.user_scrolled_away = state.transcript_scroll_offset > 0
     state.transcript_total_lines = total
     state.transcript_view_height = transcript_height
-    state.transcript_layout_cols = content_cols
+    state.transcript_layout_cols = text_cols
+    state.transcript_top_row = header_height
+    state.transcript_content_cols = (
+        scrollbar_col if scrollbar_col is not None else (base_content_cols if sidebar_width else max(1, cols - 1))
+    )
+    state.transcript_rendered_lines = rendered
     window_rows = _stream_window_rows(total, state.transcript_scroll_offset, transcript_height)
+    state.transcript_window_rows = window_rows
     state.activity_header_rows = {
         row + header_height: header_lines[index] for row, index in enumerate(window_rows) if index in header_lines
     }
@@ -1932,17 +2065,26 @@ def _render_stream_screen(args: TtyAppArgs, state: ScreenState) -> None:
     # Anchor the composer while new output streams in.
     transcript_lines += [""] * max(0, transcript_height - len(transcript_lines))
 
-    transcript_lines = _truncate_frame_lines(transcript_lines, content_cols, transcript_height)
+    transcript_lines = _truncate_frame_lines(transcript_lines, text_cols, transcript_height)
+    if scrollbar_col is not None and total > transcript_height:
+        thumb_top, thumb_height = _compute_scrollbar(total, transcript_height, state.transcript_scroll_offset)
+        state.scrollbar_rect = (scrollbar_col, header_height, transcript_height, thumb_top, thumb_height)
+        transcript_lines = [
+            _pad_visible(line, scrollbar_col)
+            + (f"{SUBTLE}┃{RESET}" if thumb_top <= row_idx < thumb_top + thumb_height else f"{TEXT_FAINT}│{RESET}")
+            for row_idx, line in enumerate(transcript_lines)
+        ]
     if sidebar_width:
         sidebar, raw_actions = render_agent_panel(
             agent_view, sidebar_width, transcript_height, state.agent_panel_offset
         )
-        state.agent_panel_start_col = content_cols + 3
+        state.agent_panel_start_col = base_content_cols + 3
         state.agent_panel_actions = {row + header_height: action for row, action in raw_actions.items()}
         transcript_lines = [
-            _pad_visible(left, content_cols) + f" {BORDER}│{RESET} " + right
+            _pad_visible(left, base_content_cols) + f" {BORDER}│{RESET} " + right
             for left, right in zip(transcript_lines, sidebar, strict=True)
         ]
+    _project_transcript_highlights(state, window_rows, total, header_height)
     frame = top_header + transcript_lines + strip + input_lines + status_lines
     frame = _truncate_frame_lines(frame, cols, rows)
 
@@ -2079,6 +2221,7 @@ _WIN_SCANCODE_TO_ANSI: dict[int, str] = {
     145: "\x1b[1;5B",  # Ctrl+Down
     116: "\x1b[1;5C",  # Ctrl+Right
     115: "\x1b[1;5D",  # Ctrl+Left
+    146: "\x1b[2;5~",  # Ctrl+Insert
 }
 
 
@@ -2264,9 +2407,11 @@ def _execute_tool_shortcut(
     refresh_skills: bool = False,
 ) -> None:
     state.is_busy = True
+    state._spinner_last_tick_at = 0.0
     state.cancellation_event.clear()
     state.status = f"Running {tool_name}..."
     state.active_tool = tool_name
+    state.active_tool_count = 1
     entry_id = _push_transcript_entry(
         state,
         kind="tool",
@@ -2303,11 +2448,13 @@ def _execute_tool_shortcut(
             _drain_tty_hook_notifications(args, state)
         finally:
             state.active_tool = None
+            state.active_tool_count = 0
             _finalize_dangling_running_tools(state)
             state.status = None
             with state.agent_lock:
                 state.agent_result["done"] = True
             state.is_busy = False
+            state._spinner_last_tick_at = 0.0
             rerender()
 
     state.agent_thread = threading.Thread(target=run_shortcut, daemon=True)
@@ -2799,6 +2946,8 @@ def _handle_input(
     state.user_scrolled_away = False
     state.status = "Thinking..."
     state.is_busy = True
+    state.active_tool_count = 0
+    state._spinner_last_tick_at = 0.0
     state.cancellation_event.clear()
 
     # Update app state
@@ -2934,8 +3083,10 @@ def _handle_input(
         rerender()
 
     def on_tool_start(tool_name: str, tool_input: Any) -> None:
+        finish_thinking()
         state.status = f"Running {tool_name}..."
         state.active_tool = tool_name
+        state.active_tool_count += 1
         state.tool_start_time = time.monotonic()  # Record tool start time
 
         target_path = _extract_path_from_tool_input(tool_input)
@@ -3051,6 +3202,7 @@ def _handle_input(
 
         state.active_tool = None
         remaining = sum(len(v) for v in pending_tool_entries.values())
+        state.active_tool_count = remaining
         if remaining > 0:
             state.status = f"{remaining} tool(s) still running..."
         else:
@@ -3129,6 +3281,8 @@ def _handle_input(
                 agent_result["done"] = True
             state.is_busy = False
             state.active_tool = None
+            state.active_tool_count = 0
+            state._spinner_last_tick_at = 0.0
             state.status = None
             # Clear streaming state
             state.streaming_entry_id = None
@@ -3411,9 +3565,6 @@ def run_tty_app(
                     _snapshot_session(args, state)
                     state.autosave.save_if_needed()
 
-                # Animation frame for thinking indicator
-                state._animation_frame += 1
-
                 # Check if background agent thread completed
                 if _collect_agent_result(args, state):
                     plan_followup = args.permissions.consume_plan_followup()
@@ -3426,7 +3577,11 @@ def run_tty_app(
                     if plan_followup and not state.is_busy:
                         _handle_input(args, state, rerender, submitted_raw_input=plan_followup)
 
+                if _tick_busy_spinner(state, time.monotonic()):
+                    rerender()
                 if _home_sharks_tick_due(args, state, time.monotonic()):
+                    rerender()
+                if _tick_selection_autoscroll(args, state, time.monotonic()):
                     rerender()
 
                 # Read raw input
@@ -3556,7 +3711,7 @@ def _handle_event(
     is_interrupt = _is_ctrl_c(event)
     if not is_interrupt:
         state.exit_requested_at = None
-    if _handle_selection_event(state, event, rerender):
+    if _handle_selection_event(state, event, rerender, args=args):
         state.exit_requested_at = None
         return
     if is_interrupt:
@@ -4240,6 +4395,8 @@ def _handle_normal_mode_wheel(
     """Handle wheel events in normal mode for scrolling. Returns True if handled."""
     delta = 3 if event.direction == "up" else -3
     if _scroll_transcript_by(args, state, delta):
+        if state.selection_dragging and state.transcript_selection is not None and state.selection_drag_pos is not None:
+            _sync_transcript_selection_after_scroll(state, *state.selection_drag_pos)
         rerender()
         return True
     return False
@@ -4248,36 +4405,242 @@ def _handle_normal_mode_wheel(
 def _is_ctrl_c(event: ParsedInputEvent) -> bool:
     if not isinstance(event, (KeyEvent, TextEvent)):
         return False
+    if isinstance(event, KeyEvent) and event.shift:
+        return False
     return event.ctrl and (
         (isinstance(event, KeyEvent) and event.name == "c")
         or (isinstance(event, TextEvent) and event.text.lower() == "c")
     )
 
 
+def _is_copy_shortcut(event: ParsedInputEvent) -> bool:
+    """Return True for Ctrl+C, Ctrl+Shift+C, Ctrl+Insert, or Alt/Meta+C."""
+    if _is_ctrl_c(event):
+        return True
+    if isinstance(event, KeyEvent):
+        return event.ctrl and event.name in {"c", "insert"}
+    if isinstance(event, TextEvent):
+        return event.meta and not event.ctrl and event.text.lower() == "c"
+    return False
+
+
+def _selected_text(state: ScreenState) -> str:
+    """Return plain text for the active transcript or screen selection."""
+    sel = state.transcript_selection
+    if sel is not None and not sel.is_empty:
+        lines = state.transcript_rendered_lines
+        if not lines:
+            return ""
+        (start_line, _), (end_line, _) = sel.ordered()
+        picked: list[str] = []
+        for line_idx in range(max(0, start_line), min(end_line, len(lines) - 1) + 1):
+            span = sel.columns_for_row(line_idx)
+            if span is not None:
+                end_col = min(span[1], state.transcript_content_cols) if state.transcript_content_cols > 0 else span[1]
+                picked.append(slice_columns(strip_ansi(lines[line_idx]), span[0], end_col).rstrip())
+        return "\n".join(picked).strip("\n")
+    return state.frame_renderer.selected_text()
+
+
 def _copy_selection(state: ScreenState) -> None:
-    text = state.frame_renderer.selected_text()
+    text = _selected_text(state)
     if text:
         copy_to_clipboard(text)
         state.selection_notice = f"Copied {len(text)} chars"
 
 
-def _handle_selection_event(state: ScreenState, event: ParsedInputEvent, rerender: Callable[[], None]) -> bool:
-    """Drag to select screen text, release to copy it. Returns True if consumed.
+def _screen_to_transcript_cell(state: ScreenState, y: int, x: int) -> tuple[int, int] | None:
+    """Map a 0-based screen cell to a ``(transcript_line, col)`` document cell."""
+    if not state.transcript_window_rows or not state.transcript_rendered_lines:
+        return None
+    valid_lines = [idx for idx in state.transcript_window_rows if idx is not None]
+    if not valid_lines:
+        return None
+    max_col = max(0, state.transcript_content_cols - 1)
+    col = max(0, min(x, max_col))
+    rel_y = y - state.transcript_top_row
+    if rel_y < 0:
+        return (valid_lines[0], 0)
+    if rel_y >= len(state.transcript_window_rows):
+        return (valid_lines[-1], max_col)
+    line_idx = state.transcript_window_rows[rel_y]
+    if line_idx is None:
+        return (valid_lines[0], col)
+    return (line_idx, col)
+
+
+def _scroll_transcript_state(args: TtyAppArgs | None, state: ScreenState, delta: int) -> bool:
+    if args is not None:
+        return _scroll_transcript_by(args, state, delta)
+    if state.transcript_view_height <= 0:
+        return False
+    max_offset = max(0, state.transcript_total_lines - state.transcript_view_height)
+    next_offset = max(0, min(max_offset, state.transcript_scroll_offset + delta))
+    if next_offset == state.transcript_scroll_offset:
+        return False
+    state.transcript_scroll_offset = next_offset
+    state.user_scrolled_away = state.transcript_scroll_offset > 0
+    return True
+
+
+def _sync_transcript_selection_after_scroll(state: ScreenState, y: int, x: int) -> None:
+    if state.transcript_selection is None or state.transcript_view_height <= 0:
+        return
+    state.transcript_window_rows = _stream_window_rows(
+        state.transcript_total_lines, state.transcript_scroll_offset, state.transcript_view_height
+    )
+    t_cell = _screen_to_transcript_cell(state, y, x)
+    if t_cell is not None:
+        state.transcript_selection.focus = t_cell
+
+
+def _selection_autoscroll_delta(state: ScreenState, y: int) -> int:
+    if state.transcript_view_height <= 0:
+        return 0
+    top = state.transcript_top_row
+    bottom = top + state.transcript_view_height - 1
+    if y <= top:
+        return 2 if y < top else 1
+    if y >= bottom:
+        return -2 if y > bottom else -1
+    return 0
+
+
+def _tick_selection_autoscroll(args: TtyAppArgs, state: ScreenState, now: float) -> bool:
+    """Continue scrolling the transcript while holding a drag on the top/bottom edge."""
+    if (
+        not state.selection_dragging
+        or state.transcript_selection is None
+        or state.selection_drag_pos is None
+        or state.transcript_view_height <= 0
+    ):
+        return False
+    if now - state.selection_autoscroll_at < 0.06:
+        return False
+    y, x = state.selection_drag_pos
+    delta = _selection_autoscroll_delta(state, y)
+    if not delta:
+        return False
+    if _scroll_transcript_state(args, state, delta):
+        state.selection_autoscroll_at = now
+        _sync_transcript_selection_after_scroll(state, y, x)
+        return True
+    return False
+
+
+def _clear_selection_state(state: ScreenState) -> None:
+    state.frame_renderer.selection = None
+    state.frame_renderer.row_highlights = None
+    state.transcript_selection = None
+    state.selection_dragging = False
+    state.selection_drag_pos = None
+    state.selection_notice = None
+
+
+def _handle_scrollbar_mouse_event(state: ScreenState, event: MouseEvent, rerender: Callable[[], None]) -> bool:
+    """Handle press/drag/release on the transcript scrollbar. Returns True if consumed."""
+    rect = state.scrollbar_rect
+    if state.scrollbar_dragging:
+        if rect is not None and event.action in ("drag", "release"):
+            _, sb_top, sb_height, _, thumb_height = rect
+            max_offset = max(0, state.transcript_total_lines - state.transcript_view_height)
+            new_offset = _scrollbar_offset_from_y(
+                sb_top, sb_height, thumb_height, state.scrollbar_drag_offset, max_offset, event.y
+            )
+            state.transcript_scroll_offset = new_offset
+            state.user_scrolled_away = new_offset > 0
+        if event.action == "release":
+            state.scrollbar_dragging = False
+        rerender()
+        return True
+
+    if event.action != "press" or rect is None:
+        return False
+    sb_col, sb_top, sb_height, thumb_top, thumb_height = rect
+    hit_col = event.x == sb_col or (state.agent_panel_start_col is None and event.x == sb_col + 1)
+    if not (sb_top <= event.y < sb_top + sb_height and hit_col):
+        return False
+    state.selection_dragging = False
+    state.selection_drag_pos = None
+    rel_y = event.y - sb_top
+    if thumb_top <= rel_y < thumb_top + thumb_height:
+        state.scrollbar_drag_offset = rel_y - thumb_top
+    else:
+        state.scrollbar_drag_offset = thumb_height // 2
+        max_offset = max(0, state.transcript_total_lines - state.transcript_view_height)
+        new_offset = _scrollbar_offset_from_y(
+            sb_top, sb_height, thumb_height, state.scrollbar_drag_offset, max_offset, event.y
+        )
+        state.transcript_scroll_offset = new_offset
+        state.user_scrolled_away = new_offset > 0
+    state.scrollbar_dragging = True
+    rerender()
+    return True
+
+
+def _handle_selection_event(
+    state: ScreenState,
+    event: ParsedInputEvent,
+    rerender: Callable[[], None],
+    args: TtyAppArgs | None = None,
+) -> bool:
+    """Drag to select text (across transcript scroll) and copy via shortcut. Returns True if consumed.
 
     Mouse capture (needed for wheel scrolling) stops the terminal from
-    selecting text itself, so the app draws and copies the selection.
+    selecting text itself, so the app draws the selection and copies it on shortcut.
     """
     renderer = state.frame_renderer
     if isinstance(event, MouseEvent):
+        if _handle_scrollbar_mouse_event(state, event, rerender):
+            return True
         cell = (event.y, event.x)
         if event.action == "press":
-            renderer.selection = Selection(anchor=cell, focus=cell)
+            in_transcript = (
+                bool(state.transcript_window_rows)
+                and state.transcript_top_row <= event.y < state.transcript_top_row + len(state.transcript_window_rows)
+                and 0 <= event.x < state.transcript_content_cols
+            )
+            t_cell = _screen_to_transcript_cell(state, event.y, event.x) if in_transcript else None
+            if t_cell is not None:
+                state.transcript_selection = Selection(anchor=t_cell, focus=t_cell)
+                renderer.selection = None
+            else:
+                state.transcript_selection = None
+                renderer.selection = Selection(anchor=cell, focus=cell)
+            renderer.row_highlights = None
             state.selection_dragging = True
+            state.selection_drag_pos = None
             state.selection_notice = None
+        elif state.selection_dragging and state.transcript_selection is not None:
+            if event.action == "drag":
+                state.selection_drag_pos = cell
+                delta = _selection_autoscroll_delta(state, event.y)
+                if delta and _scroll_transcript_state(args, state, delta):
+                    state.selection_autoscroll_at = time.monotonic()
+                    _sync_transcript_selection_after_scroll(state, event.y, event.x)
+                else:
+                    t_cell = _screen_to_transcript_cell(state, event.y, event.x)
+                    if t_cell is not None:
+                        state.transcript_selection.focus = t_cell
+            elif event.action == "release":
+                t_cell = _screen_to_transcript_cell(state, event.y, event.x)
+                if t_cell is not None:
+                    state.transcript_selection.focus = t_cell
+                state.selection_dragging = False
+                state.selection_drag_pos = None
+                if state.transcript_selection.is_empty:
+                    state.transcript_selection = None
+                    renderer.row_highlights = None
+                    group_id = state.activity_header_rows.get(event.y)
+                    if group_id is not None:
+                        _toggle_activity_group(state, group_id, event.y)
         elif state.selection_dragging and renderer.selection is not None:
             renderer.selection.focus = cell
-            if event.action == "release":
+            if event.action == "drag":
+                state.selection_drag_pos = cell
+            elif event.action == "release":
                 state.selection_dragging = False
+                state.selection_drag_pos = None
                 if renderer.selection.is_empty:
                     renderer.selection = None
                     if state.agent_panel_start_col is not None and event.x >= state.agent_panel_start_col:
@@ -4293,24 +4656,33 @@ def _handle_selection_event(state: ScreenState, event: ParsedInputEvent, rerende
                     group_id = state.activity_header_rows.get(event.y)
                     if group_id is not None:
                         _toggle_activity_group(state, group_id, event.y)
-                else:
-                    _copy_selection(state)
         rerender()
         return True
 
-    if renderer.selection is None and state.selection_notice is None:
+    has_transcript_sel = state.transcript_selection is not None and not state.transcript_selection.is_empty
+    has_screen_sel = renderer.selection is not None and not renderer.selection.is_empty
+    has_selection = has_transcript_sel or has_screen_sel
+    if not has_selection and state.selection_notice is None:
         return False
-    # Ctrl+C right after selecting is a copy, not a request to quit.
-    is_copy = _is_ctrl_c(event) and renderer.selection is not None and not renderer.selection.is_empty
-    if is_copy:
+    if isinstance(event, WheelEvent):
+        if state.transcript_selection is not None:
+            return False
+        _clear_selection_state(state)
+        rerender()
+        return False
+    # Copy shortcut right after selecting copies without quitting.
+    if _is_copy_shortcut(event) and has_selection:
         _copy_selection(state)
-    else:
-        renderer.selection = None
-    state.selection_dragging = False
-    if not is_copy:
-        state.selection_notice = None
+        state.selection_dragging = False
+        rerender()
+        return True
+    if isinstance(event, KeyEvent) and event.name == "escape" and has_selection:
+        _clear_selection_state(state)
+        rerender()
+        return True
+    _clear_selection_state(state)
     rerender()
-    return is_copy
+    return False
 
 
 # ---------------------------------------------------------------------------
@@ -4403,6 +4775,7 @@ def _mark_unfinished_tools(state_obj: Any) -> int:
     if hasattr(state_obj, "pending_tool_runs"):
         state_obj.pending_tool_runs = {}
     state_obj.active_tool = None
+    state_obj.active_tool_count = 0
     return count
 
 
